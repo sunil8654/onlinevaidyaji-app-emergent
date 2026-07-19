@@ -5,6 +5,7 @@ import { useRouter } from "expo-router";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { api } from "@/src/api";
 import { Feather } from "@expo/vector-icons";
+import { ComingSoonBanner } from "@/src/components/ComingSoon";
 
 function generateSlots() {
   const out: { iso: string; label: string; day: string }[] = [];
@@ -54,10 +55,16 @@ export default function Labs() {
         <TouchableOpacity onPress={() => router.back()} testID="labs-back" style={{ width: 40 }}>
           <Feather name="arrow-left" size={22} color={COLORS.textPrimary} />
         </TouchableOpacity>
-        <View>
+        <View style={{ flex: 1 }}>
           <Text style={styles.eyebrow}>Diagnostics</Text>
           <Text style={styles.title}>Lab tests at home</Text>
         </View>
+        <ComingSoonBanner />
+      </View>
+
+      <View style={styles.csBanner}>
+        <Feather name="clock" size={14} color={COLORS.accent} />
+        <Text style={styles.csText}>Home-lab pickup rolls out next month — bookings are demo.</Text>
       </View>
 
       <FlatList
@@ -151,4 +158,6 @@ const styles = StyleSheet.create({
   bookBtn: { backgroundColor: COLORS.brand, paddingHorizontal: 20, paddingVertical: 14, borderRadius: RADIUS.pill },
   bookBtnText: { color: COLORS.surface, fontWeight: "700", fontSize: 14 },
   okBox: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "#E8F5E9", paddingHorizontal: 14, paddingVertical: 10, borderRadius: RADIUS.pill },
+  csBanner: { flexDirection: "row", gap: 6, alignItems: "center", justifyContent: "center", backgroundColor: COLORS.accentSoft, paddingVertical: 8, marginHorizontal: SPACING.lg, borderRadius: RADIUS.pill, marginBottom: SPACING.sm },
+  csText: { color: COLORS.accent, fontSize: 12, fontWeight: "700" },
 });

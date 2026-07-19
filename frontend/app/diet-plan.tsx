@@ -103,11 +103,24 @@ export default function DietPlan() {
             <View style={styles.planHead}>
               <Feather name="sunrise" size={18} color={COLORS.brand} />
               <View style={{ flex: 1 }}>
-                <Text style={styles.planKicker}>Personalised plan</Text>
+                <Text style={styles.planKicker}>Personalised plan · Today</Text>
                 <Text style={styles.planTitle}>{plan.goal}</Text>
               </View>
             </View>
             <Text style={styles.planBody}>{plan.plan}</Text>
+
+            {/* Upgrade CTA */}
+            <View style={styles.upgradeCard}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.upKicker}>UPGRADE · ₹200 only</Text>
+                <Text style={styles.upTitle}>Get a 7-day Weekly Plan</Text>
+                <Text style={styles.upBody}>Certified Online Vaidhyaji dietician · daily menus tailored to your dosha, symptoms & taste · WhatsApp support.</Text>
+              </View>
+              <TouchableOpacity style={styles.upBtn} onPress={() => router.push("/plan-checkout?type=weekly-diet&price=200")} testID="dp-upgrade">
+                <Text style={styles.upBtnText}>Buy ₹200</Text>
+                <Feather name="arrow-right" size={14} color={COLORS.surface} />
+              </TouchableOpacity>
+            </View>
           </View>
         )}
 
@@ -151,6 +164,12 @@ const styles = StyleSheet.create({
   planKicker: { color: COLORS.accent, fontSize: 10, letterSpacing: 2, fontWeight: "700", textTransform: "uppercase" },
   planTitle: { fontFamily: FONTS.heading, fontSize: 20, color: COLORS.textPrimary, marginTop: 2 },
   planBody: { color: COLORS.textPrimary, fontSize: 14, lineHeight: 22, marginTop: SPACING.md },
+  upgradeCard: { marginTop: SPACING.md, padding: SPACING.md, backgroundColor: COLORS.brand, borderRadius: RADIUS.md, flexDirection: "row", gap: 12, alignItems: "center" },
+  upKicker: { color: COLORS.accentSoft, fontSize: 10, letterSpacing: 2, fontWeight: "700" },
+  upTitle: { fontFamily: FONTS.heading, fontSize: 18, color: COLORS.surface, marginTop: 4, lineHeight: 22, letterSpacing: -0.3 },
+  upBody: { color: "#F7F5F0", fontSize: 11, marginTop: 6, lineHeight: 16 },
+  upBtn: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: COLORS.accent, paddingHorizontal: 12, paddingVertical: 10, borderRadius: RADIUS.pill },
+  upBtnText: { color: COLORS.surface, fontWeight: "700", fontSize: 13 },
   section: { fontFamily: FONTS.heading, fontSize: 20, color: COLORS.textPrimary, marginTop: SPACING.lg, marginBottom: SPACING.md },
   pastCard: { flexDirection: "row", alignItems: "center", gap: 12, padding: SPACING.md, backgroundColor: COLORS.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, marginBottom: 8 },
   pastGoal: { fontFamily: FONTS.heading, fontSize: 15, color: COLORS.textPrimary },

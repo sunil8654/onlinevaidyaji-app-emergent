@@ -6,6 +6,7 @@ import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { api } from "@/src/api";
 import { useI18n } from "@/src/i18n";
 import { Feather } from "@expo/vector-icons";
+import { ComingSoonBanner } from "@/src/components/ComingSoon";
 
 const CATS = ["all", "immunity", "stress", "digestive", "skin", "joint", "sleep"];
 
@@ -49,17 +50,25 @@ export default function Shop() {
           <Feather name="arrow-left" size={22} color={COLORS.textPrimary} />
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
-          <Text style={styles.eyebrow}>AYUSH Shop</Text>
+          <Text style={styles.eyebrow}>AYUSH Pharmacy</Text>
           <Text style={styles.title}>Herbal store</Text>
         </View>
-        <TouchableOpacity style={styles.cartBtn} onPress={() => setCartOpen(true)} testID="shop-cart-open">
-          <Feather name="shopping-bag" size={18} color={COLORS.surface} />
-          {cartCount > 0 && (
-            <View style={styles.cartBadge}>
-              <Text style={styles.cartBadgeText}>{cartCount}</Text>
-            </View>
-          )}
-        </TouchableOpacity>
+        <View style={{ position: "relative" }}>
+          <ComingSoonBanner />
+          <TouchableOpacity style={styles.cartBtn} onPress={() => setCartOpen(true)} testID="shop-cart-open">
+            <Feather name="shopping-bag" size={18} color={COLORS.surface} />
+            {cartCount > 0 && (
+              <View style={styles.cartBadge}>
+                <Text style={styles.cartBadgeText}>{cartCount}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      <View style={styles.csBanner}>
+        <Feather name="clock" size={14} color={COLORS.accent} />
+        <Text style={styles.csText}>Pharmacy launches soon — browse, cart is demo-only.</Text>
       </View>
 
       <ScrollView horizontal style={styles.chipsWrap} contentContainerStyle={styles.chipsRow} showsHorizontalScrollIndicator={false}>
@@ -180,6 +189,8 @@ const styles = StyleSheet.create({
   cartBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: COLORS.brand, alignItems: "center", justifyContent: "center" },
   cartBadge: { position: "absolute", top: -4, right: -4, backgroundColor: COLORS.accent, borderRadius: 10, minWidth: 20, height: 20, alignItems: "center", justifyContent: "center", paddingHorizontal: 4 },
   cartBadgeText: { color: COLORS.surface, fontSize: 10, fontWeight: "700" },
+  csBanner: { flexDirection: "row", gap: 6, alignItems: "center", justifyContent: "center", backgroundColor: COLORS.accentSoft, paddingVertical: 8, marginHorizontal: SPACING.lg, borderRadius: RADIUS.pill, marginBottom: SPACING.sm },
+  csText: { color: COLORS.accent, fontSize: 12, fontWeight: "700" },
   chipsWrap: { maxHeight: 56 },
   chipsRow: { paddingHorizontal: SPACING.lg, gap: 8, alignItems: "center", height: 56 },
   chip: { flexShrink: 0, height: 36, paddingHorizontal: 14, borderRadius: RADIUS.pill, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, alignItems: "center", justifyContent: "center" },

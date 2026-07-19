@@ -86,9 +86,13 @@ export default function Profile() {
         <View style={styles.menu}>
           <MenuItem icon="calendar" label={t("my_appointments")} onPress={() => router.push("/appointments")} testID="profile-menu-appointments" />
           <MenuItem icon="folder" label={t("health_records")} onPress={() => router.push("/records")} testID="profile-menu-records" />
+          <MenuItem icon="droplet" label="Water tracker" onPress={() => router.push("/water")} testID="profile-menu-water" />
+          <MenuItem icon="wind" label="AI Yoga classes" onPress={() => router.push("/ai-yoga")} testID="profile-menu-yoga" />
+          <MenuItem icon="heart" label="Lifestyle & diseases" onPress={() => router.push("/lifestyle")} testID="profile-menu-lifestyle" />
           <MenuItem icon="award" label={t("community_challenges")} onPress={() => router.push("/challenges")} testID="profile-menu-challenges" />
           <MenuItem icon="message-circle" label={t("talk_to_vaidhyaji")} onPress={() => router.push("/chatbot")} testID="profile-menu-chatbot" />
           <MenuItem icon="headphones" label={t("support_chat")} onPress={() => router.push("/support-chat")} testID="profile-menu-support" />
+          <MenuItem icon="info" label="About, policies & contact" onPress={() => router.push("/about")} testID="profile-menu-about" />
           <MenuItem
             icon="globe"
             label={`${t("language")}: ${lang === "en" ? "English" : "हिन्दी"}`}

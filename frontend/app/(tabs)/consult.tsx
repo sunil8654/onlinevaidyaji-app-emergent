@@ -6,9 +6,12 @@ import { COLORS, FONTS, RADIUS, SPACING, SPECIALTIES } from "@/src/theme";
 import { api } from "@/src/api";
 import { Feather } from "@expo/vector-icons";
 
+const CITIES = ["All Cities", "Delhi", "Delhi NCR", "Noida", "Mumbai", "Bangalore", "Hyderabad", "Chennai", "Pune", "Ahmedabad", "Kolkata", "Jaipur", "Lucknow"];
+
 export default function Consult() {
   const router = useRouter();
   const [specialty, setSpecialty] = useState<string>("All");
+  const [city, setCity] = useState<string>("All Cities");
   const [doctors, setDoctors] = useState<any[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -44,6 +47,20 @@ export default function Consult() {
             testID={`consult-chip-${s.toLowerCase()}`}
           >
             <Text style={[styles.chipText, specialty === s && styles.chipTextActive]}>{s}</Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipsWrap} contentContainerStyle={styles.chipsRow}>
+        {CITIES.map((c) => (
+          <TouchableOpacity
+            key={c}
+            onPress={() => setCity(c)}
+            style={[styles.chip, city === c && { backgroundColor: COLORS.accent, borderColor: COLORS.accent }]}
+            testID={`consult-city-${c}`}
+          >
+            <Feather name="map-pin" size={11} color={city === c ? COLORS.surface : COLORS.textSecondary} style={{ marginRight: 4 }} />
+            <Text style={[styles.chipText, city === c && { color: COLORS.surface }]}>{c}</Text>
           </TouchableOpacity>
         ))}
       </ScrollView>
@@ -99,7 +116,7 @@ const styles = StyleSheet.create({
   },
   chipsWrap: { maxHeight: 56, marginTop: SPACING.md },
   chipsRow: { paddingHorizontal: SPACING.lg, gap: 8, alignItems: "center", height: 56 },
-  chip: { flexShrink: 0, height: 36, paddingHorizontal: 16, borderRadius: RADIUS.pill, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, alignItems: "center", justifyContent: "center" },
+  chip: { flexShrink: 0, flexDirection: "row", alignItems: "center", height: 36, paddingHorizontal: 12, borderRadius: RADIUS.pill, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, justifyContent: "center" },
   chipActive: { backgroundColor: COLORS.brand, borderColor: COLORS.brand },
   chipText: { color: COLORS.textPrimary, fontSize: 13, fontWeight: "600" },
   chipTextActive: { color: COLORS.surface },

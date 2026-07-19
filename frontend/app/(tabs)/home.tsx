@@ -8,6 +8,7 @@ import { useAuth } from "@/src/auth";
 import { api } from "@/src/api";
 import { useI18n } from "@/src/i18n";
 import DoctorHome from "@/app/doctor/home";
+import { Logo } from "@/src/components/Logo";
 
 export default function Home() {
   const { user } = useAuth();
@@ -59,6 +60,7 @@ function PatientHome() {
         {/* Header */}
         <View style={styles.header}>
           <View>
+            <Logo size={22} />
             <Text style={styles.greet}>{t("namaste")}, {greet.toLowerCase()}</Text>
             <Text style={styles.name} testID="home-username">{user?.name?.split(" ")[0] || t("friend")}</Text>
           </View>
@@ -66,6 +68,16 @@ function PatientHome() {
             <Feather name="user" size={20} color={COLORS.brand} />
           </TouchableOpacity>
         </View>
+
+        {/* Instant consult hero */}
+        <TouchableOpacity style={styles.instantHero} onPress={() => router.push("/instant-consult")} testID="home-instant-consult" activeOpacity={0.9}>
+          <View style={styles.pulseDot} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.instantKicker}>⚡  INSTANT VIDEO · UNDER 30 MIN</Text>
+            <Text style={styles.instantTitle}>Consult a Vaidya right now</Text>
+          </View>
+          <Feather name="video" size={22} color={COLORS.surface} />
+        </TouchableOpacity>
 
         {/* Daily Tip Hero */}
         {tip && (
@@ -90,13 +102,15 @@ function PatientHome() {
             <View style={[styles.engIcon, { backgroundColor: "#F3D9CD" }]}>
               <Feather name="shopping-bag" size={16} color={COLORS.accent} />
             </View>
-            <Text style={styles.engLabel}>Shop</Text>
+            <Text style={styles.engLabel}>Pharmacy</Text>
+            <Text style={styles.engBadge}>SOON</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/labs")} testID="home-labs" activeOpacity={0.85}>
             <View style={[styles.engIcon, { backgroundColor: COLORS.surfaceAlt }]}>
               <Feather name="activity" size={16} color={COLORS.brand} />
             </View>
             <Text style={styles.engLabel}>Lab Tests</Text>
+            <Text style={styles.engBadge}>SOON</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/diet-plan")} testID="home-diet" activeOpacity={0.85}>
             <View style={[styles.engIcon, { backgroundColor: COLORS.surfaceAlt }]}>
@@ -104,11 +118,39 @@ function PatientHome() {
             </View>
             <Text style={styles.engLabel}>Diet Plan</Text>
           </TouchableOpacity>
+          <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/ai-yoga")} testID="home-yoga" activeOpacity={0.85}>
+            <View style={[styles.engIcon, { backgroundColor: "#F3D9CD" }]}>
+              <Feather name="wind" size={16} color={COLORS.accent} />
+            </View>
+            <Text style={styles.engLabel}>AI Yoga</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Row 2: water, journal, lifestyle, near-you */}
+        <View style={styles.engagementRow}>
+          <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/water")} testID="home-water" activeOpacity={0.85}>
+            <View style={[styles.engIcon, { backgroundColor: COLORS.surfaceAlt }]}>
+              <Feather name="droplet" size={16} color={COLORS.brand} />
+            </View>
+            <Text style={styles.engLabel}>Water</Text>
+          </TouchableOpacity>
           <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/blogs")} testID="home-blogs" activeOpacity={0.85}>
             <View style={[styles.engIcon, { backgroundColor: "#F3D9CD" }]}>
               <Feather name="book-open" size={16} color={COLORS.accent} />
             </View>
             <Text style={styles.engLabel}>Journal</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/lifestyle")} testID="home-lifestyle" activeOpacity={0.85}>
+            <View style={[styles.engIcon, { backgroundColor: COLORS.surfaceAlt }]}>
+              <Feather name="heart" size={16} color={COLORS.brand} />
+            </View>
+            <Text style={styles.engLabel}>Diseases</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/(tabs)/consult")} testID="home-near-you" activeOpacity={0.85}>
+            <View style={[styles.engIcon, { backgroundColor: "#F3D9CD" }]}>
+              <Feather name="map-pin" size={16} color={COLORS.accent} />
+            </View>
+            <Text style={styles.engLabel}>Near You</Text>
           </TouchableOpacity>
         </View>
 
@@ -259,10 +301,15 @@ const styles = StyleSheet.create({
   challengePad: { padding: SPACING.md },
   challengeTitle: { fontFamily: FONTS.heading, fontSize: 18, color: COLORS.textPrimary, lineHeight: 22 },
   challengeMeta: { color: COLORS.textSecondary, fontSize: 12, marginTop: 4 },
-  engagementRow: { flexDirection: "row", gap: 8, marginBottom: SPACING.md },
-  engBtn: { flex: 1, alignItems: "center", backgroundColor: COLORS.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, padding: 10 },
-  engIcon: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", marginBottom: 6 },
-  engLabel: { fontSize: 11, color: COLORS.textPrimary, fontWeight: "700" },
+  engagementRow: { flexDirection: "row", gap: 6, marginBottom: 10 },
+  engBtn: { flex: 1, alignItems: "center", backgroundColor: COLORS.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, padding: 8, position: "relative" },
+  engIcon: { width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center", marginBottom: 4 },
+  engLabel: { fontSize: 10, color: COLORS.textPrimary, fontWeight: "700", textAlign: "center" },
+  engBadge: { position: "absolute", top: 4, right: 4, backgroundColor: COLORS.accent, color: COLORS.surface, fontSize: 7, paddingHorizontal: 4, paddingVertical: 1, borderRadius: 6, fontWeight: "700", letterSpacing: 0.5, overflow: "hidden" },
+  instantHero: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: COLORS.brand, borderRadius: RADIUS.lg, padding: 12, marginBottom: SPACING.md },
+  pulseDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: COLORS.accent },
+  instantKicker: { color: COLORS.accentSoft, fontSize: 9, letterSpacing: 1.5, fontWeight: "700" },
+  instantTitle: { color: COLORS.surface, fontFamily: FONTS.heading, fontSize: 16, marginTop: 2 },
   fab: {
     position: "absolute", right: 20, bottom: 110,
     width: 54, height: 54, borderRadius: 27,
