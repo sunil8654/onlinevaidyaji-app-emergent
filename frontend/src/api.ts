@@ -38,6 +38,7 @@ export const api = {
     password: string;
     role: "patient" | "doctor";
     phone?: string;
+    registration_number?: string;
   }) => request("/auth/register", "POST", payload, false),
   login: (payload: { email: string; password: string }) =>
     request("/auth/login", "POST", payload, false),
@@ -67,6 +68,16 @@ export const api = {
   chat: (session_id: string, message: string) =>
     request("/chat/message", "POST", { session_id, message }),
   chatHistory: (session_id: string) => request(`/chat/history/${session_id}`),
+
+  payAppointment: (id: string) => request(`/appointments/${id}/pay`, "POST"),
+  addPrescription: (id: string, body: { diagnosis: string; medicines: string; notes?: string }) =>
+    request(`/appointments/${id}/prescription`, "POST", body),
+  listPrescriptions: () => request("/prescriptions"),
+
+  addReport: (body: { title: string; kind?: string; date?: string; notes?: string; image_base64?: string }) =>
+    request("/reports", "POST", body),
+  listReports: () => request("/reports"),
+  deleteReport: (id: string) => request(`/reports/${id}`, "DELETE"),
 
   track: (event: string, props?: any) => request("/analytics", "POST", { event, props }),
 };

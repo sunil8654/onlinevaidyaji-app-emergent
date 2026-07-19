@@ -15,6 +15,7 @@ export default function Register() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [phone, setPhone] = useState("");
+  const [regNumber, setRegNumber] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -24,11 +25,21 @@ export default function Register() {
       setErr("Please fill all required fields");
       return;
     }
+    if (!isPatient && !regNumber.trim()) {
+      setErr("Registration number is required for doctors");
+      return;
+    }
     setBusy(true);
     try {
-      await register({ name, email: email.trim().toLowerCase(), password, role: isPatient ? "patient" : "doctor", phone });
-      if (isPatient) router.replace("/auth/health-profile");
-      else router.replace("/(tabs)/home");
+      await register({
+        name,
+        email: email.trim().toLowerCase(),
+        password,
+        role: isPatient ? "patient" : "doctor",
+        phone,
+        registration_number: isPatient ? undefined : regNumber,
+      });
+      router.replace({ pathname: "/auth/otp", params: { phone } });
     } catch (e: any) {
       setErr(e.message || "Registration failed");
     } finally {
@@ -64,6 +75,25 @@ export default function Register() {
 
             <Label>Phone (optional)</Label>
             <TextInput style={styles.input} value={phone} onChangeText={setPhone} keyboardType="phone-pad" placeholder="+91 9xxxxxxxxx" placeholderTextColor={COLORS.textMuted} testID="register-phone" />
+
+            {!isPatient && (
+              <>
+                <Label>AYUSH Registration No.</Label>
+                <TextInput
+                  style={styles.input}
+                  value={regNumber}
+                  onChangeText={setRegNumber}
+                  autoCapitalize="characters"
+                  placeholder="e.g. AYUSH/BAMS/2016/12345"
+                  placeholderTextColor={COLORS.textMuted}
+                  testID="register-regnumber"
+                />
+                <View style={styles.docBox}>
+                  <Feather name="check-circle" size={16} color={COLORS.success} />
+                  <Text style={styles.docText}>Qualification certificate attached (demo)</Text>
+                </View>
+              </>
+            )}
 
             {err ? <Text style={styles.err} testID="register-error">{err}</Text> : null}
 
@@ -122,4 +152,10 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   ctaText: { color: COLORS.surface, fontWeight: "700", fontSize: 16 },
+  docBox: {
+    flexDirection: "row", alignItems: "center", gap: 8,
+    marginTop: 10, padding: 12, backgroundColor: COLORS.surfaceAlt,
+    borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border,
+  },
+  docText: { color: COLORS.textSecondary, fontSize: 13 },
 });

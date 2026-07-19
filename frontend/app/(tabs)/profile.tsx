@@ -83,6 +83,7 @@ export default function Profile() {
 
         <View style={styles.menu}>
           <MenuItem icon="calendar" label="My appointments" onPress={() => router.push("/appointments")} testID="profile-menu-appointments" />
+          <MenuItem icon="folder" label="Health records vault" onPress={() => router.push("/records")} testID="profile-menu-records" />
           <MenuItem icon="award" label="Challenges & badges" onPress={() => router.push("/challenges")} testID="profile-menu-challenges" />
           <MenuItem icon="message-circle" label="Chat with AI Vaidhyaji" onPress={() => router.push("/chatbot")} testID="profile-menu-chatbot" />
           <MenuItem

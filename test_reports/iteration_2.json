@@ -1,0 +1,45 @@
+{
+  "summary": "Iteration 2 backend testing for Online Vaidhyaji AYUSH. Added /app/backend/tests/test_new_features.py with 13 new tests covering doctor registration_number field, appointment default fields (paid=false, amount==doctor.consultation_fee, prescription=null), mock payment flow (POST /pay success + 404), prescription flow (patient can add, third-party 403, unknown appt 404), GET /api/prescriptions filter (only appts with prescription!=null), and health-records vault CRUD (add, list, user-scoping, delete, 404, auth-required). Full regression suite green: 38/38 tests passed (25 previous + 13 new). No backend code changes required.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/auth/register (doctor)", "issue": "documents_uploaded is set to bool(registration_number) — a bare non-empty string like ' ' would count as uploaded. Not user-facing yet, but consider stripping/validating registration_number."},
+      {"endpoint": "POST /api/appointments/{id}/pay", "issue": "Endpoint is idempotent: paying an already-paid appointment succeeds again and refreshes paid_at. Not a bug for MVP mock payment, but for real Stripe this would need an idempotency guard."},
+      {"endpoint": "POST /api/appointments/{id}/prescription", "issue": "Comment says 'Either the patient (demo) or the doctor of the appt can add'. In practice the appointment's doctor_id is a seeded doctor UUID (not a user account UUID), so a real registered doctor user's id will typically NOT match doctor_id — meaning today only the patient can add. If a real doctor-side workflow is planned, link appointment.doctor_id to a users collection id."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/conftest.py",
+    "/app/backend/tests/test_backend_api.py",
+    "/app/backend/tests/test_new_features.py",
+    "/app/test_reports/pytest/pytest_results.xml",
+    "/app/test_reports/pytest/pytest_new_features.xml"
+  ],
+  "action_items": [
+    "Consider adding a follow-up endpoint or field for doctor verification (admin flow) since verified defaults to False on registration.",
+    "If a real doctor-side prescription workflow is required, link appointment.doctor_id to the users collection (currently it references the seeded db.doctors collection UUID which does not overlap with registered doctor-user accounts).",
+    "Optional: strip/validate registration_number so documents_uploaded reflects a real value; currently bool(' ') is True."
+  ],
+  "critical_code_review_comments": [
+    "New endpoints (pay, prescription, reports) correctly scoped by user_id/patient_id — third-party access returns 403 (prescription) or is silently filtered (reports).",
+    "MongoDB _id continues to be excluded via projection {'_id': 0} on all new reads; pop('_id', None) used on new writes.",
+    "ReportInput allows optional image_base64 — no size cap; consider limiting payload size to protect Mongo document 16MB ceiling (e.g., FastAPI request size limit or explicit Field(max_length=...)).",
+    "list_prescriptions correctly builds compound query {patient_id/doctor_id, prescription: {$ne: null}}.",
+    "Payment endpoint mutates appt in-place and returns fresh copy — response is the full updated document (good)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_new_features.py (new — 13 tests, 6 test classes, one third_party_patient fixture)"
+  ],
+  "success_rate": {"backend": "100% (38/38)", "frontend": "N/A (backend-only requested)"},
+  "seed_data_creation": "No changes to server seed. Tests create disposable TEST_ users (test_<uuid>@vaidhyaji.example.com), TEST_-prefixed reports, and short-lived appointments. Not cleaned up but isolated by uuid and TEST_ prefix.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend suite lives at /app/backend/tests/. Full run: `python -m pytest backend/tests/ -v --junitxml=/app/test_reports/pytest/pytest_results.xml`. Use conftest.py fixtures: patient_ctx, doctor_ctx (session-scoped). For 403 tests use the module-scoped third_party_patient fixture in test_new_features.py. Public URL is read from EXPO_PUBLIC_BACKEND_URL in /app/frontend/.env. Pydantic EmailStr rejects .test/.example TLDs at the second-level — use vaidhyaji.example.com. Note: appointment.doctor_id currently references seeded db.doctors UUIDs (not user IDs), so 'doctor can add prescription' branch of POST /appointments/{id}/prescription is only reachable if the doctor's user.id == appointment.doctor_id, which is not possible with the current schema. This branch is covered by code review; direct end-to-end testing would require schema change.",
+  "rca_of_issue": "N/A — no failures encountered. All 13 new tests passed on first run; full 38-test regression is green."
+}

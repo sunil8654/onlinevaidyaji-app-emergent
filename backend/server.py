@@ -45,6 +45,7 @@ class RegisterInput(BaseModel):
     password: str
     role: Literal["patient", "doctor"] = "patient"
     phone: Optional[str] = None
+    registration_number: Optional[str] = None  # for doctors
 
 
 class LoginInput(BaseModel):
@@ -101,6 +102,20 @@ class ChallengeJoinInput(BaseModel):
     challenge_id: str
 
 
+class PrescriptionInput(BaseModel):
+    diagnosis: str
+    medicines: str  # multi-line text
+    notes: Optional[str] = None
+
+
+class ReportInput(BaseModel):
+    title: str
+    kind: str = "lab"  # lab | scan | note
+    date: Optional[str] = None
+    notes: Optional[str] = None
+    image_base64: Optional[str] = None  # optional
+
+
 # ----------------- Helpers -----------------
 def hash_password(pw: str) -> str:
     return bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
@@ -155,6 +170,10 @@ async def register(body: RegisterInput):
         "phone": body.phone,
         "created_at": now_iso(),
     }
+    if body.role == "doctor":
+        doc["registration_number"] = body.registration_number
+        doc["verified"] = False  # pending verification
+        doc["documents_uploaded"] = bool(body.registration_number)
     await db.users.insert_one(doc)
     token = make_token(user_id, body.role)
     return {
@@ -235,6 +254,9 @@ async def create_appointment(body: AppointmentInput, user: dict = Depends(curren
         "slot": body.slot,
         "reason": body.reason,
         "status": "confirmed",
+        "paid": False,
+        "amount": doctor.get("consultation_fee", 500),
+        "prescription": None,
         "created_at": now_iso(),
     }
     await db.appointments.insert_one(appt)
@@ -247,6 +269,72 @@ async def list_appointments(user: dict = Depends(current_user)):
     q = {"patient_id": user["id"]} if user["role"] == "patient" else {"doctor_id": user["id"]}
     items = await db.appointments.find(q, {"_id": 0}).sort("slot", 1).to_list(200)
     return items
+
+
+@api_router.post("/appointments/{appt_id}/pay")
+async def pay_appointment(appt_id: str, user: dict = Depends(current_user)):
+    r = await db.appointments.update_one(
+        {"id": appt_id, "patient_id": user["id"]},
+        {"$set": {"paid": True, "paid_at": now_iso()}}
+    )
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+    appt = await db.appointments.find_one({"id": appt_id}, {"_id": 0})
+    return appt
+
+
+@api_router.post("/appointments/{appt_id}/prescription")
+async def add_prescription(appt_id: str, body: PrescriptionInput, user: dict = Depends(current_user)):
+    # Either the patient (demo) or the doctor of the appt can add — for MVP demo flexibility
+    appt = await db.appointments.find_one({"id": appt_id}, {"_id": 0})
+    if not appt:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+    if user["id"] not in (appt.get("patient_id"), appt.get("doctor_id")):
+        raise HTTPException(status_code=403, detail="Not allowed")
+    prescription = {
+        **body.dict(),
+        "written_at": now_iso(),
+        "author_id": user["id"],
+        "author_name": user["name"],
+    }
+    await db.appointments.update_one({"id": appt_id}, {"$set": {"prescription": prescription}})
+    return prescription
+
+
+@api_router.get("/prescriptions")
+async def list_prescriptions(user: dict = Depends(current_user)):
+    q = {"patient_id": user["id"]} if user["role"] == "patient" else {"doctor_id": user["id"]}
+    q["prescription"] = {"$ne": None}
+    items = await db.appointments.find(q, {"_id": 0}).sort("slot", -1).to_list(200)
+    return items
+
+
+# ----------------- Reports (Health Records vault) -----------------
+@api_router.post("/reports")
+async def add_report(body: ReportInput, user: dict = Depends(current_user)):
+    r = body.dict()
+    r["id"] = str(uuid.uuid4())
+    r["user_id"] = user["id"]
+    r["created_at"] = now_iso()
+    if not r.get("date"):
+        r["date"] = now_iso()
+    await db.reports.insert_one(r)
+    r.pop("_id", None)
+    return r
+
+
+@api_router.get("/reports")
+async def list_reports(user: dict = Depends(current_user)):
+    items = await db.reports.find({"user_id": user["id"]}, {"_id": 0}).sort("date", -1).to_list(200)
+    return items
+
+
+@api_router.delete("/reports/{report_id}")
+async def delete_report(report_id: str, user: dict = Depends(current_user)):
+    r = await db.reports.delete_one({"id": report_id, "user_id": user["id"]})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"ok": True}
 
 
 # ----------------- Reminders -----------------

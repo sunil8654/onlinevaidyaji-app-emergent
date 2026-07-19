@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIndicator } from "react-native";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIndicator, Modal } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
@@ -34,6 +34,7 @@ export default function DoctorDetail() {
   const [busy, setBusy] = useState(false);
   const [ok, setOk] = useState(false);
   const [err, setErr] = useState("");
+  const [payOpen, setPayOpen] = useState(false);
   const slots = useMemo(() => generateSlots(), []);
   const grouped = useMemo(() => {
     const m: Record<string, typeof slots> = {};
@@ -51,8 +52,11 @@ export default function DoctorDetail() {
     if (!slot) return;
     setBusy(true); setErr("");
     try {
-      await api.bookAppointment({ doctor_id: id as string, slot });
+      const appt = await api.bookAppointment({ doctor_id: id as string, slot });
+      // mock payment
+      await api.payAppointment(appt.id).catch(() => {});
       setOk(true);
+      setPayOpen(false);
       setTimeout(() => router.replace("/appointments"), 900);
     } catch (e: any) {
       setErr(e.message || "Could not book. Sign in first?");
@@ -136,13 +140,59 @@ export default function DoctorDetail() {
         <TouchableOpacity
           style={[styles.bookBtn, (!slot || busy) && { opacity: 0.5 }]}
           disabled={!slot || busy}
-          onPress={book}
+          onPress={() => setPayOpen(true)}
           testID="doctor-book"
         >
-          <Text style={styles.bookText}>{busy ? "Booking…" : "Confirm booking"}</Text>
+          <Text style={styles.bookText}>{busy ? "Booking…" : "Pay & confirm"}</Text>
           <Feather name="arrow-right" size={18} color={COLORS.surface} />
         </TouchableOpacity>
       </View>
+
+      {/* Mock payment sheet */}
+      <Modal visible={payOpen} animationType="slide" transparent onRequestClose={() => setPayOpen(false)}>
+        <View style={styles.payWrap}>
+          <View style={styles.paySheet}>
+            <View style={styles.grabber} />
+            <Text style={styles.payTitle}>Confirm payment</Text>
+            <Text style={styles.paySub}>
+              You&apos;re booking a consultation with {doc.name} ({doc.specialty}).
+            </Text>
+
+            <View style={styles.payRow}>
+              <Text style={styles.payLabel}>Consultation fee</Text>
+              <Text style={styles.payVal}>₹{doc.consultation_fee}</Text>
+            </View>
+            <View style={styles.payRow}>
+              <Text style={styles.payLabel}>Platform fee</Text>
+              <Text style={styles.payVal}>₹0</Text>
+            </View>
+            <View style={[styles.payRow, { borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: 10, marginTop: 6 }]}>
+              <Text style={[styles.payLabel, { fontWeight: "700", color: COLORS.textPrimary }]}>Total</Text>
+              <Text style={[styles.payVal, { fontFamily: FONTS.heading, fontSize: 22, color: COLORS.brand }]}>₹{doc.consultation_fee}</Text>
+            </View>
+
+            <View style={styles.methodBox}>
+              <Feather name="credit-card" size={18} color={COLORS.brand} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.methodTitle}>UPI / Cards (Demo)</Text>
+                <Text style={styles.methodSub}>Payment gateway will be plugged in on deploy.</Text>
+              </View>
+              <Feather name="check-circle" size={18} color={COLORS.success} />
+            </View>
+
+            {err ? <Text style={styles.err}>{err}</Text> : null}
+
+            <View style={{ flexDirection: "row", gap: 8, marginTop: SPACING.md, marginBottom: SPACING.md }}>
+              <TouchableOpacity style={styles.payCancel} onPress={() => setPayOpen(false)} testID="pay-cancel">
+                <Text style={{ color: COLORS.textPrimary, fontWeight: "700" }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.payGo, busy && { opacity: 0.6 }]} onPress={book} disabled={busy} testID="pay-confirm">
+                <Text style={{ color: COLORS.surface, fontWeight: "700" }}>{busy ? "Processing…" : `Pay ₹${doc.consultation_fee}`}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -180,4 +230,17 @@ const styles = StyleSheet.create({
   footerAmt: { fontFamily: FONTS.heading, fontSize: 24, color: COLORS.textPrimary },
   bookBtn: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: COLORS.brand, paddingHorizontal: 22, paddingVertical: 14, borderRadius: RADIUS.pill },
   bookText: { color: COLORS.surface, fontWeight: "700", fontSize: 15 },
+  payWrap: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "flex-end" },
+  paySheet: { backgroundColor: COLORS.bg, padding: SPACING.lg, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
+  grabber: { width: 42, height: 4, backgroundColor: COLORS.border, borderRadius: 2, alignSelf: "center", marginBottom: SPACING.md },
+  payTitle: { fontFamily: FONTS.heading, fontSize: 28, color: COLORS.textPrimary, letterSpacing: -0.5 },
+  paySub: { color: COLORS.textSecondary, marginTop: 4, fontSize: 13, lineHeight: 20 },
+  payRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 10 },
+  payLabel: { color: COLORS.textSecondary, fontSize: 14 },
+  payVal: { color: COLORS.textPrimary, fontSize: 14 },
+  methodBox: { flexDirection: "row", alignItems: "center", gap: 12, padding: SPACING.md, backgroundColor: COLORS.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, marginTop: SPACING.md },
+  methodTitle: { fontWeight: "700", color: COLORS.textPrimary, fontSize: 14 },
+  methodSub: { color: COLORS.textSecondary, fontSize: 12, marginTop: 2 },
+  payCancel: { flex: 1, paddingVertical: 14, alignItems: "center", borderRadius: RADIUS.pill, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border },
+  payGo: { flex: 1.4, paddingVertical: 14, alignItems: "center", borderRadius: RADIUS.pill, backgroundColor: COLORS.brand },
 });
