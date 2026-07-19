@@ -1,0 +1,132 @@
+{
+  "theme": "Organic & Earthy (Modern AYUSH)",
+  "typography": {
+    "primary_font": "Cormorant Garamond",
+    "primary_font_fallback": "serif",
+    "primary_font_usage": "Headings, titles, quotes, traditional AYUSH elements (Do NOT use Inter)",
+    "secondary_font": "Manrope",
+    "secondary_font_fallback": "sans-serif",
+    "secondary_font_usage": "Body text, UI elements, data, buttons, tabs",
+    "scale": {
+      "h1": "text-4xl (32px) tracking-tighter leading-none",
+      "h2": "text-3xl (28px) tracking-tight",
+      "h3": "text-2xl (24px)",
+      "body": "text-base (16px) leading-relaxed",
+      "caption": "text-sm (14px) uppercase tracking-[0.1em]"
+    }
+  },
+  "colors": {
+    "background": {
+      "primary": "#F7F5F0",
+      "description": "Warm Sand - main app background, calming, natural, matte."
+    },
+    "surface": {
+      "primary": "#FFFFFF",
+      "secondary": "#EBF0EC",
+      "description": "Pure white for main cards, Pale Sage for secondary containers and AI bubbles."
+    },
+    "text": {
+      "primary": "#1A2421",
+      "secondary": "#5C6B64",
+      "description": "Charcoal/Dark Olive for primary readability, muted olive for secondary. No pure black."
+    },
+    "brand": {
+      "primary": "#0F4C36",
+      "secondary": "#D9663D",
+      "description": "Deep Forest Green (Ayurveda/Nature) and Terracotta (Spices/Action). No purple gradients or teal."
+    },
+    "status": {
+      "success": "#2E7D32",
+      "warning": "#F57C00",
+      "error": "#D32F2F"
+    }
+  },
+  "visual_enhancers": {
+    "borders": "1px solid #E2DDD3 on cards instead of heavy shadows to maintain a tactile, clinical yet organic feel.",
+    "shadows": "Very subtle ambient shadows only on floating elements (e.g., bottom tab bar, primary CTA).",
+    "corner_radius": "rounded-2xl (16px) for major cards, rounded-full for buttons and badges.",
+    "textures": "Use solid warm backgrounds with crisp borders. Avoid muddy glassmorphism."
+  },
+  "grids_and_layouts": {
+    "home_dashboard": "Bento Grid style. A mix of full-width cards (Daily Tip) and 2-column squares (Symptom Checker, Quick Consult).",
+    "spacing": "Generous. Use padding 16px to 24px (p-4 to p-6) inside cards, gap-4 to gap-6 between elements.",
+    "navigation": "Bottom tab bar with 5 items (Home, Feed, Consult, Reminders, Profile). Floating style with subtle shadow.",
+    "feed": "Vertical scroll for wellness reels and tips. Full bleed images with text overlay and gradient protection (black/40)."
+  },
+  "components": {
+    "buttons": {
+      "primary": "Pill-shaped (rounded-full), Deep Forest Green background, Pure White text. Manrope font, bold.",
+      "secondary": "Outline button with Terracotta border and text."
+    },
+    "cards": {
+      "doctor_profile": "White background, image on top or left, tags for specialty (Ayurveda, Yoga), clear 'Book' CTA.",
+      "challenge_badge": "Circular or soft-square with icon/image and progress bar."
+    },
+    "chatbot": {
+      "user_bubble": "White background, 1px Terracotta border, aligned right.",
+      "ai_bubble": "Pale Sage background, no border, aligned left. Include small 'AI Vaidhyaji' avatar."
+    },
+    "inputs": {
+      "style": "Light background (#F7F5F0), 1px solid border (#E2DDD3), focused state changes border to Deep Forest Green."
+    }
+  },
+  "motion_and_interactions": {
+    "transitions": "Smooth mount/unmount animations. Scale down on button press (active opacity 0.8).",
+    "feed_scroll": "Snap to item for video/vertical feed.",
+    "loading": "Skeleton loaders using Pale Sage color instead of generic grey."
+  },
+  "accessibility": {
+    "contrast": "Ensure Deep Forest Green and Terracotta meet WCAG AA contrast against Warm Sand and White.",
+    "touch_targets": "Minimum 44x44 points for all interactive elements.",
+    "test_ids": "All interactive and key informational elements MUST include a testID attribute for React Native."
+  },
+  "media_and_icons": {
+    "icon_library": "Phosphor Icons or Lucide Icons (React Native compatible). Thin/light weights to feel premium.",
+    "image_treatment": "Images should have a slight warmth/fade to match the earthy palette. Never use harsh stock photos."
+  },
+  "image_urls": {
+    "onboarding_splash": {
+      "url": "https://images.pexels.com/photos/7988013/pexels-photo-7988013.jpeg",
+      "description": "Turmeric roots and yellow flowers flatlay, perfect for the AYUSH splash screen background."
+    },
+    "wellness_feed_1": {
+      "url": "https://images.pexels.com/photos/20689437/pexels-photo-20689437.jpeg",
+      "description": "Flat lay of natural ingredients and herbs for daily health tips."
+    },
+    "wellness_feed_2": {
+      "url": "https://images.pexels.com/photos/17859378/pexels-photo-17859378.jpeg",
+      "description": "Aromatic herbal tea in glass for home remedies content."
+    },
+    "doctor_avatar_1": {
+      "url": "https://images.pexels.com/photos/5738735/pexels-photo-5738735.jpeg",
+      "description": "Confident female doctor in a clinic setting."
+    },
+    "doctor_avatar_2": {
+      "url": "https://images.pexels.com/photos/5888168/pexels-photo-5888168.jpeg",
+      "description": "Young male doctor reviewing records."
+    },
+    "community_challenge": {
+      "url": "https://images.pexels.com/photos/13943905/pexels-photo-13943905.jpeg",
+      "description": "Hand in Gyan Mudra (Yoga/Meditation) for wellness challenges."
+    }
+  },
+  "instructions_to_main_agent": [
+    "Use React Native (Expo) syntax (.js) with standard StyleSheet or styled-components. Do not output .tsx files.",
+    "For typography, use expo-font to load 'Cormorant Garamond' and 'Manrope'.",
+    "Avoid 'AI slop' aesthetics. Do NOT use purple gradients, generic blue, or neon colors. Stick strictly to the Organic & Earthy palette.",
+    "For the bottom tab navigation, build a custom component that floats slightly above the bottom edge for a modern feel.",
+    "Implement the home dashboard using a Bento-style grid layout using React Native Views and Flexbox.",
+    "Ensure all buttons and touchable areas use TouchableOpacity or Pressable with clear visual feedback.",
+    "In the Chatbot UI, clearly differentiate user and AI messages using the specified color bubbles.",
+    "Do not use complete transparent backgrounds for overlays or headers that have content under them.",
+    "Apply testID attributes to all actionable components."
+  ],
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "You tend to converge toward generic, 'on distribution' outputs. Avoid this: make creative, distinctive mobile UIs that surprise and delight.",
+    "Don't make generic centered layouts, simplistic gradients, and uniform styling.",
+    "Create depth through layered design elements (borders, subtle background color shifts).",
+    "Never use AI assistant Emoji characters like 🤖🧠💭💡🔮🎯 for icons.",
+    "Use 2-3x more spacing than feels comfortable. Cramped designs look cheap.",
+    "Always use the provided Image URLs. Do not use generic placeholders like via.placeholder.com."
+  ]
+}
