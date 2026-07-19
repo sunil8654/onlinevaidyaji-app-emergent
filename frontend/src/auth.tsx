@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
 import { storage } from "@/src/utils/storage";
 import { api, TOKEN_KEY } from "@/src/api";
+import { registerForPush } from "@/src/push";
 
 export type Role = "patient" | "doctor" | "admin";
 export type AuthUser = {
@@ -51,6 +52,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const res = await api.login({ email, password });
     await storage.secureSet(TOKEN_KEY, res.token);
     setUser(res.user);
+    registerForPush(res.user.id).catch(() => {});
     return res.user as AuthUser;
   }, []);
 
@@ -59,6 +61,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const res = await api.register(data);
       await storage.secureSet(TOKEN_KEY, res.token);
       setUser(res.user);
+      registerForPush(res.user.id).catch(() => {});
       return res.user as AuthUser;
     },
     []

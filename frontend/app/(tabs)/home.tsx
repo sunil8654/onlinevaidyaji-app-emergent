@@ -7,8 +7,15 @@ import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { useAuth } from "@/src/auth";
 import { api } from "@/src/api";
 import { useI18n } from "@/src/i18n";
+import DoctorHome from "@/app/doctor/home";
 
 export default function Home() {
+  const { user } = useAuth();
+  if (user?.role === "doctor") return <DoctorHome />;
+  return <PatientHome />;
+}
+
+function PatientHome() {
   const router = useRouter();
   const { user } = useAuth();
   const { t } = useI18n();
@@ -76,6 +83,34 @@ export default function Home() {
             </ImageBackground>
           </TouchableOpacity>
         )}
+
+        {/* Engagement quick actions row — revenue drivers */}
+        <View style={styles.engagementRow}>
+          <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/shop")} testID="home-shop" activeOpacity={0.85}>
+            <View style={[styles.engIcon, { backgroundColor: "#F3D9CD" }]}>
+              <Feather name="shopping-bag" size={16} color={COLORS.accent} />
+            </View>
+            <Text style={styles.engLabel}>Shop</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/labs")} testID="home-labs" activeOpacity={0.85}>
+            <View style={[styles.engIcon, { backgroundColor: COLORS.surfaceAlt }]}>
+              <Feather name="activity" size={16} color={COLORS.brand} />
+            </View>
+            <Text style={styles.engLabel}>Lab Tests</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/diet-plan")} testID="home-diet" activeOpacity={0.85}>
+            <View style={[styles.engIcon, { backgroundColor: COLORS.surfaceAlt }]}>
+              <Feather name="sunrise" size={16} color={COLORS.brand} />
+            </View>
+            <Text style={styles.engLabel}>Diet Plan</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/blogs")} testID="home-blogs" activeOpacity={0.85}>
+            <View style={[styles.engIcon, { backgroundColor: "#F3D9CD" }]}>
+              <Feather name="book-open" size={16} color={COLORS.accent} />
+            </View>
+            <Text style={styles.engLabel}>Journal</Text>
+          </TouchableOpacity>
+        </View>
 
         {/* Bento grid */}
         <View style={styles.bento}>
@@ -224,6 +259,10 @@ const styles = StyleSheet.create({
   challengePad: { padding: SPACING.md },
   challengeTitle: { fontFamily: FONTS.heading, fontSize: 18, color: COLORS.textPrimary, lineHeight: 22 },
   challengeMeta: { color: COLORS.textSecondary, fontSize: 12, marginTop: 4 },
+  engagementRow: { flexDirection: "row", gap: 8, marginBottom: SPACING.md },
+  engBtn: { flex: 1, alignItems: "center", backgroundColor: COLORS.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, padding: 10 },
+  engIcon: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", marginBottom: 6 },
+  engLabel: { fontSize: 11, color: COLORS.textPrimary, fontWeight: "700" },
   fab: {
     position: "absolute", right: 20, bottom: 110,
     width: 54, height: 54, borderRadius: 27,

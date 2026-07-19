@@ -98,5 +98,42 @@ export const api = {
   createLead: (body: { name: string; contact: string; goal?: string }) =>
     request("/support/lead", "POST", body, false),
 
+  // Medicines shop
+  listMedicines: (category?: string) => request(`/medicines${category && category !== "all" ? `?category=${category}` : ""}`, "GET", undefined, false),
+  getMedicine: (id: string) => request(`/medicines/${id}`, "GET", undefined, false),
+  orderMedicines: (items: { medicine_id: string; qty: number }[], address?: string) =>
+    request("/medicines/order", "POST", { items, address }),
+  myMedicineOrders: () => request("/medicines/orders/mine"),
+
+  // Lab tests
+  listLabTests: () => request("/lab-tests", "GET", undefined, false),
+  getLabTest: (id: string) => request(`/lab-tests/${id}`, "GET", undefined, false),
+  bookLabTest: (body: { lab_test_id: string; slot: string; address?: string }) =>
+    request("/lab-tests/book", "POST", body),
+  myLabBookings: () => request("/lab-tests/bookings/mine"),
+
+  // Blogs
+  listBlogs: () => request("/blogs", "GET", undefined, false),
+  getBlog: (id: string) => request(`/blogs/${id}`, "GET", undefined, false),
+
+  // Diet plan
+  generateDietPlan: (body: { goal: string; dosha?: string; conditions?: string[]; vegetarian?: boolean }) =>
+    request("/diet-plan", "POST", body),
+  myDietPlans: () => request("/diet-plans"),
+
+  // Doctor workspace
+  doctorMe: () => request("/doctor/me"),
+  doctorOnboard: (body: any) => request("/doctor/onboard", "PUT", body),
+  doctorMyAppointments: () => request("/doctor/my-appointments"),
+  doctorMyPatients: () => request("/doctor/my-patients"),
+
+  // Push
+  registerPush: (body: { user_id: string; platform: string; device_token: string }) =>
+    request("/register-push", "POST", body, false),
+
+  // Admin broadcast
+  adminBroadcast: (body: { title: string; message: string; audience: string }) =>
+    request("/admin/broadcast", "POST", body),
+
   track: (event: string, props?: any) => request("/analytics", "POST", { event, props }),
 };

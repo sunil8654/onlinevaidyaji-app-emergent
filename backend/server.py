@@ -14,6 +14,7 @@ import jwt
 import bcrypt
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage
+import httpx
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -30,6 +31,15 @@ JWT_EXPIRE_DAYS = int(os.environ.get('JWT_EXPIRE_DAYS', 30))
 EMERGENT_LLM_KEY = os.environ['EMERGENT_LLM_KEY']
 ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'admin@vaidhyaji.com')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'Admin@123')
+
+# Push
+PUSH_BASE_URL = "https://integrations.emergentagent.com"
+PUSH_KEY = os.environ.get("EMERGENT_PUSH_KEY", "placeholder")
+_push_client = httpx.AsyncClient(
+    base_url=PUSH_BASE_URL,
+    headers={"X-Push-Key": PUSH_KEY},
+    timeout=10.0,
+)
 
 app = FastAPI(title="Online Vaidhyaji API")
 api_router = APIRouter(prefix="/api")
@@ -635,6 +645,124 @@ async def seed():
         ]
         await db.challenges.insert_many(challenges)
 
+    if await db.medicines.count_documents({}) == 0:
+        meds = [
+            {"id": str(uuid.uuid4()), "order": 1, "category": "immunity", "name": "Chyawanprash",
+             "brand": "Dabur", "price": 349, "unit": "500 g jar",
+             "description": "Classical rasayana boosting immunity, respiratory health & vitality. Contains Amla, Pippali, Ashwagandha.",
+             "image_url": "https://images.pexels.com/photos/7988013/pexels-photo-7988013.jpeg"},
+            {"id": str(uuid.uuid4()), "order": 2, "category": "stress", "name": "Ashwagandha Tablets",
+             "brand": "Himalaya", "price": 249, "unit": "60 tabs",
+             "description": "Adaptogenic herb for stress, sleep and stamina.",
+             "image_url": "https://images.pexels.com/photos/17859378/pexels-photo-17859378.jpeg"},
+            {"id": str(uuid.uuid4()), "order": 3, "category": "digestive", "name": "Triphala Churna",
+             "brand": "Baidyanath", "price": 179, "unit": "100 g",
+             "description": "Amla + Haritaki + Bibhitaki — gentle digestion & detox.",
+             "image_url": "https://images.pexels.com/photos/8436587/pexels-photo-8436587.jpeg"},
+            {"id": str(uuid.uuid4()), "order": 4, "category": "skin", "name": "Kumkumadi Tailam",
+             "brand": "Kottakkal", "price": 399, "unit": "10 ml",
+             "description": "Saffron-infused night oil for radiant, even-toned skin.",
+             "image_url": "https://images.pexels.com/photos/5407206/pexels-photo-5407206.jpeg"},
+            {"id": str(uuid.uuid4()), "order": 5, "category": "immunity", "name": "Tulsi Drops",
+             "brand": "Organic India", "price": 199, "unit": "30 ml",
+             "description": "5 tulsi varieties in a bottle — take 3-5 drops in water daily.",
+             "image_url": "https://images.pexels.com/photos/17859378/pexels-photo-17859378.jpeg"},
+            {"id": str(uuid.uuid4()), "order": 6, "category": "joint", "name": "Mahanarayan Oil",
+             "brand": "Kottakkal", "price": 289, "unit": "200 ml",
+             "description": "Traditional oil for joint & muscle aches, post-workout recovery.",
+             "image_url": "https://images.pexels.com/photos/6663565/pexels-photo-6663565.jpeg"},
+            {"id": str(uuid.uuid4()), "order": 7, "category": "sleep", "name": "Brahmi Ghrita",
+             "brand": "Baidyanath", "price": 449, "unit": "150 g",
+             "description": "Medicated ghee for memory, focus & deep sleep.",
+             "image_url": "https://images.pexels.com/photos/7988013/pexels-photo-7988013.jpeg"},
+            {"id": str(uuid.uuid4()), "order": 8, "category": "digestive", "name": "Hingvastak Churna",
+             "brand": "Dabur", "price": 129, "unit": "100 g",
+             "description": "Post-meal digestive powder to reduce bloating & gas.",
+             "image_url": "https://images.pexels.com/photos/8436587/pexels-photo-8436587.jpeg"},
+        ]
+        await db.medicines.insert_many(meds)
+
+    if await db.lab_tests.count_documents({}) == 0:
+        labs = [
+            {"id": str(uuid.uuid4()), "order": 1, "category": "general", "name": "Complete Blood Count (CBC)",
+             "price": 399, "turnaround": "6 hours", "fasting": False,
+             "description": "Baseline count of RBC, WBC, platelets, hemoglobin.",
+             "image_url": "https://images.pexels.com/photos/5327585/pexels-photo-5327585.jpeg"},
+            {"id": str(uuid.uuid4()), "order": 2, "category": "metabolic", "name": "Diabetes Screen (HbA1c + FBS)",
+             "price": 599, "turnaround": "12 hours", "fasting": True,
+             "description": "3-month average blood sugar + fasting glucose.",
+             "image_url": "https://images.pexels.com/photos/5327585/pexels-photo-5327585.jpeg"},
+            {"id": str(uuid.uuid4()), "order": 3, "category": "wellness", "name": "AYUSH Wellness Panel",
+             "price": 1499, "turnaround": "24 hours", "fasting": True,
+             "description": "CBC + Lipid + Liver + Thyroid + Vitamin D & B12 — the classic annual check-up.",
+             "image_url": "https://images.pexels.com/photos/5407206/pexels-photo-5407206.jpeg"},
+            {"id": str(uuid.uuid4()), "order": 4, "category": "hormone", "name": "Thyroid Profile",
+             "price": 549, "turnaround": "12 hours", "fasting": False,
+             "description": "T3, T4, TSH — assess thyroid function.",
+             "image_url": "https://images.pexels.com/photos/5407206/pexels-photo-5407206.jpeg"},
+            {"id": str(uuid.uuid4()), "order": 5, "category": "wellness", "name": "Vitamin D & B12",
+             "price": 799, "turnaround": "12 hours", "fasting": False,
+             "description": "Critical for energy, mood, bone & nerve health.",
+             "image_url": "https://images.pexels.com/photos/6663565/pexels-photo-6663565.jpeg"},
+        ]
+        await db.lab_tests.insert_many(labs)
+
+    if await db.blogs.count_documents({}) == 0:
+        blogs = [
+            {"id": str(uuid.uuid4()), "order": 1, "category": "ayurveda",
+             "title": "Understanding Your Dosha in 5 Minutes",
+             "excerpt": "Vata, Pitta, or Kapha — knowing your constitution is the first step to real health.",
+             "body": (
+                 "Ayurveda teaches that every human is a unique blend of three biological energies — Vata (air+space), "
+                 "Pitta (fire+water), and Kapha (earth+water). Your dominant dosha shapes your body type, digestion, "
+                 "sleep, mood, and even the diseases you're prone to.\n\n"
+                 "Vata people are quick, creative, and can suffer dryness and anxiety when unbalanced. Pitta types are "
+                 "sharp, decisive, and prone to inflammation, heat, and burnout. Kapha types are calm, stable, but can "
+                 "gain weight and slow down easily.\n\n"
+                 "The magic of Ayurveda is that once you know your dosha, you can eat, exercise, sleep, and even work "
+                 "in a way that keeps you balanced. Take our free dosha quiz in the app and start your journey."
+             ),
+             "image_url": "https://images.pexels.com/photos/6663565/pexels-photo-6663565.jpeg",
+             "author": "Dr. Meera Sharma", "read_min": 5, "created_at": now_iso()},
+            {"id": str(uuid.uuid4()), "order": 2, "category": "remedy",
+             "title": "5 AYUSH Home Remedies for Winter Cough",
+             "excerpt": "Tulsi, honey, ginger — kitchen shelf cures that actually work.",
+             "body": (
+                 "1. Tulsi-Ginger Kadha — Boil 10 tulsi leaves + 1 inch grated ginger + 2 cloves in 2 cups water. "
+                 "Reduce to 1 cup, add honey. Sip twice daily.\n\n"
+                 "2. Turmeric Milk (Haldi Doodh) — 1 glass milk, ¼ tsp turmeric, pinch of black pepper. "
+                 "Best 30 min before sleep.\n\n"
+                 "3. Steam with Ajwain — Add 1 tsp ajwain to boiling water, inhale steam.\n\n"
+                 "4. Honey + Cinnamon — 1 tsp honey with a pinch of cinnamon, twice daily.\n\n"
+                 "5. Warm Sesame Oil Chest Rub — Warm 1 tbsp sesame oil, massage on chest and back, cover with cotton cloth."
+             ),
+             "image_url": "https://images.pexels.com/photos/17859378/pexels-photo-17859378.jpeg",
+             "author": "Dr. Arjun Nair", "read_min": 4, "created_at": now_iso()},
+            {"id": str(uuid.uuid4()), "order": 3, "category": "yoga",
+             "title": "Morning Yoga for Beginners — 15 Min",
+             "excerpt": "A gentle routine to energise your day, no equipment needed.",
+             "body": (
+                 "Start with 5 rounds of Surya Namaskar at a comfortable pace. Follow with:\n"
+                 "• Tadasana (mountain pose) — 1 min\n• Vrikshasana (tree) — 30 sec each side\n"
+                 "• Bhujangasana (cobra) — 5 breaths\n• Balasana (child) — 1 min\n\n"
+                 "Finish with 5 minutes of Anulom Vilom pranayama. Doing this daily for 21 days transforms your energy."
+             ),
+             "image_url": "https://images.pexels.com/photos/8436587/pexels-photo-8436587.jpeg",
+             "author": "Yogacharya Riya Patel", "read_min": 6, "created_at": now_iso()},
+            {"id": str(uuid.uuid4()), "order": 4, "category": "nutrition",
+             "title": "AYUSH Diet Rules Everyone Should Know",
+             "excerpt": "6 timeless rules from Ayurveda that upgrade every meal.",
+             "body": (
+                 "1. Eat sitting down, slowly, and chew each bite.\n2. Lunch should be your largest meal.\n"
+                 "3. Sip warm water, never ice-cold, during meals.\n4. Don't mix milk with sour or salty foods.\n"
+                 "5. Include all six tastes (sweet, sour, salty, bitter, pungent, astringent) daily.\n"
+                 "6. Dinner should end 3 hours before sleep."
+             ),
+             "image_url": "https://images.pexels.com/photos/1640775/pexels-photo-1640775.jpeg",
+             "author": "Vaidhyaji Editorial", "read_min": 3, "created_at": now_iso()},
+        ]
+        await db.blogs.insert_many(blogs)
+
 
 @app.on_event("startup")
 async def on_startup():
@@ -871,6 +999,319 @@ async def create_lead(body: LeadInput):
 
 
 # ----------------- End admin/support -----------------
+
+
+# ----------------- Medicines (Shop) -----------------
+class MedicineOrderInput(BaseModel):
+    items: List[dict]  # [{medicine_id, qty}]
+    address: Optional[str] = None
+
+
+@api_router.get("/medicines")
+async def list_medicines(category: Optional[str] = None):
+    q: dict = {}
+    if category and category.lower() != "all":
+        q["category"] = category
+    items = await db.medicines.find(q, {"_id": 0}).sort("order", 1).to_list(200)
+    return items
+
+
+@api_router.get("/medicines/{med_id}")
+async def get_medicine(med_id: str):
+    m = await db.medicines.find_one({"id": med_id}, {"_id": 0})
+    if not m:
+        raise HTTPException(status_code=404, detail="Not found")
+    return m
+
+
+@api_router.post("/medicines/order")
+async def order_medicines(body: MedicineOrderInput, user: dict = Depends(current_user)):
+    if not body.items:
+        raise HTTPException(status_code=400, detail="Cart is empty")
+    ids = [i.get("medicine_id") for i in body.items]
+    meds = await db.medicines.find({"id": {"$in": ids}}, {"_id": 0}).to_list(200)
+    med_map = {m["id"]: m for m in meds}
+    total = 0
+    resolved = []
+    for it in body.items:
+        m = med_map.get(it.get("medicine_id"))
+        qty = int(it.get("qty", 1))
+        if not m:
+            continue
+        line = qty * m.get("price", 0)
+        total += line
+        resolved.append({"medicine_id": m["id"], "name": m["name"], "qty": qty, "unit_price": m["price"], "line_total": line})
+    order = {
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "user_name": user["name"],
+        "items": resolved,
+        "address": body.address,
+        "total": total,
+        "status": "paid",  # mock
+        "created_at": now_iso(),
+    }
+    await db.medicine_orders.insert_one(order)
+    order.pop("_id", None)
+    await log_activity("medicine_ordered", actor=user, meta={"total": total, "items": len(resolved)})
+    return order
+
+
+@api_router.get("/medicines/orders/mine")
+async def my_medicine_orders(user: dict = Depends(current_user)):
+    items = await db.medicine_orders.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    return items
+
+
+# ----------------- Lab tests -----------------
+class LabBookingInput(BaseModel):
+    lab_test_id: str
+    slot: str
+    address: Optional[str] = None
+
+
+@api_router.get("/lab-tests")
+async def list_lab_tests(category: Optional[str] = None):
+    q: dict = {}
+    if category and category.lower() != "all":
+        q["category"] = category
+    items = await db.lab_tests.find(q, {"_id": 0}).sort("order", 1).to_list(200)
+    return items
+
+
+@api_router.get("/lab-tests/{test_id}")
+async def get_lab_test(test_id: str):
+    t = await db.lab_tests.find_one({"id": test_id}, {"_id": 0})
+    if not t:
+        raise HTTPException(status_code=404, detail="Not found")
+    return t
+
+
+@api_router.post("/lab-tests/book")
+async def book_lab_test(body: LabBookingInput, user: dict = Depends(current_user)):
+    t = await db.lab_tests.find_one({"id": body.lab_test_id}, {"_id": 0})
+    if not t:
+        raise HTTPException(status_code=404, detail="Test not found")
+    booking = {
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "user_name": user["name"],
+        "lab_test_id": t["id"],
+        "test_name": t["name"],
+        "price": t["price"],
+        "slot": body.slot,
+        "address": body.address,
+        "status": "confirmed",
+        "created_at": now_iso(),
+    }
+    await db.lab_bookings.insert_one(booking)
+    booking.pop("_id", None)
+    await log_activity("lab_test_booked", actor=user, meta={"test": t["name"], "price": t["price"]})
+    return booking
+
+
+@api_router.get("/lab-tests/bookings/mine")
+async def my_lab_bookings(user: dict = Depends(current_user)):
+    items = await db.lab_bookings.find({"user_id": user["id"]}, {"_id": 0}).sort("slot", -1).to_list(100)
+    return items
+
+
+# ----------------- Blogs -----------------
+@api_router.get("/blogs")
+async def list_blogs(category: Optional[str] = None):
+    q: dict = {}
+    if category and category.lower() != "all":
+        q["category"] = category
+    items = await db.blogs.find(q, {"_id": 0}).sort("order", 1).to_list(200)
+    return items
+
+
+@api_router.get("/blogs/{blog_id}")
+async def get_blog(blog_id: str):
+    b = await db.blogs.find_one({"id": blog_id}, {"_id": 0})
+    if not b:
+        raise HTTPException(status_code=404, detail="Not found")
+    return b
+
+
+# ----------------- AI Diet Plan -----------------
+class DietPlanInput(BaseModel):
+    goal: str  # e.g., "weight loss", "better sleep", "boost immunity"
+    dosha: Optional[str] = None
+    conditions: Optional[List[str]] = None
+    vegetarian: bool = True
+
+
+@api_router.post("/diet-plan")
+async def generate_diet_plan(body: DietPlanInput, user: dict = Depends(current_user)):
+    prompt = (
+        f"Create a personalised 1-day AYUSH diet plan.\n"
+        f"Goal: {body.goal}\n"
+        f"Dosha: {body.dosha or 'unknown'}\n"
+        f"Conditions: {', '.join(body.conditions or []) or 'none'}\n"
+        f"Vegetarian: {body.vegetarian}\n\n"
+        "Return sections labelled Early Morning, Breakfast, Mid-morning, Lunch, Evening Snack, Dinner, Bedtime. "
+        "Each section: 1-2 short bullet points with Ayurvedic reasoning. Total under 250 words. Warm, practical Indian foods."
+    )
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"diet-{user['id']}-{uuid.uuid4()}",
+        system_message="You are an AYUSH nutritionist. Give practical, culturally-aware Indian diet plans grounded in Ayurveda.",
+    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+    try:
+        reply = await chat.send_message(UserMessage(text=prompt))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"AI error: {e}")
+    text = reply if isinstance(reply, str) else str(reply)
+    plan = {
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "goal": body.goal,
+        "dosha": body.dosha,
+        "plan": text,
+        "created_at": now_iso(),
+    }
+    await db.diet_plans.insert_one(plan)
+    plan.pop("_id", None)
+    await log_activity("diet_plan_generated", actor=user, meta={"goal": body.goal})
+    return plan
+
+
+@api_router.get("/diet-plans")
+async def my_diet_plans(user: dict = Depends(current_user)):
+    items = await db.diet_plans.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    return items
+
+
+# ----------------- Doctor onboarding & workspace -----------------
+class DoctorOnboardInput(BaseModel):
+    specialty: str
+    qualification: str
+    registration_number: str
+    experience_years: int = 0
+    languages: List[str] = []
+    consultation_fee: int = 499
+    bio: Optional[str] = None
+    clinic_name: Optional[str] = None
+    clinic_address: Optional[str] = None
+    documents: Optional[List[str]] = None  # base64 or filename placeholders
+
+
+@api_router.get("/doctor/me")
+async def doctor_me(user: dict = Depends(current_user)):
+    if user["role"] != "doctor":
+        raise HTTPException(status_code=403, detail="Doctors only")
+    d = await db.doctors.find_one({"user_id": user["id"]}, {"_id": 0})
+    return d or {}
+
+
+@api_router.put("/doctor/onboard")
+async def doctor_onboard(body: DoctorOnboardInput, user: dict = Depends(current_user)):
+    if user["role"] != "doctor":
+        raise HTTPException(status_code=403, detail="Doctors only")
+    upd = body.dict()
+    upd["onboarded_at"] = now_iso()
+    upd["documents_uploaded"] = bool(body.documents) or bool(body.registration_number)
+    r = await db.doctors.update_one({"user_id": user["id"]}, {"$set": upd}, upsert=True)
+    d = await db.doctors.find_one({"user_id": user["id"]}, {"_id": 0})
+    await log_activity("doctor_onboarded", actor=user, meta={"specialty": body.specialty})
+    return d
+
+
+@api_router.get("/doctor/my-appointments")
+async def doctor_my_appointments(user: dict = Depends(current_user)):
+    if user["role"] != "doctor":
+        raise HTTPException(status_code=403, detail="Doctors only")
+    # Find the doctor record for this user, then their appointments
+    d = await db.doctors.find_one({"user_id": user["id"]})
+    if not d:
+        return []
+    items = await db.appointments.find({"doctor_id": d["id"]}, {"_id": 0}).sort("slot", 1).to_list(500)
+    return items
+
+
+@api_router.get("/doctor/my-patients")
+async def doctor_my_patients(user: dict = Depends(current_user)):
+    if user["role"] != "doctor":
+        raise HTTPException(status_code=403, detail="Doctors only")
+    d = await db.doctors.find_one({"user_id": user["id"]})
+    if not d:
+        return []
+    ap = await db.appointments.find({"doctor_id": d["id"]}, {"_id": 0}).to_list(1000)
+    # dedupe by patient_id
+    seen: dict = {}
+    for a in ap:
+        pid = a["patient_id"]
+        rec = seen.get(pid) or {"patient_id": pid, "patient_name": a["patient_name"], "visits": 0, "last_visit": None, "has_rx": False}
+        rec["visits"] += 1
+        if not rec["last_visit"] or a["slot"] > rec["last_visit"]:
+            rec["last_visit"] = a["slot"]
+        if a.get("prescription"):
+            rec["has_rx"] = True
+        seen[pid] = rec
+    return list(seen.values())
+
+
+# ----------------- Push notifications -----------------
+class RegisterPushBody(BaseModel):
+    user_id: str
+    platform: str
+    device_token: str
+
+
+@api_router.post("/register-push", status_code=201)
+async def register_push(body: RegisterPushBody):
+    try:
+        resp = await _push_client.post("/api/v1/push/users/register", json=body.model_dump())
+        if resp.status_code == 401:
+            logger.warning("EMERGENT_PUSH_KEY placeholder — push will only work after deploy")
+            return {"status": "pending", "note": "push key placeholder"}
+        if resp.status_code >= 500:
+            return {"status": "unavailable"}
+        resp.raise_for_status()
+    except Exception as e:
+        logger.warning(f"register-push non-blocking error: {e}")
+        return {"status": "pending"}
+    return {"status": "registered"}
+
+
+async def send_push(recipients: List[str], data: dict, idempotency_key: Optional[str] = None) -> None:
+    if not recipients:
+        return
+    if "title" not in data or "message" not in data:
+        return
+    try:
+        payload: dict = {"recipients": recipients[:100], "data": data}
+        if idempotency_key:
+            payload["$idempotency_key"] = idempotency_key
+        resp = await _push_client.post("/api/v1/push/trigger", json=payload)
+        if resp.status_code >= 400:
+            logger.warning(f"send_push non-2xx: {resp.status_code} {resp.text[:200]}")
+    except Exception as e:
+        logger.warning(f"send_push failed (non-blocking): {e}")
+
+
+class BroadcastInput(BaseModel):
+    title: str
+    message: str
+    audience: Literal["all_patients", "all_doctors", "all"] = "all_patients"
+
+
+@api_router.post("/admin/broadcast")
+async def admin_broadcast(body: BroadcastInput, admin: dict = Depends(require_admin)):
+    q: dict = {}
+    if body.audience == "all_patients": q["role"] = "patient"
+    elif body.audience == "all_doctors": q["role"] = "doctor"
+    users = await db.users.find(q, {"_id": 0, "id": 1}).to_list(5000)
+    ids = [u["id"] for u in users]
+    # chunk 100
+    for i in range(0, len(ids), 100):
+        await send_push(ids[i:i+100], {"title": body.title, "message": body.message})
+    await log_activity("admin_broadcast", actor=admin, meta={"audience": body.audience, "recipients": len(ids)})
+    return {"sent_to": len(ids)}
+
+
+# ----------------- End new features -----------------
 
 
 @api_router.get("/")
