@@ -906,9 +906,20 @@ async def admin_delete_doctor(doctor_id: str, admin: dict = Depends(require_admi
 
 @api_router.get("/admin/patients")
 async def admin_list_patients(admin: dict = Depends(require_admin)):
-    users = await db.users.find({"role": "patient"}, {"_id": 0, "password": 0}).sort("created_at", -1).to_list(1000)
-    for u in users:
-        u["appointments"] = await db.appointments.count_documents({"patient_id": u["id"]})
+    pipeline = [
+        {"$match": {"role": "patient"}},
+        {"$lookup": {
+            "from": "appointments",
+            "localField": "id",
+            "foreignField": "patient_id",
+            "as": "_appts"
+        }},
+        {"$addFields": {"appointments": {"$size": "$_appts"}}},
+        {"$project": {"_id": 0, "password": 0, "_appts": 0}},
+        {"$sort": {"created_at": -1}},
+        {"$limit": 1000},
+    ]
+    users = await db.users.aggregate(pipeline).to_list(1000)
     return users
 
 
