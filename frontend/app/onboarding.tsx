@@ -3,16 +3,18 @@ import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { Feather } from "@expo/vector-icons";
-
-const HIGHLIGHTS = [
-  { icon: "message-circle", label: "AI Vaidhyaji chatbot for symptoms & remedies" },
-  { icon: "calendar", label: "Book AYUSH doctors in minutes" },
-  { icon: "clock", label: "Medicine reminders & wellness streaks" },
-  { icon: "book-open", label: "Daily home remedies from all 5 AYUSH systems" },
-];
+import { useI18n } from "@/src/i18n";
 
 export default function Onboarding() {
   const router = useRouter();
+  const { t, lang, setLang } = useI18n();
+
+  const HIGHLIGHTS = [
+    { icon: "message-circle", label: t("patient_features").split(",")[0] || t("ai_symptom_checker") },
+    { icon: "calendar", label: t("book_doctor") },
+    { icon: "clock", label: t("medicine_reminders") },
+    { icon: "book-open", label: t("home_remedies") },
+  ];
 
   return (
     <ImageBackground
@@ -22,18 +24,23 @@ export default function Onboarding() {
     >
       <View style={styles.overlay}>
         <SafeAreaView style={{ flex: 1 }} edges={["top", "bottom"]}>
+          <View style={styles.langRow}>
+            <TouchableOpacity onPress={() => setLang(lang === "en" ? "hi" : "en")} style={styles.langBtn} testID="onboarding-lang-toggle">
+              <Feather name="globe" size={12} color="#F7F5F0" />
+              <Text style={styles.langText}>{lang === "en" ? "हिन्दी" : "English"}</Text>
+            </TouchableOpacity>
+          </View>
           <ScrollView contentContainerStyle={styles.content}>
             <View style={styles.top}>
-              <Text style={styles.eyebrow}>India&apos;s AI Vaidyaji</Text>
-              <Text style={styles.title}>Online{"\n"}Vaidhyaji</Text>
-              <Text style={styles.sub}>
-                Swasth Raho Hamesha —{"\n"}Ab AI ke saath.
-              </Text>
+              <Text style={styles.om}>ॐ</Text>
+              <Text style={styles.eyebrow}>{t("eyebrow_india")}</Text>
+              <Text style={styles.title}>{t("brand")}</Text>
+              <Text style={styles.sub}>{t("tagline")}</Text>
             </View>
 
             <View style={styles.card}>
-              {HIGHLIGHTS.map((h) => (
-                <View key={h.label} style={styles.row}>
+              {HIGHLIGHTS.map((h, i) => (
+                <View key={`${h.label}-${i}`} style={styles.row}>
                   <View style={styles.iconWrap}>
                     <Feather name={h.icon as any} size={18} color={COLORS.brand} />
                   </View>
@@ -48,7 +55,7 @@ export default function Onboarding() {
               activeOpacity={0.85}
               testID="onboarding-get-started"
             >
-              <Text style={styles.ctaText}>Begin Your Wellness Journey</Text>
+              <Text style={styles.ctaText}>{t("begin_journey")}</Text>
               <Feather name="arrow-right" size={18} color={COLORS.surface} />
             </TouchableOpacity>
 
@@ -58,7 +65,7 @@ export default function Onboarding() {
               style={{ alignSelf: "center", marginTop: SPACING.md }}
             >
               <Text style={styles.linkText}>
-                Already have an account?  <Text style={{ color: COLORS.accentSoft, fontWeight: "700" }}>Sign in</Text>
+                {t("already_account")}  <Text style={{ color: COLORS.accentSoft, fontWeight: "700" }}>{t("sign_in")}</Text>
               </Text>
             </TouchableOpacity>
           </ScrollView>
@@ -72,7 +79,11 @@ const styles = StyleSheet.create({
   bg: { flex: 1 },
   overlay: { flex: 1, backgroundColor: COLORS.overlay },
   content: { flexGrow: 1, paddingHorizontal: SPACING.lg, paddingVertical: SPACING.lg, justifyContent: "space-between" },
+  langRow: { flexDirection: "row", justifyContent: "flex-end", paddingHorizontal: SPACING.lg, paddingTop: SPACING.sm },
+  langBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: RADIUS.pill, backgroundColor: "rgba(255,255,255,0.15)" },
+  langText: { color: "#F7F5F0", fontSize: 11, fontWeight: "700", letterSpacing: 1 },
   top: { marginTop: SPACING.xl },
+  om: { color: "#F3D9CD", fontSize: 40, marginBottom: 8, lineHeight: 46 },
   eyebrow: {
     color: COLORS.accentSoft,
     letterSpacing: 3,

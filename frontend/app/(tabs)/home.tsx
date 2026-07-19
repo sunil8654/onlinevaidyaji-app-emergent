@@ -6,10 +6,12 @@ import { Feather } from "@expo/vector-icons";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { useAuth } from "@/src/auth";
 import { api } from "@/src/api";
+import { useI18n } from "@/src/i18n";
 
 export default function Home() {
   const router = useRouter();
   const { user } = useAuth();
+  const { t } = useI18n();
   const [tip, setTip] = useState<any>(null);
   const [challenges, setChallenges] = useState<any[]>([]);
   const [appts, setAppts] = useState<any[]>([]);
@@ -37,7 +39,7 @@ export default function Home() {
   };
 
   const hour = new Date().getHours();
-  const greet = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+  const greet = hour < 12 ? t("good_morning") : hour < 17 ? t("good_afternoon") : t("good_evening");
   const upcoming = appts.find((a) => new Date(a.slot) > new Date());
 
   return (
@@ -50,8 +52,8 @@ export default function Home() {
         {/* Header */}
         <View style={styles.header}>
           <View>
-            <Text style={styles.greet}>{greet},</Text>
-            <Text style={styles.name} testID="home-username">{user?.name?.split(" ")[0] || "Friend"}</Text>
+            <Text style={styles.greet}>{t("namaste")}, {greet.toLowerCase()}</Text>
+            <Text style={styles.name} testID="home-username">{user?.name?.split(" ")[0] || t("friend")}</Text>
           </View>
           <TouchableOpacity onPress={() => router.push("/(tabs)/profile")} style={styles.avatar} testID="home-profile-avatar">
             <Feather name="user" size={20} color={COLORS.brand} />
@@ -67,7 +69,7 @@ export default function Home() {
               imageStyle={{ borderRadius: RADIUS.lg }}
             >
               <View style={styles.tipOverlay}>
-                <Text style={styles.tipKicker}>Today&apos;s AYUSH tip</Text>
+                <Text style={styles.tipKicker}>{t("todays_tip")}</Text>
                 <Text style={styles.tipTitle}>{tip.title}</Text>
                 <Text style={styles.tipBody} numberOfLines={2}>{tip.body}</Text>
               </View>
@@ -84,8 +86,8 @@ export default function Home() {
             activeOpacity={0.9}
           >
             <View>
-              <Text style={[styles.bentoKicker, { color: COLORS.accentSoft }]}>AI Symptom Checker</Text>
-              <Text style={[styles.bentoTitle, { color: COLORS.surface }]}>Talk to{"\n"}AI Vaidhyaji</Text>
+              <Text style={[styles.bentoKicker, { color: COLORS.accentSoft }]}>{t("ai_symptom_checker")}</Text>
+              <Text style={[styles.bentoTitle, { color: COLORS.surface }]}>{t("talk_to_vaidhyaji")}</Text>
             </View>
             <View style={styles.chatAvatar}>
               <Feather name="message-circle" size={20} color={COLORS.brand} />
@@ -100,7 +102,7 @@ export default function Home() {
               activeOpacity={0.9}
             >
               <Feather name="calendar" size={22} color={COLORS.brand} />
-              <Text style={styles.bentoSmallTitle}>Book{"\n"}Doctor</Text>
+              <Text style={styles.bentoSmallTitle}>{t("book_doctor")}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.bentoCard, styles.bentoSmall, { backgroundColor: COLORS.accentSoft, borderColor: COLORS.accent }]}
@@ -109,7 +111,7 @@ export default function Home() {
               activeOpacity={0.9}
             >
               <Feather name="award" size={22} color={COLORS.accent} />
-              <Text style={[styles.bentoSmallTitle, { color: COLORS.accent }]}>Wellness{"\n"}Streaks</Text>
+              <Text style={[styles.bentoSmallTitle, { color: COLORS.accent }]}>{t("wellness_streaks")}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -118,7 +120,7 @@ export default function Home() {
         {upcoming && (
           <TouchableOpacity style={styles.upcoming} onPress={() => router.push("/appointments")} testID="home-upcoming-appointment">
             <View style={{ flex: 1 }}>
-              <Text style={styles.upcomingKicker}>Upcoming consultation</Text>
+              <Text style={styles.upcomingKicker}>{t("upcoming_consultation")}</Text>
               <Text style={styles.upcomingTitle}>{upcoming.doctor_name}</Text>
               <Text style={styles.upcomingSub}>{upcoming.doctor_specialty} · {new Date(upcoming.slot).toLocaleString()}</Text>
             </View>
@@ -132,9 +134,9 @@ export default function Home() {
         {challenges.length > 0 && (
           <>
             <View style={styles.sectionHead}>
-              <Text style={styles.sectionTitle}>Community challenges</Text>
+              <Text style={styles.sectionTitle}>{t("community_challenges")}</Text>
               <TouchableOpacity onPress={() => router.push("/challenges")} testID="home-see-all-challenges">
-                <Text style={styles.link}>See all</Text>
+                <Text style={styles.link}>{t("see_all")}</Text>
               </TouchableOpacity>
             </View>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: SPACING.md, paddingRight: SPACING.md }}>
@@ -153,6 +155,16 @@ export default function Home() {
 
         <View style={{ height: 100 }} />
       </ScrollView>
+
+      {/* Floating support-chat bubble */}
+      <TouchableOpacity
+        style={styles.fab}
+        onPress={() => router.push("/support-chat")}
+        activeOpacity={0.85}
+        testID="home-support-fab"
+      >
+        <Feather name="headphones" size={20} color={COLORS.surface} />
+      </TouchableOpacity>
     </SafeAreaView>
   );
 }
@@ -212,4 +224,10 @@ const styles = StyleSheet.create({
   challengePad: { padding: SPACING.md },
   challengeTitle: { fontFamily: FONTS.heading, fontSize: 18, color: COLORS.textPrimary, lineHeight: 22 },
   challengeMeta: { color: COLORS.textSecondary, fontSize: 12, marginTop: 4 },
+  fab: {
+    position: "absolute", right: 20, bottom: 110,
+    width: 54, height: 54, borderRadius: 27,
+    backgroundColor: COLORS.accent, alignItems: "center", justifyContent: "center",
+    shadowColor: "#000", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.2, shadowRadius: 6, elevation: 5,
+  },
 });

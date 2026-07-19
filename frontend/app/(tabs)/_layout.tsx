@@ -3,19 +3,21 @@ import { View, Text, StyleSheet, TouchableOpacity, Platform } from "react-native
 import { Feather } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { COLORS, RADIUS } from "@/src/theme";
+import { useI18n } from "@/src/i18n";
 
-type TabDef = { key: string; label: string; icon: keyof typeof Feather.glyphMap };
+type TabDef = { key: string; icon: keyof typeof Feather.glyphMap; label_key: string };
 
 const TABS: Record<string, TabDef> = {
-  home: { key: "home", label: "Home", icon: "home" },
-  feed: { key: "feed", label: "Feed", icon: "book-open" },
-  consult: { key: "consult", label: "Consult", icon: "activity" },
-  reminders: { key: "reminders", label: "Reminders", icon: "clock" },
-  profile: { key: "profile", label: "Profile", icon: "user" },
+  home: { key: "home", icon: "home", label_key: "tabs_home" },
+  feed: { key: "feed", icon: "book-open", label_key: "tabs_feed" },
+  consult: { key: "consult", icon: "activity", label_key: "tabs_consult" },
+  reminders: { key: "reminders", icon: "clock", label_key: "tabs_reminders" },
+  profile: { key: "profile", icon: "user", label_key: "tabs_profile" },
 };
 
 function CustomTabBar({ state, navigation }: any) {
   const insets = useSafeAreaInsets();
+  const { t } = useI18n();
   return (
     <View style={[styles.wrap, { paddingBottom: insets.bottom + 10 }]}>
       <View style={styles.bar}>
@@ -38,7 +40,7 @@ function CustomTabBar({ state, navigation }: any) {
                 <Feather name={def.icon} size={18} color={focused ? COLORS.surface : COLORS.textSecondary} />
               </View>
               <Text style={[styles.label, focused && { color: COLORS.brand, fontWeight: "700" }]}>
-                {def.label}
+                {t(def.label_key)}
               </Text>
             </TouchableOpacity>
           );

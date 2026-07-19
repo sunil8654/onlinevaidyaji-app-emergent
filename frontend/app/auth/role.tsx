@@ -3,9 +3,11 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { Feather } from "@expo/vector-icons";
+import { useI18n } from "@/src/i18n";
 
 export default function Role() {
   const router = useRouter();
+  const { t } = useI18n();
   return (
     <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
       <TouchableOpacity onPress={() => router.back()} style={styles.back} testID="role-back">
@@ -13,9 +15,9 @@ export default function Role() {
       </TouchableOpacity>
 
       <View style={styles.body}>
-        <Text style={styles.eyebrow}>Choose Your Path</Text>
-        <Text style={styles.title}>Who&apos;s joining today?</Text>
-        <Text style={styles.sub}>Both patients and AYUSH practitioners are welcome here.</Text>
+        <Text style={styles.eyebrow}>{t("choose_path")}</Text>
+        <Text style={styles.title}>{t("who_joining")}</Text>
+        <Text style={styles.sub}>{t("both_welcome")}</Text>
 
         <TouchableOpacity
           style={[styles.card, { borderColor: COLORS.brand }]}
@@ -26,9 +28,9 @@ export default function Role() {
           <Image source={{ uri: "https://images.pexels.com/photos/6663565/pexels-photo-6663565.jpeg" }} style={styles.cardImg} />
           <View style={styles.cardOverlay}>
             <View>
-              <Text style={styles.cardKicker}>For Patients</Text>
-              <Text style={styles.cardTitle}>I need care</Text>
-              <Text style={styles.cardBody}>Symptom checker, doctors, reminders, remedies</Text>
+              <Text style={styles.cardKicker}>{t("for_patients")}</Text>
+              <Text style={styles.cardTitle}>{t("i_need_care")}</Text>
+              <Text style={styles.cardBody}>{t("patient_features")}</Text>
             </View>
             <View style={styles.cardArrow}>
               <Feather name="arrow-right" size={18} color={COLORS.surface} />
@@ -45,9 +47,9 @@ export default function Role() {
           <Image source={{ uri: "https://images.pexels.com/photos/5738735/pexels-photo-5738735.jpeg" }} style={styles.cardImg} />
           <View style={[styles.cardOverlay, { backgroundColor: "rgba(217,102,61,0.85)" }]}>
             <View>
-              <Text style={styles.cardKicker}>For Practitioners</Text>
-              <Text style={styles.cardTitle}>I am a doctor</Text>
-              <Text style={styles.cardBody}>Onboard, verify, and consult in minutes</Text>
+              <Text style={styles.cardKicker}>{t("for_practitioners")}</Text>
+              <Text style={styles.cardTitle}>{t("i_am_doctor")}</Text>
+              <Text style={styles.cardBody}>{t("doctor_features")}</Text>
             </View>
             <View style={[styles.cardArrow, { backgroundColor: COLORS.brand }]}>
               <Feather name="arrow-right" size={18} color={COLORS.surface} />
@@ -57,7 +59,7 @@ export default function Role() {
 
         <TouchableOpacity onPress={() => router.push("/auth/login")} style={{ marginTop: SPACING.lg, alignSelf: "center" }} testID="role-signin-link">
           <Text style={{ color: COLORS.textSecondary }}>
-            Already a member? <Text style={{ color: COLORS.brand, fontWeight: "700" }}>Sign in</Text>
+            {t("already_member")} <Text style={{ color: COLORS.brand, fontWeight: "700" }}>{t("sign_in")}</Text>
           </Text>
         </TouchableOpacity>
       </View>

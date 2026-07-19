@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status
+from fastapi import FastAPI, APIRouter, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -28,6 +28,8 @@ JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALGORITHM = os.environ['JWT_ALGORITHM']
 JWT_EXPIRE_DAYS = int(os.environ.get('JWT_EXPIRE_DAYS', 30))
 EMERGENT_LLM_KEY = os.environ['EMERGENT_LLM_KEY']
+ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'admin@vaidhyaji.com')
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'Admin@123')
 
 app = FastAPI(title="Online Vaidhyaji API")
 api_router = APIRouter(prefix="/api")
@@ -154,6 +156,27 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+async def log_activity(kind: str, actor: Optional[dict] = None, meta: Optional[dict] = None) -> None:
+    try:
+        await db.activity.insert_one({
+            "id": str(uuid.uuid4()),
+            "kind": kind,
+            "at": now_iso(),
+            "actor_id": actor["id"] if actor else None,
+            "actor_name": actor["name"] if actor else None,
+            "actor_role": actor["role"] if actor else None,
+            "meta": meta or {},
+        })
+    except Exception:
+        logger.exception("activity log failed")
+
+
+async def require_admin(user: dict = Depends(current_user)) -> dict:
+    if not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin only")
+    return user
+
+
 # ----------------- Auth Routes -----------------
 @api_router.post("/auth/register")
 async def register(body: RegisterInput):
@@ -168,13 +191,38 @@ async def register(body: RegisterInput):
         "password": hash_password(body.password),
         "role": body.role,
         "phone": body.phone,
+        "is_admin": False,
         "created_at": now_iso(),
     }
     if body.role == "doctor":
         doc["registration_number"] = body.registration_number
-        doc["verified"] = False  # pending verification
+        doc["verified"] = False  # pending admin approval
         doc["documents_uploaded"] = bool(body.registration_number)
     await db.users.insert_one(doc)
+
+    # Doctor self-registration => create a pending entry in doctors collection
+    if body.role == "doctor":
+        await db.doctors.insert_one({
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "name": doc["name"],
+            "email": doc["email"],
+            "phone": doc.get("phone"),
+            "registration_number": doc.get("registration_number"),
+            "specialty": "Ayurveda",  # default until admin edits
+            "qualification": "Pending admin verification",
+            "experience_years": 0,
+            "languages": ["Hindi", "English"],
+            "consultation_fee": 499,
+            "bio": "Newly enrolled AYUSH practitioner — awaiting admin approval.",
+            "avatar_url": "https://images.pexels.com/photos/5327585/pexels-photo-5327585.jpeg",
+            "rating": 0.0, "reviews": 0,
+            "verified": False,
+            "created_at": now_iso(),
+        })
+        await log_activity("doctor_enrolled", actor=doc, meta={"email": doc["email"]})
+    else:
+        await log_activity("patient_registered", actor=doc, meta={"email": doc["email"]})
     token = make_token(user_id, body.role)
     return {
         "token": token,
@@ -223,7 +271,7 @@ async def upsert_patient_profile(body: HealthProfileInput, user: dict = Depends(
 # ----------------- Doctors -----------------
 @api_router.get("/doctors")
 async def list_doctors(specialty: Optional[str] = None):
-    q = {}
+    q = {"verified": True}
     if specialty and specialty.lower() != "all":
         q["specialty"] = specialty
     docs = await db.doctors.find(q, {"_id": 0}).to_list(200)
@@ -259,6 +307,12 @@ async def create_appointment(body: AppointmentInput, user: dict = Depends(curren
         "prescription": None,
         "created_at": now_iso(),
     }
+    await db.appointments.insert_one(appt)
+    appt.pop("_id", None)
+    await log_activity("appointment_booked", actor=user, meta={
+        "doctor_name": doctor["name"], "specialty": doctor["specialty"], "slot": body.slot,
+    })
+    return appt
     await db.appointments.insert_one(appt)
     appt.pop("_id", None)
     return appt
@@ -501,37 +555,37 @@ async def seed():
              "languages": ["Hindi", "English"], "consultation_fee": 599,
              "bio": "Specializes in dosha-based lifestyle correction and Panchakarma.",
              "avatar_url": "https://images.pexels.com/photos/5738735/pexels-photo-5738735.jpeg",
-             "rating": 4.8, "reviews": 214},
+             "rating": 4.8, "reviews": 214, "verified": True},
             {"id": str(uuid.uuid4()), "name": "Dr. Arjun Nair", "specialty": "Homoeopathy",
              "qualification": "BHMS", "experience_years": 9,
              "languages": ["English", "Malayalam", "Hindi"], "consultation_fee": 499,
              "bio": "Chronic skin & respiratory conditions with individualised remedies.",
              "avatar_url": "https://images.pexels.com/photos/5888168/pexels-photo-5888168.jpeg",
-             "rating": 4.7, "reviews": 158},
+             "rating": 4.7, "reviews": 158, "verified": True},
             {"id": str(uuid.uuid4()), "name": "Yogacharya Riya Patel", "specialty": "Yoga",
              "qualification": "MSc Yoga Therapy", "experience_years": 15,
              "languages": ["Hindi", "Gujarati", "English"], "consultation_fee": 399,
              "bio": "Therapeutic yoga for back pain, PCOS, and anxiety.",
              "avatar_url": "https://images.pexels.com/photos/5938358/pexels-photo-5938358.jpeg",
-             "rating": 4.9, "reviews": 302},
+             "rating": 4.9, "reviews": 302, "verified": True},
             {"id": str(uuid.uuid4()), "name": "Hakim Zaid Ahmad", "specialty": "Unani",
              "qualification": "BUMS", "experience_years": 20,
              "languages": ["Urdu", "Hindi", "English"], "consultation_fee": 549,
              "bio": "Traditional Unani mizaj-based diagnosis and treatment.",
              "avatar_url": "https://images.pexels.com/photos/6749773/pexels-photo-6749773.jpeg",
-             "rating": 4.6, "reviews": 121},
+             "rating": 4.6, "reviews": 121, "verified": True},
             {"id": str(uuid.uuid4()), "name": "Dr. Kavitha Iyer", "specialty": "Siddha",
              "qualification": "BSMS", "experience_years": 11,
              "languages": ["Tamil", "English"], "consultation_fee": 449,
              "bio": "Siddha herbal & mineral therapies for chronic ailments.",
              "avatar_url": "https://images.pexels.com/photos/5407206/pexels-photo-5407206.jpeg",
-             "rating": 4.7, "reviews": 96},
+             "rating": 4.7, "reviews": 96, "verified": True},
             {"id": str(uuid.uuid4()), "name": "Dr. Rohan Deshmukh", "specialty": "Ayurveda",
              "qualification": "BAMS, MD (Kayachikitsa)", "experience_years": 8,
              "languages": ["Marathi", "Hindi", "English"], "consultation_fee": 449,
              "bio": "Gut health, immunity and metabolic disorders.",
              "avatar_url": "https://images.pexels.com/photos/5327585/pexels-photo-5327585.jpeg",
-             "rating": 4.5, "reviews": 74},
+             "rating": 4.5, "reviews": 74, "verified": True},
         ]
         await db.doctors.insert_many(doctors)
 
@@ -585,9 +639,240 @@ async def seed():
 @app.on_event("startup")
 async def on_startup():
     await seed()
+    # One-time backfill: seeded doctors created before verify field existed
+    # should be treated as verified so they show up in public /api/doctors
+    await db.doctors.update_many(
+        {"verified": {"$exists": False}}, {"$set": {"verified": True}}
+    )
+    await db.doctors.update_many(
+        {"verified": None, "user_id": {"$exists": False}}, {"$set": {"verified": True}}
+    )
+    # Seed / upsert single admin
+    existing = await db.users.find_one({"email": ADMIN_EMAIL.lower()})
+    if not existing:
+        await db.users.insert_one({
+            "id": str(uuid.uuid4()),
+            "name": "Vaidhyaji Admin",
+            "email": ADMIN_EMAIL.lower(),
+            "password": hash_password(ADMIN_PASSWORD),
+            "role": "admin",
+            "is_admin": True,
+            "phone": None,
+            "created_at": now_iso(),
+        })
+    else:
+        await db.users.update_one({"email": ADMIN_EMAIL.lower()}, {"$set": {"is_admin": True, "role": "admin"}})
 
 
 # ----------------- App wiring -----------------
+# ----------------- Admin -----------------
+class DoctorUpsertInput(BaseModel):
+    name: str
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = None
+    specialty: str
+    qualification: str
+    experience_years: int = 0
+    languages: List[str] = []
+    consultation_fee: int = 499
+    bio: Optional[str] = None
+    avatar_url: Optional[str] = None
+    registration_number: Optional[str] = None
+    verified: bool = True
+
+
+@api_router.get("/admin/stats")
+async def admin_stats(admin: dict = Depends(require_admin)):
+    total_patients = await db.users.count_documents({"role": "patient"})
+    total_doctors = await db.doctors.count_documents({})
+    verified_doctors = await db.doctors.count_documents({"verified": True})
+    pending_doctors = await db.doctors.count_documents({"verified": False})
+    total_appointments = await db.appointments.count_documents({})
+    consultations_today = await db.appointments.count_documents({
+        "created_at": {"$gte": datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()}
+    })
+    total_reminders = await db.reminders.count_documents({})
+    leads = await db.leads.count_documents({})
+    return {
+        "patients": total_patients,
+        "doctors": total_doctors,
+        "verified_doctors": verified_doctors,
+        "pending_doctors": pending_doctors,
+        "appointments": total_appointments,
+        "consultations_today": consultations_today,
+        "reminders": total_reminders,
+        "leads": leads,
+    }
+
+
+@api_router.get("/admin/doctors")
+async def admin_list_doctors(verify_status: Optional[str] = None, admin: dict = Depends(require_admin)):
+    q: dict = {}
+    if verify_status == "pending":
+        q["verified"] = False
+    elif verify_status == "verified":
+        q["verified"] = True
+    items = await db.doctors.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return items
+
+
+@api_router.post("/admin/doctors")
+async def admin_add_doctor(body: DoctorUpsertInput, admin: dict = Depends(require_admin)):
+    doc = body.dict()
+    doc["id"] = str(uuid.uuid4())
+    doc["created_at"] = now_iso()
+    doc.setdefault("rating", 4.5)
+    doc.setdefault("reviews", 0)
+    if not doc.get("avatar_url"):
+        doc["avatar_url"] = "https://images.pexels.com/photos/5327585/pexels-photo-5327585.jpeg"
+    await db.doctors.insert_one(doc)
+    doc.pop("_id", None)
+    await log_activity("admin_doctor_added", actor=admin, meta={"doctor": doc["name"]})
+    return doc
+
+
+@api_router.put("/admin/doctors/{doctor_id}")
+async def admin_update_doctor(doctor_id: str, body: DoctorUpsertInput, admin: dict = Depends(require_admin)):
+    upd = {k: v for k, v in body.dict().items() if v is not None}
+    r = await db.doctors.update_one({"id": doctor_id}, {"$set": upd})
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+    updated = await db.doctors.find_one({"id": doctor_id}, {"_id": 0})
+    await log_activity("admin_doctor_edited", actor=admin, meta={"doctor_id": doctor_id})
+    return updated
+
+
+@api_router.post("/admin/doctors/{doctor_id}/approve")
+async def admin_approve_doctor(doctor_id: str, admin: dict = Depends(require_admin)):
+    d = await db.doctors.find_one({"id": doctor_id})
+    if not d:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+    await db.doctors.update_one({"id": doctor_id}, {"$set": {"verified": True, "approved_at": now_iso()}})
+    if d.get("user_id"):
+        await db.users.update_one({"id": d["user_id"]}, {"$set": {"verified": True}})
+    await log_activity("admin_doctor_approved", actor=admin, meta={"doctor_id": doctor_id, "name": d.get("name")})
+    return {"ok": True}
+
+
+@api_router.post("/admin/doctors/{doctor_id}/reject")
+async def admin_reject_doctor(doctor_id: str, admin: dict = Depends(require_admin)):
+    d = await db.doctors.find_one({"id": doctor_id})
+    if not d:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+    await db.doctors.update_one({"id": doctor_id}, {"$set": {"verified": False, "rejected_at": now_iso()}})
+    await log_activity("admin_doctor_rejected", actor=admin, meta={"doctor_id": doctor_id})
+    return {"ok": True}
+
+
+@api_router.delete("/admin/doctors/{doctor_id}")
+async def admin_delete_doctor(doctor_id: str, admin: dict = Depends(require_admin)):
+    d = await db.doctors.find_one({"id": doctor_id})
+    if not d:
+        raise HTTPException(status_code=404, detail="Not found")
+    await db.doctors.delete_one({"id": doctor_id})
+    if d.get("user_id"):
+        await db.users.delete_one({"id": d["user_id"]})
+    await log_activity("admin_doctor_removed", actor=admin, meta={"doctor_id": doctor_id, "name": d.get("name")})
+    return {"ok": True}
+
+
+@api_router.get("/admin/patients")
+async def admin_list_patients(admin: dict = Depends(require_admin)):
+    users = await db.users.find({"role": "patient"}, {"_id": 0, "password": 0}).sort("created_at", -1).to_list(1000)
+    for u in users:
+        u["appointments"] = await db.appointments.count_documents({"patient_id": u["id"]})
+    return users
+
+
+@api_router.get("/admin/patients/{patient_id}/appointments")
+async def admin_patient_appointments(patient_id: str, admin: dict = Depends(require_admin)):
+    items = await db.appointments.find({"patient_id": patient_id}, {"_id": 0}).sort("slot", -1).to_list(500)
+    return items
+
+
+@api_router.get("/admin/activity")
+async def admin_activity(limit: int = 100, admin: dict = Depends(require_admin)):
+    items = await db.activity.find({}, {"_id": 0}).sort("at", -1).to_list(limit)
+    return items
+
+
+@api_router.get("/admin/leads")
+async def admin_leads(admin: dict = Depends(require_admin)):
+    items = await db.leads.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return items
+
+
+# ----------------- Support / Lead-gen AI -----------------
+SUPPORT_PROMPT = (
+    "You are 'Vaidhyaji Support' — a warm, helpful assistant for the Online Vaidhyaji app. "
+    "Your job is TWO-fold: "
+    "(1) Answer user questions about how to use the app (booking doctors, AYUSH specialties, symptom checker, medicine reminders, wellness challenges, pricing, health records). "
+    "(2) Gently collect the user's name, phone/email and their goal (e.g., 'need Ayurvedic consultation for acidity') so our team can follow up — but ONLY if they haven't shared this yet and only after answering their query. "
+    "Keep responses concise (2-3 short paragraphs), warm, and India-focused. Use occasional Hindi phrases (Namaste, Dhanyavaad, Aap ki seva mein). "
+    "If a user shares contact details, respond with: 'Got it! We will follow up soon.' and end that message with a marker on a new line: LEAD_CAPTURED. "
+    "Never give medical diagnoses — for medical queries, gently redirect them to the AI Vaidhyaji chatbot inside the app or a real doctor."
+)
+
+
+class SupportChatInput(BaseModel):
+    session_id: str
+    message: str
+
+
+class LeadInput(BaseModel):
+    name: str
+    contact: str  # phone or email
+    goal: Optional[str] = None
+    source: Optional[str] = "support-chat"
+
+
+@api_router.post("/support/chat")
+async def support_chat(body: SupportChatInput):
+    # session-based (anonymous OK). Store both messages.
+    await db.support_messages.insert_one({
+        "id": str(uuid.uuid4()),
+        "session_id": body.session_id,
+        "role": "user",
+        "text": body.message,
+        "created_at": now_iso(),
+    })
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"support-{body.session_id}",
+        system_message=SUPPORT_PROMPT,
+    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+    try:
+        reply = await chat.send_message(UserMessage(text=body.message))
+    except Exception as e:
+        logger.exception("support LLM error")
+        raise HTTPException(status_code=502, detail=f"AI error: {str(e)}")
+    reply_text = reply if isinstance(reply, str) else str(reply)
+    await db.support_messages.insert_one({
+        "id": str(uuid.uuid4()),
+        "session_id": body.session_id,
+        "role": "assistant",
+        "text": reply_text,
+        "created_at": now_iso(),
+    })
+    lead_captured = "LEAD_CAPTURED" in reply_text
+    return {"reply": reply_text.replace("LEAD_CAPTURED", "").strip(), "lead_captured": lead_captured}
+
+
+@api_router.post("/support/lead")
+async def create_lead(body: LeadInput):
+    lead = body.dict()
+    lead["id"] = str(uuid.uuid4())
+    lead["created_at"] = now_iso()
+    lead["status"] = "new"
+    await db.leads.insert_one(lead)
+    lead.pop("_id", None)
+    await log_activity("lead_captured", actor=None, meta={"name": body.name, "contact": body.contact})
+    return lead
+
+
+# ----------------- End admin/support -----------------
+
+
 @api_router.get("/")
 async def root():
     return {"message": "Online Vaidhyaji API", "version": "1.0"}

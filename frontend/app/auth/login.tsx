@@ -22,8 +22,9 @@ export default function Login() {
     }
     setBusy(true);
     try {
-      await login(email.trim().toLowerCase(), password);
-      router.replace("/(tabs)/home");
+      const user = await login(email.trim().toLowerCase(), password);
+      if (user?.is_admin) router.replace("/admin/dashboard");
+      else router.replace("/(tabs)/home");
     } catch (e: any) {
       setErr(e.message || "Login failed");
     } finally {

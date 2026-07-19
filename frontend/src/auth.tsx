@@ -2,13 +2,15 @@ import React, { createContext, useContext, useEffect, useState, useCallback } fr
 import { storage } from "@/src/utils/storage";
 import { api, TOKEN_KEY } from "@/src/api";
 
-export type Role = "patient" | "doctor";
+export type Role = "patient" | "doctor" | "admin";
 export type AuthUser = {
   id: string;
   name: string;
   email: string;
   role: Role;
   phone?: string | null;
+  is_admin?: boolean;
+  verified?: boolean;
 };
 
 type AuthContextValue = {
@@ -49,6 +51,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const res = await api.login({ email, password });
     await storage.secureSet(TOKEN_KEY, res.token);
     setUser(res.user);
+    return res.user as AuthUser;
   }, []);
 
   const register = useCallback(
@@ -56,6 +59,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const res = await api.register(data);
       await storage.secureSet(TOKEN_KEY, res.token);
       setUser(res.user);
+      return res.user as AuthUser;
     },
     []
   );

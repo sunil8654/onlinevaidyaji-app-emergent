@@ -5,11 +5,13 @@ import { useRouter } from "expo-router";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { useAuth } from "@/src/auth";
 import { api } from "@/src/api";
+import { useI18n } from "@/src/i18n";
 import { Feather } from "@expo/vector-icons";
 
 export default function Profile() {
   const router = useRouter();
   const { user, logout } = useAuth();
+  const { t, lang, setLang } = useI18n();
   const [profile, setProfile] = useState<any>(null);
   const [challenges, setChallenges] = useState<any[]>([]);
 
@@ -82,13 +84,20 @@ export default function Profile() {
         </View>
 
         <View style={styles.menu}>
-          <MenuItem icon="calendar" label="My appointments" onPress={() => router.push("/appointments")} testID="profile-menu-appointments" />
-          <MenuItem icon="folder" label="Health records vault" onPress={() => router.push("/records")} testID="profile-menu-records" />
-          <MenuItem icon="award" label="Challenges & badges" onPress={() => router.push("/challenges")} testID="profile-menu-challenges" />
-          <MenuItem icon="message-circle" label="Chat with AI Vaidhyaji" onPress={() => router.push("/chatbot")} testID="profile-menu-chatbot" />
+          <MenuItem icon="calendar" label={t("my_appointments")} onPress={() => router.push("/appointments")} testID="profile-menu-appointments" />
+          <MenuItem icon="folder" label={t("health_records")} onPress={() => router.push("/records")} testID="profile-menu-records" />
+          <MenuItem icon="award" label={t("community_challenges")} onPress={() => router.push("/challenges")} testID="profile-menu-challenges" />
+          <MenuItem icon="message-circle" label={t("talk_to_vaidhyaji")} onPress={() => router.push("/chatbot")} testID="profile-menu-chatbot" />
+          <MenuItem icon="headphones" label={t("support_chat")} onPress={() => router.push("/support-chat")} testID="profile-menu-support" />
+          <MenuItem
+            icon="globe"
+            label={`${t("language")}: ${lang === "en" ? "English" : "हिन्दी"}`}
+            onPress={() => setLang(lang === "en" ? "hi" : "en")}
+            testID="profile-menu-language"
+          />
           <MenuItem
             icon="log-out"
-            label="Sign out"
+            label={t("logout")}
             danger
             onPress={async () => { await logout(); router.replace("/onboarding"); }}
             testID="profile-menu-logout"

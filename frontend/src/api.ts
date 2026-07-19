@@ -79,5 +79,24 @@ export const api = {
   listReports: () => request("/reports"),
   deleteReport: (id: string) => request(`/reports/${id}`, "DELETE"),
 
+  // Admin
+  adminStats: () => request("/admin/stats"),
+  adminDoctors: (verify_status?: "pending" | "verified") =>
+    request(`/admin/doctors${verify_status ? `?verify_status=${verify_status}` : ""}`),
+  adminApproveDoctor: (id: string) => request(`/admin/doctors/${id}/approve`, "POST"),
+  adminRejectDoctor: (id: string) => request(`/admin/doctors/${id}/reject`, "POST"),
+  adminDeleteDoctor: (id: string) => request(`/admin/doctors/${id}`, "DELETE"),
+  adminAddDoctor: (body: any) => request("/admin/doctors", "POST", body),
+  adminPatients: () => request("/admin/patients"),
+  adminPatientAppointments: (id: string) => request(`/admin/patients/${id}/appointments`),
+  adminActivity: (limit = 100) => request(`/admin/activity?limit=${limit}`),
+  adminLeads: () => request("/admin/leads"),
+
+  // Support / lead-gen
+  supportChat: (session_id: string, message: string) =>
+    request("/support/chat", "POST", { session_id, message }, false),
+  createLead: (body: { name: string; contact: string; goal?: string }) =>
+    request("/support/lead", "POST", body, false),
+
   track: (event: string, props?: any) => request("/analytics", "POST", { event, props }),
 };
