@@ -1,65 +1,52 @@
-# Online Vaidhyaji — PRD (MVP + Admin panel + Bilingual + Support AI)
+# Online Vaidhyaji — Full-fledged AYUSH Health Tech Platform (PRD)
 
 ## Vision
-India's first AI-powered AYUSH (Ayurveda, Homoeopathy, Yoga, Unani, Siddha) daily wellness + consultation platform. Tagline: *Swasth Raho Hamesha — Ab AI ke saath.*
+India's first pure AI-powered AYUSH platform that patients open *daily* — not just when sick. Every screen drives either **engagement** (blogs, tips, streaks, diet plans, chatbot) or **revenue** (consultations, medicine shop, lab tests). Tagline: *Swasth Raho Hamesha — Ab AI ke saath.*
 
-## MVP Features (Shipped)
-### Patient side
-- Splash + onboarding with bilingual copy + language toggle
-- Role selection (Patient / Vaidya)
-- JWT auth (register, login) — mocked OTP screen after register
-- Patient health profile (age, gender, **dosha**: Vata / Pitta / Kapha, conditions)
-- Home with **ॐ** namaste greeting, daily AYUSH tip, bento CTAs, upcoming consultation, community-challenges strip, **floating support-chat bubble**
-- **AI Vaidhyaji chatbot** (Claude Sonnet 4.5) — session-persisted symptom checker
-- Doctor discovery (only verified doctors) with specialty filter, doctor detail + slot picker
-- Mock-payment sheet before booking → mock video-call screen (mic/cam/end)
-- **Health Records vault** — prescriptions (from consultations) + lab reports (add/delete)
-- Medicine reminders CRUD
-- Community challenges (streaks + badges)
-- Bilingual **English / हिन्दी** (auto-detect device locale + manual toggle in profile)
+## Revenue streams (all live in-app)
+1. **Doctor consultations** — book across 5 AYUSH specialties, mock payment sheet, video call
+2. **AYUSH medicine shop** — 8 seeded SKUs (Chyawanprash, Ashwagandha, Triphala, Kumkumadi Tailam, Tulsi, Mahanarayan Oil, Brahmi Ghrita, Hingvastak Churna) with add-to-cart, sticky checkout bar, mock order
+3. **Lab tests at home** — 5 seeded tests (CBC, HbA1c, Wellness Panel, Thyroid, D+B12) with slot picker and booking
+4. **(Post-MVP)** medicine subscriptions, premium doctor plans, personalised herb plans
 
-### Doctor side
-- Self sign-up with AYUSH registration number; profile enters admin approval queue as `verified=false`
-- Doctors are hidden from patient discovery until admin approves
+## Patient engagement (drives daily-open rate)
+- **AI Vaidhyaji chatbot** (Claude Sonnet 4.5) — symptom checker
+- **AI Diet Plan** — FREE generator: pick goal + dosha + veg/non-veg → Claude returns a full-day AYUSH meal plan; plans persist per user for revisit
+- **Daily AYUSH tip** on home + wellness feed
+- **AYUSH Journal (blogs)** — articles on Ayurveda, remedies, yoga, nutrition
+- **Community challenges** with streaks & badges (Prana Master / Agni Ignitor / Nidra Guardian)
+- **Support-chat** floating bubble (lead-gen bot even for logged-out visitors)
+- **Push notifications** (Emergent-managed) — daily tip, appointment reminders, order updates
+- **Bilingual** English + हिन्दी with auto device-locale detect
 
-### Admin panel (new)
-- Seeded admin: `admin@vaidhyaji.com` / `Admin@123`
-- On login, admin auto-routes to `/admin/dashboard`
-- **Dashboard:** stats (patients, verified/pending doctors, appointments, today's consultations, leads) + recent activity feed
-- **Doctors:** filter all/pending/verified · **Approve / Reject / Remove / Add** (manual add)
-- **Patients:** list with appointment counts · tap to see full consultation history
-- **Activity log:** every important event with actor + timestamp + metadata
+## Doctor experience (different from patients)
+- Role-based routing: doctors see a **Vaidya workspace** on the home tab, not the patient home
+- **First-time onboarding wizard** (4 steps): specialty + qualification → **AYUSH registration number + degree upload** (mocked) → experience + fee + languages → clinic + bio
+- Admin verifies documents in the admin panel — verified badge shows on patient profile for trust
+- Workspace shows: verified status, today's / upcoming consultations, patient list with visit counts, **Write Rx** modal (diagnosis + medicines + notes) — the prescription flows to patient's Health Records vault
+- One-tap **Join video call** for any appointment
 
-### Support / lead-gen (new)
-- **Support AI chat** (`/support-chat`) — public, no login needed
-- Separate Claude prompt: answers app FAQs and gently collects name + phone/email for follow-up
-- Leads auto-saved to `/api/admin/leads`; visible in admin panel
-- Floating headphones bubble on Home + menu entry in profile
+## Admin panel
+- Single admin seeded: `admin@vaidhyaji.com` / `Admin@123`
+- Dashboard stats: patients, verified doctors, pending, appointments, today's consultations, leads
+- Doctors: Approve / Reject / Remove / Add-manually with specialty picker
+- Patients: history sheet showing all consultations + prescriptions
+- Activity log: every event with actor + timestamp (audit trail)
+- **Broadcast push** to all patients or all doctors (post-deploy)
 
-## Backend endpoints (grouped)
-- **Auth:** /auth/register · /auth/login · /auth/me
-- **Patient:** /patient/profile GET/PUT
-- **Doctors (public):** /doctors, /doctors/{id}
-- **Appointments:** /appointments CRUD + /appointments/{id}/pay + /appointments/{id}/prescription
-- **Reminders:** /reminders CRUD
-- **Feed:** /feed, /daily-tip
-- **Challenges:** /challenges, /challenges/join
-- **Prescriptions:** /prescriptions
-- **Reports:** /reports CRUD
-- **Chat (AYUSH):** /chat/message, /chat/history/{sid}
-- **Support / lead-gen:** /support/chat, /support/lead
-- **Admin:** /admin/stats · /admin/doctors (list/create/approve/reject/delete/edit) · /admin/patients (+ /appointments) · /admin/activity · /admin/leads
-- **Analytics:** /analytics
+## Push notifications (Emergent-managed)
+- Backend `/api/register-push` and `send_push()` helper via SuprSend relay
+- `EMERGENT_PUSH_KEY=placeholder` in env — replaced automatically at deployment
+- Frontend `expo-notifications` wired: module-scope handler, Android channel, tap-through routing (warm + cold-start)
+- **Requires Android google-services.json** and a native build (Expo Go doesn't deliver pushes)
 
 ## Stack
-- Backend: FastAPI + Motor + JWT + bcrypt + emergentintegrations (Claude Sonnet 4.5) — 58/58 tests passing
-- Frontend: Expo Router (React Native), custom bento UI, Feather icons, expo-localization
-- i18n: en + hi dictionary in `/app/frontend/src/i18n.tsx`
-- Design: Deep Forest Green #0F4C36 + Terracotta #D9663D + Warm Sand + ॐ motif
+- **Backend:** FastAPI + Motor (MongoDB) + JWT + bcrypt + emergentintegrations (Claude Sonnet 4.5) + httpx (push relay) — **80/80 tests passing**
+- **Frontend:** Expo Router (React Native), expo-notifications, expo-localization, custom bento UI, Feather icons
+- **i18n:** en + hi dictionary in `/app/frontend/src/i18n.tsx`
+- **Design:** Deep Forest Green #0F4C36 + Terracotta #D9663D + Warm Sand + ॐ motif + serif headings
 
-## Post-MVP Ideas
-- Real OTP (Twilio), real payments (Razorpay/Stripe), real video (Agora/Twilio Video)
-- Full doctor calendar / availability engine
-- Push notifications (Emergent-managed)
-- Rate-limiting anonymous support chat
-- Route-level admin dashboard on the web
+## Deploy notes for the user
+1. Click **Publish** (top-right) → deploy backend + frontend
+2. To enable push: attach `google-services.json` from Firebase console (Project settings → Android app matching `com.emergent.vaidhyaji`) to `/app/frontend/google-services.json`. Deployment pipeline swaps `EMERGENT_PUSH_KEY` placeholder for the real key.
+3. Generate iOS + Android builds from the Publish panel to install on real devices via Expo Go / test flight
