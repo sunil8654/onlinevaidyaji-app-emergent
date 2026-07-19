@@ -16,7 +16,7 @@ export default function Otp() {
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [seconds, setSeconds] = useState(30);
-  const refs = useRef<Array<TextInput | null>>([]);
+  const refs = useRef<(TextInput | null)[]>([]);
 
   useEffect(() => {
     if (seconds <= 0) return;
