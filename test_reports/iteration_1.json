@@ -1,0 +1,45 @@
+{
+  "summary": "First backend testing pass for Online Vaidhyaji AYUSH API. Created pytest suite covering all 16 requested flows: health check, JWT auth (register patient/doctor, duplicate, login, /me), patient profile PUT/GET, doctors list+filter+detail+404, appointment booking+listing, feed & daily-tip, reminders CRUD+404, challenges list+join, Claude Sonnet 4.5 chat + history, analytics event. 25/25 tests passed (100%) against public URL EXPO_PUBLIC_BACKEND_URL. LLM (Claude Sonnet 4.5 via emergentintegrations) responded successfully. MongoDB _id is correctly excluded everywhere. Role-based authorization (doctor cannot edit patient profile) works. No critical, minor, or React Native issues found (backend-only test).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "startup", "issue": "logger is referenced inside POST /api/chat/message exception handler (line 361) but defined later in the module (line 516). Works at runtime because the module fully loads before any request is served, but style-wise the logger should be initialised before route handlers."},
+      {"endpoint": "POST /api/auth/register", "issue": "EmailStr rejects reserved TLDs like .test/.example — not a bug, just note for future tests. Tests use vaidhyaji.example.com."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/conftest.py",
+    "/app/backend/tests/test_backend_api.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Optional: move `logger = logging.getLogger(__name__)` and `logging.basicConfig(...)` to the top of server.py so it is defined before route handlers that reference it (currently works but is fragile).",
+    "Optional: consider adding an index on users.email and doctors.specialty for scale.",
+    "Optional: consider EmailStr validation is strict; if real users use `.test` accidentally they will get a 422 — acceptable for MVP."
+  ],
+  "critical_code_review_comments": [
+    "server.py uses async/await correctly with motor; no sync IO on the event loop.",
+    "MongoDB _id is properly excluded via projection {'_id': 0} across all read routes and pop('_id', None) on writes.",
+    "Passwords are bcrypt hashed and never leaked in responses; JWT uses HS256 with 30d expiry.",
+    "All env vars sourced from backend/.env; no hardcoded URLs, no defaults that would mask misconfig.",
+    "All routes correctly prefixed with /api via APIRouter.",
+    "seed() is idempotent (guarded by count_documents == 0)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/conftest.py (new)",
+    "/app/backend/tests/test_backend_api.py (new)",
+    "/app/backend/tests/__init__.py (new, empty)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "N/A (backend-only requested)"},
+  "seed_data_creation": "Startup seed() populates 6 doctors, 6 feed items, 3 challenges. Tests additionally create disposable TEST_ users (email prefix test_<uuid>@vaidhyaji.example.com) — not cleaned up but isolated by unique emails.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend is fully green. When adding new backend endpoints, extend /app/backend/tests/test_backend_api.py and rely on `patient_ctx` / `doctor_ctx` fixtures from conftest.py which handle registration + Bearer header. Use `vaidhyaji.example.com` domain — Pydantic EmailStr rejects reserved TLDs (.test/.example). Public URL comes from frontend/.env EXPO_PUBLIC_BACKEND_URL. LLM chat test takes ~10-20s (Claude Sonnet 4.5) — keep timeout>=60s.",
+  "rca_of_issue": "Initial test failures were caused by using `@vaidhyaji.test` domain, which python's email-validator (used by Pydantic EmailStr) rejects as a special-use/reserved TLD (RFC 6761). Switched fixtures to `@vaidhyaji.example.com` and all 25 tests pass. No backend code changes were required."
+}

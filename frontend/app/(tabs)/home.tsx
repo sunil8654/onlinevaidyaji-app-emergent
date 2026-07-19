@@ -1,0 +1,215 @@
+import { useEffect, useState, useCallback } from "react";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ImageBackground, RefreshControl, Image } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { useRouter } from "expo-router";
+import { Feather } from "@expo/vector-icons";
+import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
+import { useAuth } from "@/src/auth";
+import { api } from "@/src/api";
+
+export default function Home() {
+  const router = useRouter();
+  const { user } = useAuth();
+  const [tip, setTip] = useState<any>(null);
+  const [challenges, setChallenges] = useState<any[]>([]);
+  const [appts, setAppts] = useState<any[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const [t, c, a] = await Promise.all([
+        api.dailyTip(),
+        api.listChallenges().catch(() => []),
+        api.listAppointments().catch(() => []),
+      ]);
+      setTip(t);
+      setChallenges(c || []);
+      setAppts(a || []);
+    } catch {}
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  };
+
+  const hour = new Date().getHours();
+  const greet = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+  const upcoming = appts.find((a) => new Date(a.slot) > new Date());
+
+  return (
+    <SafeAreaView style={styles.root} edges={["top"]}>
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.brand} />}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Header */}
+        <View style={styles.header}>
+          <View>
+            <Text style={styles.greet}>{greet},</Text>
+            <Text style={styles.name} testID="home-username">{user?.name?.split(" ")[0] || "Friend"}</Text>
+          </View>
+          <TouchableOpacity onPress={() => router.push("/(tabs)/profile")} style={styles.avatar} testID="home-profile-avatar">
+            <Feather name="user" size={20} color={COLORS.brand} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Daily Tip Hero */}
+        {tip && (
+          <TouchableOpacity activeOpacity={0.9} testID="home-daily-tip" style={styles.tipCard}>
+            <ImageBackground
+              source={{ uri: tip.image_url || "https://images.pexels.com/photos/20689437/pexels-photo-20689437.jpeg" }}
+              style={styles.tipBg}
+              imageStyle={{ borderRadius: RADIUS.lg }}
+            >
+              <View style={styles.tipOverlay}>
+                <Text style={styles.tipKicker}>Today&apos;s AYUSH tip</Text>
+                <Text style={styles.tipTitle}>{tip.title}</Text>
+                <Text style={styles.tipBody} numberOfLines={2}>{tip.body}</Text>
+              </View>
+            </ImageBackground>
+          </TouchableOpacity>
+        )}
+
+        {/* Bento grid */}
+        <View style={styles.bento}>
+          <TouchableOpacity
+            style={[styles.bentoCard, styles.bentoBig, { backgroundColor: COLORS.brand }]}
+            onPress={() => router.push("/chatbot")}
+            testID="home-open-chatbot"
+            activeOpacity={0.9}
+          >
+            <View>
+              <Text style={[styles.bentoKicker, { color: COLORS.accentSoft }]}>AI Symptom Checker</Text>
+              <Text style={[styles.bentoTitle, { color: COLORS.surface }]}>Talk to{"\n"}AI Vaidhyaji</Text>
+            </View>
+            <View style={styles.chatAvatar}>
+              <Feather name="message-circle" size={20} color={COLORS.brand} />
+            </View>
+          </TouchableOpacity>
+
+          <View style={{ flex: 1, gap: SPACING.md }}>
+            <TouchableOpacity
+              style={[styles.bentoCard, styles.bentoSmall]}
+              onPress={() => router.push("/(tabs)/consult")}
+              testID="home-book-doctor"
+              activeOpacity={0.9}
+            >
+              <Feather name="calendar" size={22} color={COLORS.brand} />
+              <Text style={styles.bentoSmallTitle}>Book{"\n"}Doctor</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.bentoCard, styles.bentoSmall, { backgroundColor: COLORS.accentSoft, borderColor: COLORS.accent }]}
+              onPress={() => router.push("/challenges")}
+              testID="home-challenges"
+              activeOpacity={0.9}
+            >
+              <Feather name="award" size={22} color={COLORS.accent} />
+              <Text style={[styles.bentoSmallTitle, { color: COLORS.accent }]}>Wellness{"\n"}Streaks</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Upcoming appointment */}
+        {upcoming && (
+          <TouchableOpacity style={styles.upcoming} onPress={() => router.push("/appointments")} testID="home-upcoming-appointment">
+            <View style={{ flex: 1 }}>
+              <Text style={styles.upcomingKicker}>Upcoming consultation</Text>
+              <Text style={styles.upcomingTitle}>{upcoming.doctor_name}</Text>
+              <Text style={styles.upcomingSub}>{upcoming.doctor_specialty} · {new Date(upcoming.slot).toLocaleString()}</Text>
+            </View>
+            <View style={styles.upcomingIcon}>
+              <Feather name="video" size={18} color={COLORS.surface} />
+            </View>
+          </TouchableOpacity>
+        )}
+
+        {/* Challenges preview */}
+        {challenges.length > 0 && (
+          <>
+            <View style={styles.sectionHead}>
+              <Text style={styles.sectionTitle}>Community challenges</Text>
+              <TouchableOpacity onPress={() => router.push("/challenges")} testID="home-see-all-challenges">
+                <Text style={styles.link}>See all</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: SPACING.md, paddingRight: SPACING.md }}>
+              {challenges.slice(0, 5).map((c) => (
+                <TouchableOpacity key={c.id} style={styles.challengeCard} onPress={() => router.push("/challenges")} testID={`home-challenge-${c.id}`}>
+                  <Image source={{ uri: c.image_url }} style={styles.challengeImg} />
+                  <View style={styles.challengePad}>
+                    <Text style={styles.challengeTitle} numberOfLines={2}>{c.title}</Text>
+                    <Text style={styles.challengeMeta}>{c.duration_days} days · {c.badge}</Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </>
+        )}
+
+        <View style={{ height: 100 }} />
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: COLORS.bg },
+  scroll: { paddingHorizontal: SPACING.lg, paddingTop: SPACING.sm, paddingBottom: SPACING.lg },
+  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: SPACING.md },
+  greet: { color: COLORS.textSecondary, fontSize: 13, letterSpacing: 0.5 },
+  name: { fontFamily: FONTS.heading, fontSize: 32, color: COLORS.textPrimary, lineHeight: 34, marginTop: 2 },
+  avatar: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border,
+    alignItems: "center", justifyContent: "center",
+  },
+  tipCard: { borderRadius: RADIUS.lg, overflow: "hidden", height: 200, marginBottom: SPACING.md },
+  tipBg: { flex: 1 },
+  tipOverlay: { flex: 1, padding: SPACING.md, justifyContent: "flex-end", backgroundColor: "rgba(15,76,54,0.55)" },
+  tipKicker: { color: COLORS.accentSoft, textTransform: "uppercase", letterSpacing: 3, fontSize: 11, fontWeight: "700" },
+  tipTitle: { fontFamily: FONTS.heading, color: COLORS.surface, fontSize: 26, lineHeight: 30, marginTop: 4 },
+  tipBody: { color: "#F7F5F0", marginTop: 4, fontSize: 13, lineHeight: 18 },
+  bento: { flexDirection: "row", gap: SPACING.md, marginBottom: SPACING.md },
+  bentoCard: {
+    borderRadius: RADIUS.lg,
+    padding: SPACING.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.surface,
+  },
+  bentoBig: { flex: 1.2, height: 220, justifyContent: "space-between" },
+  bentoSmall: { flex: 1, height: 102, justifyContent: "space-between" },
+  bentoKicker: { textTransform: "uppercase", letterSpacing: 2, fontSize: 10, fontWeight: "700" },
+  bentoTitle: { fontFamily: FONTS.heading, fontSize: 26, lineHeight: 28, marginTop: 6, letterSpacing: -0.5 },
+  bentoSmallTitle: { fontFamily: FONTS.heading, fontSize: 18, color: COLORS.textPrimary, lineHeight: 20 },
+  chatAvatar: {
+    width: 42, height: 42, borderRadius: 21,
+    backgroundColor: COLORS.surface, alignItems: "center", justifyContent: "center",
+    alignSelf: "flex-end",
+  },
+  upcoming: {
+    flexDirection: "row", alignItems: "center", gap: SPACING.md,
+    backgroundColor: COLORS.surfaceAlt, borderColor: COLORS.brand, borderWidth: 1,
+    padding: SPACING.md, borderRadius: RADIUS.lg, marginBottom: SPACING.md,
+  },
+  upcomingKicker: { textTransform: "uppercase", letterSpacing: 2, fontSize: 10, color: COLORS.brand, fontWeight: "700" },
+  upcomingTitle: { fontFamily: FONTS.heading, fontSize: 20, color: COLORS.textPrimary, marginTop: 2 },
+  upcomingSub: { color: COLORS.textSecondary, marginTop: 2, fontSize: 12 },
+  upcomingIcon: { width: 42, height: 42, borderRadius: 21, backgroundColor: COLORS.brand, alignItems: "center", justifyContent: "center" },
+  sectionHead: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-end", marginTop: SPACING.sm, marginBottom: SPACING.md },
+  sectionTitle: { fontFamily: FONTS.heading, fontSize: 22, color: COLORS.textPrimary },
+  link: { color: COLORS.brand, fontWeight: "700", fontSize: 13 },
+  challengeCard: {
+    width: 220, backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.lg, borderWidth: 1, borderColor: COLORS.border, overflow: "hidden",
+  },
+  challengeImg: { width: "100%", height: 110 },
+  challengePad: { padding: SPACING.md },
+  challengeTitle: { fontFamily: FONTS.heading, fontSize: 18, color: COLORS.textPrimary, lineHeight: 22 },
+  challengeMeta: { color: COLORS.textSecondary, fontSize: 12, marginTop: 4 },
+});
