@@ -1,0 +1,44 @@
+{
+  "summary": "Re-verified Daily.co video consultation fix. 12/12 tests in test_video_consultation.py now PASS (previously 11/12). The failing test `test_scheduled_appointment_persists_room_on_doc` — which exercises the exact 400 'already exists' path — passes with the new dual-check (409 OR 400+body match) in _daily_create_room (server.py:405-408). Added a dedicated rejoin regression test (test_video_rejoin_and_smoke.py::TestScheduledRejoinPersistsSameRoom) that books an appointment, joins video twice as patient, and asserts identical room_name + room_url on join #2 (no 502). Also asserts daily_room_name persisted on the appointment doc matches the returned room. Smoke tests for /api/, admin login, /api/doctors, /api/appointments all PASS. Combined: 17/17 green.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "/api/doctors",
+        "issue": "Doctors registered via /api/auth/register (role=doctor) do not appear in GET /api/doctors listing. Prevents end-to-end 'doctor joins appointment video as owner' test being asserted from a self-registered doctor account. Rejoin fix itself still fully validated via patient join #1 vs join #2 (same room_name/url, no 502). Consider auto-linking newly registered doctor users into the doctors collection, or documenting how a doctor account becomes a listed doctor."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_video_consultation.py",
+    "/app/backend/tests/test_video_rejoin_and_smoke.py",
+    "/app/test_reports/pytest/pytest_video_iter8.xml",
+    "/app/test_reports/pytest/pytest_video_rejoin_iter8.xml"
+  ],
+  "action_items": [
+    "Fix verified — no further action required for the room-already-exists bug.",
+    "Optional: expose self-registered doctor accounts via GET /api/doctors so that an end-to-end multi-role rejoin test (patient + doctor on the same appt) can be asserted automatically instead of falling back to informational logging."
+  ],
+  "critical_code_review_comments": [
+    "server.py:405-408 — good defensive dual-check (status_code == 409 OR (400 AND 'already exists' in body)). Body match is case-insensitive via .lower(). Safe against upstream API variants.",
+    "On duplicate, server does GET /rooms/{room_name} and returns the fetched room JSON — correct behaviour: idempotent room provisioning, preserves persisted daily_room_name on the appointment doc."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_video_rejoin_and_smoke.py (new — rejoin regression + smoke tests)"
+  ],
+  "success_rate": {
+    "backend": "100% (17/17 across video_consultation + video_rejoin_and_smoke)",
+    "frontend": "not tested this iteration (backend-only per request)"
+  },
+  "seed_data_creation": "Ephemeral test users (TEST_ prefix) created via /api/auth/register per fixture run (patient/doctor). No cleanup implemented — matches existing test-suite convention in this repo.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Video consultation is fully working. The Daily.co 400 'already exists' branch is exercised on every patient rejoin (test_video_consultation.py::test_scheduled_appointment_persists_room_on_doc + test_video_rejoin_and_smoke.py::test_rejoin_patient_twice_same_room). If you regress the check in _daily_create_room (server.py:405-418), both tests will fail with a 502. Self-registered doctor accounts are not listed in /api/doctors — so the doctor-owner leg of the rejoin test currently logs an [INFO] instead of asserting; wire that up if the doctor-listing behaviour changes.",
+  "rca_of_issue": "Original bug (iteration 7): Daily.co returns HTTP 400 with body 'already exists' (not 409) when a room name is duplicate. The old code only checked `r.status_code == 409`, so on the second video/session call for the same appointment_id it would fall through to `if r.status_code >= 400: raise HTTPException(502, ...)`. Fix (server.py:405-408): recognise BOTH 409 AND (400 + 'already exists' in body.lower()) as duplicate signal, then GET the existing room and return it. Verified: patient join #2 now returns 200 with identical room_name + room_url; appointment doc retains the persisted daily_room_name; no 502."
+}

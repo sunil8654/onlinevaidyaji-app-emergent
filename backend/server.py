@@ -402,7 +402,11 @@ async def _daily_create_room(room_name: str, exp_ts: int) -> dict:
     headers = {"Authorization": f"Bearer {DAILY_API_KEY}"}
     async with httpx.AsyncClient(timeout=20) as client:
         r = await client.post(f"{DAILY_BASE}/rooms", json=payload, headers=headers)
-    if r.status_code == 409:
+    already_exists = (
+        r.status_code == 409
+        or (r.status_code == 400 and "already exists" in r.text.lower())
+    )
+    if already_exists:
         # Room already exists – fetch it
         async with httpx.AsyncClient(timeout=20) as client:
             g = await client.get(f"{DAILY_BASE}/rooms/{room_name}", headers=headers)
