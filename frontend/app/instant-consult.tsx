@@ -70,7 +70,7 @@ export default function InstantConsult() {
             </View>
             <TouchableOpacity
               style={styles.callBtn}
-              onPress={() => router.push({ pathname: "/video-call", params: { doctor_name: item.name, doctor_specialty: item.specialty } })}
+              onPress={() => router.push({ pathname: "/video-call", params: { doctor_name: item.name, doctor_specialty: item.specialty, doctor_id: item.id } })}
               testID={`ic-call-${item.id}`}
             >
               <Feather name="video" size={14} color={COLORS.surface} />

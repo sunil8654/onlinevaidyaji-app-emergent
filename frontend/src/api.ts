@@ -131,6 +131,10 @@ export const api = {
   registerPush: (body: { user_id: string; platform: string; device_token: string }) =>
     request("/register-push", "POST", body, false),
 
+  // Video (Daily.co)
+  createVideoSession: (body: { appointment_id?: string; doctor_id?: string; duration_minutes?: number }) =>
+    request<{ room_url: string; room_name: string; token: string; embed_url: string; is_owner: boolean; exp: number; user_name: string }>("/video/session", "POST", body),
+
   // Admin broadcast
   adminBroadcast: (body: { title: string; message: string; audience: string }) =>
     request("/admin/broadcast", "POST", body),

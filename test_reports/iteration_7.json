@@ -1,0 +1,43 @@
+{
+  "summary": "Backend-only test of Daily.co video consultation integration. 11/12 tests PASSED (91.7%). Real Daily.co API calls confirmed working: room creation, meeting token generation, embed HTML rendering (daily-js script + Prebuilt iframe wiring), auth guards (400/401/403/404), and cross-user access denial all green. Regression: /api/appointments now inserts exactly ONE document (dead code removed) — verified via before/after count. Admin login + /api/admin/patients aggregation still returns int-typed appointments count with no _id/password leakage. CRITICAL BUG FOUND: Daily REST returns HTTP 400 (not 409) with body '{\"error\":\"invalid-request-error\",\"info\":\"a room named X already exists\"}' when re-creating an existing room. Backend only handles 409 fallback, so the 2nd+ call to /api/video/session for the same scheduled appointment (which uses deterministic room_name = vaidhya-appt-{id}) returns 502. This breaks user-reconnect / doctor-then-patient join flows for scheduled consults. First call always works; instant consults are unaffected (room name has timestamp).",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/video/session (appointment_id path)", "issue": "2nd/3rd call with same appointment_id returns 502 'Daily create room failed'. Root cause: Daily REST API returns HTTP 400 with body containing 'invalid-request-error' / 'already exists' when a room with the given name already exists — NOT 409 as the code assumes. In /app/backend/server.py:405 `_daily_create_room` only catches r.status_code == 409, so the 'already exists' path is never taken for repeat joins. Fix: change the guard to also recognize the 400+error='invalid-request-error' with 'already exists' in info (or use idempotent GET-then-POST). Verified by direct Daily API call: POST /rooms with existing name -> 400 {\"error\":\"invalid-request-error\",\"info\":\"a room named ... already exists\"}. Users cannot rejoin/second-participant-join a scheduled consult.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "GET /api/video/embed/{room_name}", "issue": "Route registered on `app` directly (line 528) instead of `api_router`. Works because path already starts with /api, but is inconsistent with other endpoints and bypasses the api_router prefix pattern. Cosmetic."},
+      {"endpoint": "POST /api/video/session", "issue": "Token is passed in query string on the returned embed_url. Comment in code acknowledges the exposure risk; consider POST-to-embed with body, or setting-fragment (#token=...) so it never lands in server logs. Not blocking."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_video_consultation.py",
+    "/app/test_reports/pytest/pytest_video.xml"
+  ],
+  "action_items": [
+    "FIX (HIGH): /app/backend/server.py `_daily_create_room` — Daily returns HTTP 400 (not 409) for 'room already exists'. Update the branch to also match r.status_code == 400 AND ('already exists' in r.text OR error=='invalid-request-error'), then GET the existing room. This will unblock rejoin and multi-participant join for scheduled appointments.",
+    "Optional: register /api/video/embed via api_router for consistency, or make the token opaque (short-lived, room-locked already — mostly OK).",
+    "Optional: retest with the fix applied by re-running pytest backend/tests/test_video_consultation.py — the currently-failing test_scheduled_appointment_persists_room_on_doc will pass once the 400-already-exists branch is added."
+  ],
+  "critical_code_review_comments": [
+    "server.py:405 — Daily 'room exists' handling assumes 409 but real API returns 400 + 'invalid-request-error'. Only path that ever needs it (deterministic room per appointment) is broken on repeat joins.",
+    "server.py:475-483 — Persistence of daily_room_name/url/exp on appointment is correct and idempotent-guarded via `not appt.get('daily_room_url')`. Good.",
+    "server.py:437-525 — Authorization logic is correct: appointment_id path validates user is patient or doctor of the appointment (403 for others), doctor_id path only requires doctor existence; is_owner flag correctly set to True only for the linked doctor. Verified.",
+    "server.py:528-600 — HTML embed sanitizes room_name and domain (alnum+_-), builds JSON-quoted URL/token, wires Daily Prebuilt iframe with themed accent, joined/error/left-meeting handlers, and postMessage back to ReactNativeWebView on leave. Solid.",
+    "server.py:322-327 — Regression confirmed: appointment insert is now single (before/after count diff = 1). Dead code from previous iteration is gone."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_video_consultation.py (new — 12 tests, real Daily.co API calls)"
+  ],
+  "success_rate": {"backend": "91.7% (11/12)", "frontend": "not tested (per request)"},
+  "seed_data_creation": "Test-created patients prefixed with test_<uuid>@vaidhyaji.example.com and ~5 real Daily.co rooms (vaidhya-instant-* and vaidhya-appt-*). Rooms have exp set (auto-expire) so no manual cleanup needed.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Video consultation backend integration is largely correct and hits real Daily.co API successfully. The single remaining bug is server.py:405 (`_daily_create_room` treats only 409 as 'already exists' but Daily returns 400 with error='invalid-request-error'). After main-agent fix, re-run pytest /app/backend/tests/test_video_consultation.py — the failing test_scheduled_appointment_persists_room_on_doc is the exact repro. Test file uses real Daily API calls (no mocks); each pytest run creates ~4-6 Daily rooms with short exp.",
+  "rca_of_issue": "Repro: (1) book appointment, (2) POST /api/video/session with appointment_id -> 200 (creates Daily room named vaidhya-appt-{appt_id}), (3) POST /api/video/session with same appointment_id -> 502 'Daily create room failed: {\\\"error\\\":\\\"invalid-request-error\\\",\\\"info\\\":\\\"a room named ... already exists\\\"}'. Cause: `_daily_create_room` in /app/backend/server.py only checks `r.status_code == 409` before falling back to GET, but Daily returns 400 for this case. Mitigation: change guard to `if r.status_code == 409 or (r.status_code == 400 and 'already exists' in r.text.lower())` (or match on error='invalid-request-error') and then GET the room."
+}

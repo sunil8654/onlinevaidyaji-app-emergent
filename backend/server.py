@@ -1,9 +1,11 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Depends
+from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+import json
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr
@@ -323,9 +325,6 @@ async def create_appointment(body: AppointmentInput, user: dict = Depends(curren
         "doctor_name": doctor["name"], "specialty": doctor["specialty"], "slot": body.slot,
     })
     return appt
-    await db.appointments.insert_one(appt)
-    appt.pop("_id", None)
-    return appt
 
 
 @api_router.get("/appointments")
@@ -371,6 +370,238 @@ async def list_prescriptions(user: dict = Depends(current_user)):
     q["prescription"] = {"$ne": None}
     items = await db.appointments.find(q, {"_id": 0}).sort("slot", -1).to_list(200)
     return items
+
+
+# ----------------- Daily.co Video Consultation -----------------
+DAILY_API_KEY = os.environ.get("DAILY_API_KEY", "")
+DAILY_BASE = "https://api.daily.co/v1"
+
+
+class VideoSessionInput(BaseModel):
+    appointment_id: Optional[str] = None
+    doctor_id: Optional[str] = None  # for instant consults w/o appt
+    duration_minutes: int = 60
+
+
+async def _daily_create_room(room_name: str, exp_ts: int) -> dict:
+    if not DAILY_API_KEY:
+        raise HTTPException(status_code=503, detail="Daily.co not configured (missing DAILY_API_KEY)")
+    payload = {
+        "name": room_name,
+        "privacy": "private",
+        "properties": {
+            "exp": exp_ts,
+            "eject_at_room_exp": True,
+            "enable_prejoin_ui": True,
+            "enable_screenshare": True,
+            "enable_chat": True,
+            "start_video_off": False,
+            "start_audio_off": False,
+        },
+    }
+    headers = {"Authorization": f"Bearer {DAILY_API_KEY}"}
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.post(f"{DAILY_BASE}/rooms", json=payload, headers=headers)
+    if r.status_code == 409:
+        # Room already exists – fetch it
+        async with httpx.AsyncClient(timeout=20) as client:
+            g = await client.get(f"{DAILY_BASE}/rooms/{room_name}", headers=headers)
+        if g.status_code >= 400:
+            raise HTTPException(status_code=502, detail=f"Daily fetch room failed: {g.text}")
+        return g.json()
+    if r.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"Daily create room failed: {r.text}")
+    return r.json()
+
+
+async def _daily_create_token(room_name: str, user_name: str, user_id: str, is_owner: bool, exp_ts: int) -> str:
+    if not DAILY_API_KEY:
+        raise HTTPException(status_code=503, detail="Daily.co not configured")
+    payload = {
+        "properties": {
+            "room_name": room_name,
+            "exp": exp_ts,
+            "user_name": user_name,
+            "user_id": user_id,
+            "is_owner": is_owner,
+        }
+    }
+    headers = {"Authorization": f"Bearer {DAILY_API_KEY}"}
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.post(f"{DAILY_BASE}/meeting-tokens", json=payload, headers=headers)
+    if r.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"Daily create token failed: {r.text}")
+    return r.json()["token"]
+
+
+@api_router.post("/video/session")
+async def create_video_session(body: VideoSessionInput, user: dict = Depends(current_user)):
+    """Create (or fetch) a Daily.co room + token for this user.
+
+    Works for both scheduled appointments (pass appointment_id) and instant consults
+    (pass doctor_id). Returns { room_url, token, room_name, is_owner, exp }.
+    """
+    is_owner = user.get("role") == "doctor"
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    duration = max(15, min(body.duration_minutes, 180))
+    exp_ts = now_ts + duration * 60
+
+    room_name = None
+    doctor = None
+    appt = None
+
+    if body.appointment_id:
+        appt = await db.appointments.find_one({"id": body.appointment_id}, {"_id": 0})
+        if not appt:
+            raise HTTPException(status_code=404, detail="Appointment not found")
+        # Authorization: only linked patient or doctor
+        if user["id"] not in (appt.get("patient_id"), appt.get("doctor_id")):
+            raise HTTPException(status_code=403, detail="Not part of this appointment")
+        room_name = appt.get("daily_room_name") or f"vaidhya-appt-{appt['id']}"[:60]
+        is_owner = user["id"] == appt.get("doctor_id")
+    elif body.doctor_id:
+        doctor = await db.doctors.find_one({"id": body.doctor_id}, {"_id": 0})
+        if not doctor:
+            raise HTTPException(status_code=404, detail="Doctor not found")
+        # Instant consult room – ephemeral; tie to user+doctor+timestamp
+        room_name = f"vaidhya-instant-{user['id'][:8]}-{doctor['id'][:8]}-{now_ts}"[:60]
+    else:
+        raise HTTPException(status_code=400, detail="Provide appointment_id or doctor_id")
+
+    # Create/fetch room
+    room = await _daily_create_room(room_name, exp_ts)
+
+    # Persist room fields on appointment for reuse
+    if appt is not None and not appt.get("daily_room_url"):
+        await db.appointments.update_one(
+            {"id": appt["id"]},
+            {"$set": {
+                "daily_room_name": room["name"],
+                "daily_room_url": room["url"],
+                "daily_room_exp": exp_ts,
+            }},
+        )
+
+    # Generate token for this participant
+    token = await _daily_create_token(
+        room_name=room["name"],
+        user_name=user.get("name") or "Guest",
+        user_id=user["id"],
+        is_owner=is_owner,
+        exp_ts=exp_ts,
+    )
+
+    await log_activity("video_session_started", actor=user, meta={
+        "room_name": room["name"], "is_owner": is_owner,
+        "appointment_id": body.appointment_id, "doctor_id": body.doctor_id,
+    })
+
+    # Extract domain subdomain from room URL (e.g. https://onlinevaidya.daily.co/room)
+    domain_sub = "onlinevaidya"
+    try:
+        from urllib.parse import urlparse
+        host = urlparse(room["url"]).hostname or ""
+        if host.endswith(".daily.co"):
+            domain_sub = host.split(".")[0]
+    except Exception:
+        pass
+
+    from urllib.parse import quote
+    embed_url = (
+        f"/api/video/embed/{room['name']}"
+        f"?token={quote(token)}"
+        f"&user_name={quote(user.get('name') or 'Guest')}"
+        f"&domain={quote(domain_sub)}"
+    )
+
+    return {
+        "room_url": room["url"],
+        "room_name": room["name"],
+        "token": token,
+        "embed_url": embed_url,
+        "is_owner": is_owner,
+        "exp": exp_ts,
+        "user_name": user.get("name") or "Guest",
+    }
+
+
+@app.get("/api/video/embed/{room_name}", response_class=HTMLResponse)
+async def video_embed(room_name: str, token: str = "", user_name: str = "Guest", domain: str = "onlinevaidya"):
+    """HTML page that hosts the Daily Prebuilt iframe.
+
+    Rendered inside a React Native WebView so we can use Daily's fully-featured
+    JS SDK without needing a native Expo build. Token is passed in the query
+    string; it is short-lived (~60min) and room-locked so exposure risk is low.
+    """
+    # Basic validation
+    safe_room = ''.join(c for c in room_name if c.isalnum() or c in '-_')[:80]
+    safe_domain = ''.join(c for c in domain if c.isalnum() or c in '-_')[:60] or "onlinevaidya"
+    if not safe_room:
+        raise HTTPException(status_code=400, detail="Invalid room name")
+    room_url_js = json.dumps(f"https://{safe_domain}.daily.co/{safe_room}")
+    token_js = json.dumps(token)
+    user_name_js = json.dumps(user_name or "Guest")
+
+    html = f"""<!doctype html>
+<html>
+<head>
+  <meta name='viewport' content='width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no'/>
+  <meta charset='utf-8'/>
+  <title>Online Vaidhyaji Consultation</title>
+  <style>
+    html, body {{ margin:0; padding:0; height:100%; width:100%; background:#0F4C36; overflow:hidden; font-family: -apple-system, Roboto, sans-serif; }}
+    #call {{ position: absolute; inset: 0; }}
+    #err {{ color:#fff; padding:20px; text-align:center; font-size:14px; }}
+    .loader {{ color:#fff; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); text-align:center; }}
+    .spinner {{ width:36px; height:36px; border:3px solid rgba(255,255,255,0.25); border-top-color:#F4B942; border-radius:50%; margin:0 auto 12px; animation: spin 1s linear infinite; }}
+    @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+  </style>
+</head>
+<body>
+  <div class='loader' id='loader'><div class='spinner'></div>Connecting to your Vaidya…</div>
+  <div id='call'></div>
+  <script src='https://unpkg.com/@daily-co/daily-js'></script>
+  <script>
+    (function(){{
+      var roomUrl = {room_url_js};
+      var token = {token_js};
+      var userName = {user_name_js};
+      try {{
+        var call = window.DailyIframe.createFrame(document.getElementById('call'), {{
+          iframeStyle: {{ position:'absolute', width:'100%', height:'100%', border:'0', top:'0', left:'0' }},
+          showLeaveButton: true,
+          showFullscreenButton: false,
+          theme: {{
+            colors: {{
+              accent: '#F4B942',
+              accentText: '#0F4C36',
+              background: '#0F4C36',
+              backgroundAccent: '#123B2A',
+              baseText: '#F7F5F0',
+              border: '#1B5C43',
+              mainAreaBg: '#0F4C36',
+              mainAreaBgAccent: '#123B2A',
+              mainAreaText: '#F7F5F0',
+              supportiveText: '#F4E4C1'
+            }}
+          }}
+        }});
+        call.on('joined-meeting', function(){{ document.getElementById('loader').style.display='none'; }});
+        call.on('error', function(e){{ document.getElementById('loader').innerHTML = 'Connection error: ' + (e && e.errorMsg ? e.errorMsg : 'unknown'); }});
+        call.on('left-meeting', function(){{
+          try {{ if (window.ReactNativeWebView) {{ window.ReactNativeWebView.postMessage(JSON.stringify({{type:'left'}})); }} }} catch(_) {{}}
+        }});
+        var joinOpts = {{ url: roomUrl, userName: userName }};
+        if (token) joinOpts.token = token;
+        call.join(joinOpts);
+      }} catch (e) {{
+        document.getElementById('loader').innerHTML = 'Failed to load video: ' + e.message;
+      }}
+    }})();
+  </script>
+</body>
+</html>"""
+    return HTMLResponse(html)
 
 
 # ----------------- Reports (Health Records vault) -----------------
