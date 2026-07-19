@@ -4,6 +4,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { Feather } from "@expo/vector-icons";
 import { useI18n } from "@/src/i18n";
+import { LogoBlock } from "@/src/components/Logo";
 
 export default function Onboarding() {
   const router = useRouter();
@@ -32,8 +33,8 @@ export default function Onboarding() {
           </View>
           <ScrollView contentContainerStyle={styles.content}>
             <View style={styles.top}>
-              <Text style={styles.om}>ॐ</Text>
-              <Text style={styles.eyebrow}>{t("eyebrow_india")}</Text>
+              <LogoBlock size={110} tagline="" light />
+              <Text style={[styles.eyebrow, { marginTop: 16 }]}>{t("eyebrow_india")}</Text>
               <Text style={styles.title}>{t("brand")}</Text>
               <Text style={styles.sub}>{t("tagline")}</Text>
             </View>
@@ -82,8 +83,7 @@ const styles = StyleSheet.create({
   langRow: { flexDirection: "row", justifyContent: "flex-end", paddingHorizontal: SPACING.lg, paddingTop: SPACING.sm },
   langBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: RADIUS.pill, backgroundColor: "rgba(255,255,255,0.15)" },
   langText: { color: "#F7F5F0", fontSize: 11, fontWeight: "700", letterSpacing: 1 },
-  top: { marginTop: SPACING.xl },
-  om: { color: "#F3D9CD", fontSize: 40, marginBottom: 8, lineHeight: 46 },
+  top: { marginTop: SPACING.md, alignItems: "flex-start" },
   eyebrow: {
     color: COLORS.accentSoft,
     letterSpacing: 3,
