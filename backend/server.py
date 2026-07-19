@@ -1321,10 +1321,13 @@ async def root():
 
 app.include_router(api_router)
 
+cors_origins = os.environ.get("CORS_ORIGINS", "*")
+allow_origins_list = [o.strip() for o in cors_origins.split(",")] if cors_origins != "*" else ["*"]
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=["*"],
+    allow_origins=allow_origins_list,
     allow_methods=["*"],
     allow_headers=["*"],
 )
