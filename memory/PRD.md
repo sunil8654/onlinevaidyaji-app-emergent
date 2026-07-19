@@ -41,12 +41,34 @@ India's first pure AI-powered AYUSH platform that patients open *daily* — not 
 - **Requires Android google-services.json** and a native build (Expo Go doesn't deliver pushes)
 
 ## Stack
-- **Backend:** FastAPI + Motor (MongoDB) + JWT + bcrypt + emergentintegrations (Claude Sonnet 4.5) + httpx (push relay) — **80/80 tests passing**
-- **Frontend:** Expo Router (React Native), expo-notifications, expo-localization, custom bento UI, Feather icons
+- **Backend:** FastAPI + Motor (MongoDB) + JWT + bcrypt + emergentintegrations (Claude Sonnet 4.5) + httpx (push relay + Daily.co REST) — **97/97 tests passing** (17 new video tests added)
+- **Frontend:** Expo Router (React Native), expo-notifications, expo-localization, react-native-webview (Daily.co video), custom bento UI, Feather icons
 - **i18n:** en + hi dictionary in `/app/frontend/src/i18n.tsx`
 - **Design:** Deep Forest Green #0F4C36 + Terracotta #D9663D + Warm Sand + ॐ motif + serif headings
+
+## Real integrations (live)
+1. **Claude Sonnet 4.5** via Emergent LLM Key — AI Vaidhyaji chatbot + Diet plan generation
+2. **Daily.co video consultations** (WebView + Daily Prebuilt) — real HD video/audio, screen-share, in-call chat. Domain: `onlinevaidya.daily.co`. API key in `/app/backend/.env` as `DAILY_API_KEY`.
+   - `POST /api/video/session` → creates/fetches room + issues meeting token (owner=doctor, guest=patient)
+   - `GET /api/video/embed/{room_name}` → HTML page hosting themed Daily Prebuilt iframe
+   - Handles Daily's "room already exists" (HTTP 400) for rejoin idempotency
+   - iOS/Android camera + mic permissions declared in `app.json`
+
+## Still mocked / pending
+- **Razorpay payments** (`/app/frontend/app/plan-checkout.tsx`) — awaiting user's Razorpay Key ID + Secret
+- **OTP verification** — any 4-6 digit code accepted (backend mock)
+- **Push notifications on device** — needs `google-services.json` + native build via Publish
 
 ## Deploy notes for the user
 1. Click **Publish** (top-right) → deploy backend + frontend
 2. To enable push: attach `google-services.json` from Firebase console (Project settings → Android app matching `com.emergent.vaidhyaji`) to `/app/frontend/google-services.json`. Deployment pipeline swaps `EMERGENT_PUSH_KEY` placeholder for the real key.
 3. Generate iOS + Android builds from the Publish panel to install on real devices via Expo Go / test flight
+
+## Session log (Jun 2026)
+- **Iteration 6:** Deployment health-check → fixed CORS_ORIGINS env + N+1 aggregation on `/api/admin/patients`
+- **Iteration 7-8:** Daily.co video integration complete — 17/17 real-API tests pass. Fixed room-already-exists 400/409 dual handling.
+- **Next up (user requested "continue tomorrow"):**
+  - 💳 Razorpay real payment integration (needs credentials from user)
+  - 🔔 Firebase `google-services.json` for push after Publish
+  - 🎥 End-to-end 2-device video call verification on real phones
+
