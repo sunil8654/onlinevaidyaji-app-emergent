@@ -101,3 +101,114 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+
+user_problem_statement: |
+  Build "Online Vaidhyaji", an AYUSH health app. This iteration adds
+  Doctor Dashboard enhancements: earnings summary, patient history, and a
+  structured multi-medicine prescription writer with PDF export.
+
+backend:
+  - task: "Doctor earnings summary — GET /api/doctor/earnings"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "12/12 pytest in test_iter16_doctor_dashboard.py pass. Auth-gated, returns dense 30-day daily trend, zero-fills for fresh doctors, aggregates from payments table."
+
+  - task: "Doctor patient history — GET /api/doctor/patients/{id}/history"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Returns 403 without prior treatment relationship, full payload after booking."
+
+  - task: "Structured prescription (medicines_structured + auto-composed medicines)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: false
+        agent: "testing"
+        comment: "Initial run flagged CRITICAL — doctor auth check on /api/appointments/{id}/prescription compared users.id to appt.doctor_id (which is doctors.id)."
+      - working: true
+        agent: "main"
+        comment: "Added _appt_actor_ids/_is_appt_participant helpers and applied fix to add_prescription, list_appointments (GET /api/appointments), and video/session ACL. All 12 iter16 tests + 140 non-deprecated regressions pass."
+
+frontend:
+  - task: "Doctor earnings dashboard screen"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/doctor/earnings.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Renders totals, period cards, 30-day bar chart, recent payouts. Empty state clean for fresh doctor. testIDs earn-back, earn-total, earn-today, earn-week, earn-month verified."
+
+  - task: "Patient history screen for doctor"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/doctor/patient/[id].tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Renders profile card, stats, condition chips, and per-visit prescriptions. Friendly error box on 403 (no treatment history)."
+
+  - task: "Structured prescription editor + PDF export"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/doctor/prescription/[apptId].tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Multi-row medicines with add/remove, diagnosis/symptoms/advice/notes/follow-up, PDF export via expo-print on native and window.print on web. Save button disabled until diagnosis + ≥1 medicine name are set."
+
+  - task: "Doctor home refactor — earnings tile + navigation, removed inline Rx modal"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/doctor/home.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Hero + stats + new earnings quick-tile + patient list navigation. Write Rx now opens the new full-screen editor."
+
+metadata:
+  created_by: "main_agent"
+  version: "1.1"
+  test_sequence: 16
+  run_ui: false
+
+test_plan:
+  current_focus:
+    - "Diet Plans (Task C) — Prakriti quiz + AI meal plan"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+  - agent: "main"
+    message: "Task A (Doctor Dashboard) complete. Added backend endpoints for earnings + patient history, enhanced PrescriptionInput with structured medicines, symptoms, advice, follow_up. Frontend now has /doctor/earnings, /doctor/patient/[id], /doctor/prescription/[apptId] with PDF export (expo-print/expo-sharing). Fixed pre-existing doctor auth bug across /appointments listing, prescription, and video session — now resolves doctors.id from users row. Testing agent verified all 12 iter16 tests + regression suite. Next task per user preference: Personalized Diet Plans (Task C)."

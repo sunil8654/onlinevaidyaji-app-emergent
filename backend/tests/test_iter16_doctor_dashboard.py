@@ -246,13 +246,10 @@ class TestPrescription:
         assert rx.get("written_at")
         assert rx.get("author_id") == patient["user"]["id"]
 
-    def test_BUG_doctor_cannot_write_rx(self, booked_appt, onboarded_doctor):
-        """DOCUMENT KNOWN BUG: /api/appointments/{id}/prescription rejects the
-        doctor because it compares JWT user.id to appt.doctor_id which is the
-        doctors-collection row id (not user id). The new
-        /doctor/prescription/[apptId] frontend screen will therefore hit 403.
-        This test is EXPECTED TO FAIL once main-agent fixes the auth check to
-        resolve doctors[user_id=user.id].id and compare against appt.doctor_id.
+    def test_doctor_can_write_rx(self, booked_appt, onboarded_doctor):
+        """After the fix, the doctor whose /doctors row matches appt.doctor_id
+        is authorized to write the prescription via
+        /api/appointments/{id}/prescription.
         """
         appt_id = booked_appt["id"]
         r = requests.post(
@@ -261,12 +258,9 @@ class TestPrescription:
             json={"diagnosis": "TEST doctor auth", "medicines": "x"},
             timeout=15,
         )
-        # Right now it wrongly returns 403 — assert on the buggy behavior so
-        # the report visibly captures it. Flip to `== 200` after the fix.
-        assert r.status_code == 403, (
-            f"BUG NO LONGER REPRODUCES — got {r.status_code}: {r.text}. "
-            "If this fails with 200, the auth check has been fixed — update this test."
-        )
+        assert r.status_code == 200, f"expected 200, got {r.status_code}: {r.text}"
+        rx = r.json()
+        assert rx.get("diagnosis") == "TEST doctor auth"
 
     def test_get_prescriptions_returns_records(self, patient):
         r = requests.get(f"{API}/prescriptions", headers=_auth(patient["token"]), timeout=15)

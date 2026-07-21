@@ -207,6 +207,27 @@ async def require_admin(user: dict = Depends(current_user)) -> dict:
     return user
 
 
+async def _appt_actor_ids(user: dict) -> tuple[str, Optional[str]]:
+    """Return (user_id, doctor_row_id_or_none) for appointment ACL checks.
+
+    Appointments store `patient_id = users.id` and `doctor_id = doctors.id`
+    (see book_appointment). So for role==doctor we must resolve the doctors
+    row to authorize.
+    """
+    if user.get("role") == "doctor":
+        d = await db.doctors.find_one({"user_id": user["id"]}, {"_id": 0, "id": 1})
+        return user["id"], (d or {}).get("id")
+    return user["id"], None
+
+
+async def _is_appt_participant(user: dict, appt: dict) -> bool:
+    """True if `user` is either the patient or the doctor of `appt`."""
+    if appt.get("patient_id") == user["id"]:
+        return True
+    _, doc_id = await _appt_actor_ids(user)
+    return bool(doc_id and appt.get("doctor_id") == doc_id)
+
+
 # ----------------- Auth Routes -----------------
 @api_router.post("/auth/register")
 async def register(body: RegisterInput):
@@ -360,7 +381,14 @@ async def create_appointment(body: AppointmentInput, user: dict = Depends(curren
 
 @api_router.get("/appointments")
 async def list_appointments(user: dict = Depends(current_user)):
-    q = {"patient_id": user["id"]} if user["role"] == "patient" else {"doctor_id": user["id"]}
+    if user["role"] == "patient":
+        q = {"patient_id": user["id"]}
+    else:
+        # For doctors, appointments store doctor_id = doctors.id (not users.id)
+        _, doc_id = await _appt_actor_ids(user)
+        if not doc_id:
+            return []
+        q = {"doctor_id": doc_id}
     items = await db.appointments.find(q, {"_id": 0}).sort("slot", 1).to_list(200)
     return items
 
@@ -383,7 +411,7 @@ async def add_prescription(appt_id: str, body: PrescriptionInput, user: dict = D
     appt = await db.appointments.find_one({"id": appt_id}, {"_id": 0})
     if not appt:
         raise HTTPException(status_code=404, detail="Appointment not found")
-    if user["id"] not in (appt.get("patient_id"), appt.get("doctor_id")):
+    if not await _is_appt_participant(user, appt):
         raise HTTPException(status_code=403, detail="Not allowed")
 
     data = body.dict()
@@ -516,11 +544,13 @@ async def create_video_session(body: VideoSessionInput, user: dict = Depends(cur
         appt = await db.appointments.find_one({"id": body.appointment_id}, {"_id": 0})
         if not appt:
             raise HTTPException(status_code=404, detail="Appointment not found")
-        # Authorization: only linked patient or doctor
-        if user["id"] not in (appt.get("patient_id"), appt.get("doctor_id")):
+        # Authorization: only linked patient or doctor (doctor_id references doctors.id)
+        if not await _is_appt_participant(user, appt):
             raise HTTPException(status_code=403, detail="Not part of this appointment")
         room_name = appt.get("daily_room_name") or f"vaidhya-appt-{appt['id']}"[:60]
-        is_owner = user["id"] == appt.get("doctor_id")
+        # Doctor owns the room (needs kick/mute powers)
+        _, doc_id = await _appt_actor_ids(user)
+        is_owner = bool(doc_id and appt.get("doctor_id") == doc_id)
     elif body.doctor_id:
         doctor = await db.doctors.find_one({"id": body.doctor_id}, {"_id": 0})
         if not doctor:
