@@ -608,6 +608,319 @@ async def video_embed(room_name: str, token: str = "", user_name: str = "Guest",
     return HTMLResponse(html)
 
 
+# ----------------- Razorpay Payments -----------------
+import hmac
+import hashlib
+try:
+    import razorpay
+except ImportError:
+    razorpay = None
+
+RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "")
+RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
+_rzp_client = None
+if razorpay and RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
+    _rzp_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+
+
+class PaymentOrderInput(BaseModel):
+    amount: int  # in paise (>= 100)
+    currency: str = "INR"
+    purpose: Literal["appointment", "diet_plan", "medicine_order", "lab_booking", "custom"] = "custom"
+    reference_id: Optional[str] = None  # id of appointment/order/booking/plan
+    description: Optional[str] = None
+
+
+class PaymentVerifyInput(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+    purpose: Optional[str] = None
+    reference_id: Optional[str] = None
+
+
+@api_router.post("/payments/create-order")
+async def create_payment_order(body: PaymentOrderInput, user: dict = Depends(current_user)):
+    """Create a Razorpay order. Amount must be in paise (min 100)."""
+    if _rzp_client is None:
+        raise HTTPException(status_code=503, detail="Razorpay not configured on server")
+    if body.amount < 100:
+        raise HTTPException(status_code=400, detail="Amount must be at least 100 paise (₹1)")
+    if body.currency.upper() != "INR":
+        raise HTTPException(status_code=400, detail="Only INR currency supported")
+
+    # Receipt must be <= 40 chars
+    receipt = f"vaidhya_{body.purpose[:8]}_{uuid.uuid4().hex[:8]}"[:40]
+
+    try:
+        rzp_order = _rzp_client.order.create({
+            "amount": body.amount,
+            "currency": "INR",
+            "receipt": receipt,
+            "payment_capture": 1,
+            "notes": {
+                "user_id": user["id"],
+                "user_name": user.get("name", ""),
+                "purpose": body.purpose,
+                "reference_id": body.reference_id or "",
+            },
+        })
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Razorpay order failed: {e}")
+
+    # Persist a local payment record
+    payment_doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "razorpay_order_id": rzp_order["id"],
+        "razorpay_payment_id": None,
+        "amount": body.amount,
+        "currency": "INR",
+        "purpose": body.purpose,
+        "reference_id": body.reference_id,
+        "description": body.description,
+        "status": "created",
+        "created_at": now_iso(),
+        "verified_at": None,
+    }
+    await db.payments.insert_one(payment_doc)
+
+    await log_activity("payment_order_created", actor=user, meta={
+        "razorpay_order_id": rzp_order["id"], "amount": body.amount,
+        "purpose": body.purpose, "reference_id": body.reference_id,
+    })
+
+    return {
+        "order_id": rzp_order["id"],
+        "amount": rzp_order["amount"],
+        "currency": rzp_order["currency"],
+        "receipt": receipt,
+        "key_id": RAZORPAY_KEY_ID,  # safe to expose
+        "purpose": body.purpose,
+        "reference_id": body.reference_id,
+    }
+
+
+def _verify_razorpay_signature(order_id: str, payment_id: str, signature: str) -> bool:
+    """HMAC-SHA256(order_id|payment_id, KEY_SECRET) == signature"""
+    if not RAZORPAY_KEY_SECRET:
+        return False
+    body = f"{order_id}|{payment_id}".encode("utf-8")
+    expected = hmac.new(
+        RAZORPAY_KEY_SECRET.encode("utf-8"),
+        body,
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
+@api_router.post("/payments/verify")
+async def verify_payment(body: PaymentVerifyInput, user: dict = Depends(current_user)):
+    if _rzp_client is None:
+        raise HTTPException(status_code=503, detail="Razorpay not configured on server")
+    if not (body.razorpay_order_id and body.razorpay_payment_id and body.razorpay_signature):
+        raise HTTPException(status_code=400, detail="Missing payment fields")
+
+    ok = _verify_razorpay_signature(body.razorpay_order_id, body.razorpay_payment_id, body.razorpay_signature)
+    if not ok:
+        await log_activity("payment_signature_mismatch", actor=user, meta={
+            "razorpay_order_id": body.razorpay_order_id,
+            "razorpay_payment_id": body.razorpay_payment_id,
+        })
+        raise HTTPException(status_code=400, detail="Invalid payment signature")
+
+    # Look up local record
+    payment = await db.payments.find_one({"razorpay_order_id": body.razorpay_order_id}, {"_id": 0})
+    if not payment:
+        raise HTTPException(status_code=404, detail="Payment record not found")
+    if payment["user_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="Not your payment")
+
+    # Idempotent update
+    await db.payments.update_one(
+        {"razorpay_order_id": body.razorpay_order_id},
+        {"$set": {
+            "razorpay_payment_id": body.razorpay_payment_id,
+            "razorpay_signature": body.razorpay_signature,
+            "status": "paid",
+            "verified_at": now_iso(),
+        }},
+    )
+
+    # Mark the linked resource as paid depending on purpose
+    purpose = payment.get("purpose") or body.purpose
+    ref_id = payment.get("reference_id") or body.reference_id
+    if purpose == "appointment" and ref_id:
+        await db.appointments.update_one(
+            {"id": ref_id, "patient_id": user["id"]},
+            {"$set": {"paid": True, "paid_at": now_iso(), "razorpay_payment_id": body.razorpay_payment_id}},
+        )
+    elif purpose == "medicine_order" and ref_id:
+        await db.medicine_orders.update_one(
+            {"id": ref_id, "user_id": user["id"]},
+            {"$set": {"paid": True, "paid_at": now_iso(), "razorpay_payment_id": body.razorpay_payment_id}},
+        )
+    elif purpose == "lab_booking" and ref_id:
+        await db.lab_bookings.update_one(
+            {"id": ref_id, "user_id": user["id"]},
+            {"$set": {"paid": True, "paid_at": now_iso(), "razorpay_payment_id": body.razorpay_payment_id}},
+        )
+    elif purpose == "diet_plan" and ref_id:
+        await db.diet_plans.update_one(
+            {"id": ref_id, "user_id": user["id"]},
+            {"$set": {"paid": True, "paid_at": now_iso(), "razorpay_payment_id": body.razorpay_payment_id}},
+        )
+
+    await log_activity("payment_verified", actor=user, meta={
+        "razorpay_order_id": body.razorpay_order_id,
+        "razorpay_payment_id": body.razorpay_payment_id,
+        "purpose": purpose, "reference_id": ref_id,
+    })
+
+    return {
+        "success": True,
+        "razorpay_payment_id": body.razorpay_payment_id,
+        "purpose": purpose,
+        "reference_id": ref_id,
+    }
+
+
+@api_router.get("/payments/mine")
+async def my_payments(user: dict = Depends(current_user)):
+    items = await db.payments.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    return items
+
+
+@app.get("/api/payments/checkout/{order_id}", response_class=HTMLResponse)
+async def payment_checkout_page(
+    order_id: str,
+    amount: int,
+    name: str = "Online Vaidhyaji",
+    description: str = "Consultation",
+    prefill_name: str = "",
+    prefill_email: str = "",
+    prefill_contact: str = "",
+):
+    """HTML page hosting the Razorpay Standard Checkout modal.
+
+    Loaded inside a React Native WebView so it works in Expo Go without
+    installing react-native-razorpay. On success/failure the page posts
+    a message back to the WebView via window.ReactNativeWebView.postMessage.
+    """
+    safe_order = ''.join(c for c in order_id if c.isalnum() or c in '_-')[:60]
+    if not safe_order:
+        raise HTTPException(status_code=400, detail="Invalid order id")
+    order_js = json.dumps(safe_order)
+    key_js = json.dumps(RAZORPAY_KEY_ID)
+    amount_js = json.dumps(int(amount))
+    name_js = json.dumps(name)
+    desc_js = json.dumps(description)
+    pn = json.dumps(prefill_name or "")
+    pe = json.dumps(prefill_email or "")
+    pc = json.dumps(prefill_contact or "")
+
+    html = f"""<!doctype html>
+<html>
+<head>
+  <meta name='viewport' content='width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no'/>
+  <meta charset='utf-8'/>
+  <title>Vaidhyaji Checkout</title>
+  <style>
+    html, body {{ margin:0; padding:0; height:100%; width:100%; background:#0F4C36; font-family:-apple-system, Roboto, sans-serif; color:#F7F5F0; }}
+    .wrap {{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; text-align:center; padding:24px; }}
+    .card {{ max-width:340px; }}
+    .spinner {{ width:36px; height:36px; border:3px solid rgba(255,255,255,0.25); border-top-color:#F4B942; border-radius:50%; margin:0 auto 16px; animation:spin 1s linear infinite; }}
+    @keyframes spin {{ to {{ transform:rotate(360deg); }} }}
+    .amount {{ font-size:36px; font-weight:700; color:#F4B942; margin:8px 0 4px; }}
+    .desc {{ font-size:13px; opacity:0.8; margin-bottom:20px; }}
+    button {{ background:#F4B942; color:#0F4C36; border:0; padding:14px 28px; border-radius:24px; font-weight:700; font-size:15px; cursor:pointer; width:100%; }}
+    button:disabled {{ opacity:0.6; }}
+    .msg {{ margin-top:16px; font-size:13px; opacity:0.9; }}
+    .err {{ color:#FFA07A; }}
+    .ok {{ color:#A0E5C0; }}
+  </style>
+</head>
+<body>
+  <div class='wrap'>
+    <div class='card'>
+      <div class='spinner' id='spinner'></div>
+      <div class='amount'>₹{{amount_display}}</div>
+      <div class='desc' id='desc'></div>
+      <button id='payBtn' onclick='openCheckout()'>Pay Now</button>
+      <div class='msg' id='msg'></div>
+    </div>
+  </div>
+  <script src='https://checkout.razorpay.com/v1/checkout.js'></script>
+  <script>
+    var ORDER_ID = {order_js};
+    var KEY_ID = {key_js};
+    var AMOUNT = {amount_js};
+    var NAME = {name_js};
+    var DESC = {desc_js};
+    var PN = {pn}, PE = {pe}, PC = {pc};
+
+    document.getElementById('desc').textContent = DESC;
+    document.querySelector('.amount').textContent = '\u20B9' + (AMOUNT/100).toFixed(2);
+
+    function post(payload) {{
+      try {{ if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify(payload)); }} catch(_) {{}}
+    }}
+
+    function openCheckout() {{
+      document.getElementById('payBtn').disabled = true;
+      document.getElementById('msg').textContent = 'Opening secure Razorpay…';
+      var options = {{
+        key: KEY_ID,
+        amount: AMOUNT,
+        currency: 'INR',
+        name: NAME,
+        description: DESC,
+        order_id: ORDER_ID,
+        prefill: {{ name: PN, email: PE, contact: PC }},
+        theme: {{ color: '#0F4C36' }},
+        modal: {{
+          ondismiss: function() {{
+            document.getElementById('payBtn').disabled = false;
+            document.getElementById('msg').innerHTML = "<span class='err'>Payment cancelled. Tap Pay Now to retry.</span>";
+            post({{ type: 'dismiss' }});
+          }}
+        }},
+        handler: function(response) {{
+          document.getElementById('msg').innerHTML = "<span class='ok'>Payment received. Verifying…</span>";
+          post({{
+            type: 'success',
+            razorpay_payment_id: response.razorpay_payment_id,
+            razorpay_order_id: response.razorpay_order_id,
+            razorpay_signature: response.razorpay_signature
+          }});
+        }}
+      }};
+      try {{
+        var rzp = new Razorpay(options);
+        rzp.on('payment.failed', function(resp) {{
+          document.getElementById('payBtn').disabled = false;
+          var desc = (resp && resp.error && resp.error.description) || 'Payment failed';
+          document.getElementById('msg').innerHTML = "<span class='err'>" + desc + "</span>";
+          post({{ type: 'failed', description: desc, code: (resp && resp.error && resp.error.code) || '' }});
+        }});
+        rzp.open();
+      }} catch (e) {{
+        document.getElementById('payBtn').disabled = false;
+        document.getElementById('msg').innerHTML = "<span class='err'>" + e.message + "</span>";
+        post({{ type: 'error', message: e.message }});
+      }}
+    }}
+
+    // Auto-open on load
+    window.addEventListener('load', function() {{ setTimeout(openCheckout, 400); }});
+  </script>
+</body>
+</html>"""
+    # amount_display placeholder replacement (kept for readability)
+    html = html.replace("{amount_display}", f"{amount/100:.2f}")
+    return HTMLResponse(html)
+
+
 # ----------------- Reports (Health Records vault) -----------------
 @api_router.post("/reports")
 async def add_report(body: ReportInput, user: dict = Depends(current_user)):

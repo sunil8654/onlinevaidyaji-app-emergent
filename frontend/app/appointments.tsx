@@ -1,19 +1,23 @@
 import { useEffect, useState } from "react";
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, TextInput, ScrollView } from "react-native";
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, TextInput, ScrollView, Alert } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { api } from "@/src/api";
 import { Feather } from "@expo/vector-icons";
+import { RazorpayCheckout } from "@/src/components/RazorpayCheckout";
+import { useAuth } from "@/src/auth";
 
 export default function Appointments() {
   const router = useRouter();
+  const { user } = useAuth();
   const [items, setItems] = useState<any[]>([]);
   const [rxOpen, setRxOpen] = useState<string | null>(null);
   const [diagnosis, setDiagnosis] = useState("");
   const [medicines, setMedicines] = useState("");
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
+  const [payTarget, setPayTarget] = useState<any | null>(null);
 
   const load = async () => {
     try { setItems(await api.listAppointments()); } catch {}
@@ -80,13 +84,23 @@ export default function Appointments() {
                   <Feather name="video" size={14} color={COLORS.surface} />
                   <Text style={styles.joinText}>Join call</Text>
                 </TouchableOpacity>
+                {!item.paid && (
+                  <TouchableOpacity
+                    style={styles.payBtn}
+                    onPress={() => setPayTarget(item)}
+                    testID={`appt-pay-${item.id}`}
+                  >
+                    <Feather name="credit-card" size={14} color={COLORS.surface} />
+                    <Text style={styles.joinText}>Pay ₹{item.amount || 500}</Text>
+                  </TouchableOpacity>
+                )}
                 <TouchableOpacity
                   style={[styles.rxBtn, hasRx && { backgroundColor: COLORS.success }]}
                   onPress={() => setRxOpen(item.id)}
                   testID={`appt-rx-${item.id}`}
                 >
                   <Feather name="file-text" size={14} color={COLORS.surface} />
-                  <Text style={styles.joinText}>{hasRx ? "Rx added" : "Add Rx (demo)"}</Text>
+                  <Text style={styles.joinText}>{hasRx ? "Rx" : "Rx"}</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -123,6 +137,27 @@ export default function Appointments() {
           </View>
         </View>
       </Modal>
+
+      <RazorpayCheckout
+        visible={!!payTarget}
+        onClose={() => setPayTarget(null)}
+        onSuccess={() => {
+          Alert.alert("Payment successful", "Your consultation is confirmed.");
+          setPayTarget(null);
+          load();
+        }}
+        onFailure={(reason) => {
+          if (reason && reason !== "payment_failed" && reason !== "verification_failed") {
+            Alert.alert("Payment issue", reason);
+          }
+        }}
+        amount={payTarget?.amount || 500}
+        purpose="appointment"
+        reference_id={payTarget?.id}
+        description={`Consultation with ${payTarget?.doctor_name || "Vaidya"}`}
+        title="Online Vaidhyaji"
+        prefill={{ name: user?.name || "", email: user?.email || "", contact: (user as any)?.phone || "" }}
+      />
     </SafeAreaView>
   );
 }
@@ -143,7 +178,8 @@ const styles = StyleSheet.create({
   paidText: { color: COLORS.success, fontWeight: "700", fontSize: 10, letterSpacing: 1 },
   actionRow: { flexDirection: "row", gap: 8, marginTop: SPACING.md },
   joinBtn: { flex: 1, flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 6, backgroundColor: COLORS.brand, paddingVertical: 10, borderRadius: RADIUS.pill },
-  rxBtn: { flex: 1, flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 6, backgroundColor: COLORS.accent, paddingVertical: 10, borderRadius: RADIUS.pill },
+  payBtn: { flex: 1, flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 6, backgroundColor: "#D9663D", paddingVertical: 10, borderRadius: RADIUS.pill },
+  rxBtn: { paddingHorizontal: 14, flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 6, backgroundColor: COLORS.accent, paddingVertical: 10, borderRadius: RADIUS.pill },
   joinText: { color: COLORS.surface, fontWeight: "700", fontSize: 12 },
   empty: { color: COLORS.textSecondary, textAlign: "center", marginTop: 40 },
   modalWrap: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "flex-end" },

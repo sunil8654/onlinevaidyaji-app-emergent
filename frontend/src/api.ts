@@ -135,6 +135,13 @@ export const api = {
   createVideoSession: (body: { appointment_id?: string; doctor_id?: string; duration_minutes?: number }) =>
     request<{ room_url: string; room_name: string; token: string; embed_url: string; is_owner: boolean; exp: number; user_name: string }>("/video/session", "POST", body),
 
+  // Payments (Razorpay)
+  createPaymentOrder: (body: { amount: number; currency?: string; purpose: string; reference_id?: string; description?: string }) =>
+    request<{ order_id: string; amount: number; currency: string; receipt: string; key_id: string; purpose: string; reference_id: string | null }>("/payments/create-order", "POST", body),
+  verifyPayment: (body: { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string; purpose?: string; reference_id?: string }) =>
+    request<{ success: boolean; razorpay_payment_id: string; purpose: string; reference_id: string | null }>("/payments/verify", "POST", body),
+  myPayments: () => request("/payments/mine"),
+
   // Admin broadcast
   adminBroadcast: (body: { title: string; message: string; audience: string }) =>
     request("/admin/broadcast", "POST", body),

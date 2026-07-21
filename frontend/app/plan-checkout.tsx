@@ -1,17 +1,20 @@
-// Simple plan-purchase mock screen used for Weekly Diet Plan (₹200) and AI Yoga (₹500/mo).
+// Real Razorpay checkout for Weekly Diet Plan (₹200) and AI Yoga (₹500/mo).
 import { useState } from "react";
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { Feather } from "@expo/vector-icons";
+import { RazorpayCheckout } from "@/src/components/RazorpayCheckout";
+import { useAuth } from "@/src/auth";
 
-const PLANS: Record<string, { title: string; price: number; period: string; features: string[]; kicker: string }> = {
+const PLANS: Record<string, { title: string; price: number; period: string; features: string[]; kicker: string; purpose: "diet_plan" | "custom" }> = {
   "weekly-diet": {
     title: "7-Day AYUSH Diet Plan",
     price: 200,
     period: "one-time",
     kicker: "Certified Vaidhyaji Dietician",
+    purpose: "diet_plan",
     features: [
       "Full 7-day meal chart tailored to your dosha",
       "Groceries + recipes list included",
@@ -25,6 +28,7 @@ const PLANS: Record<string, { title: string; price: number; period: string; feat
     price: 500,
     period: "per month",
     kicker: "Daily 20-min personalised sessions",
+    purpose: "custom",
     features: [
       "Daily AI-guided yoga class (20 min)",
       "Personalised to your condition (back pain, PCOS, anxiety…)",
@@ -37,17 +41,25 @@ const PLANS: Record<string, { title: string; price: number; period: string; feat
 
 export default function PlanCheckout() {
   const router = useRouter();
+  const { user } = useAuth();
   const { type } = useLocalSearchParams<{ type?: string }>();
   const plan = PLANS[type || "weekly-diet"] || PLANS["weekly-diet"];
-  const [busy, setBusy] = useState(false);
+  const [showRzp, setShowRzp] = useState(false);
   const [ok, setOk] = useState(false);
 
-  const pay = async () => {
-    setBusy(true);
-    await new Promise((r) => setTimeout(r, 900));
-    setBusy(false);
+  const startPayment = () => {
+    setShowRzp(true);
+  };
+
+  const handleSuccess = () => {
     setOk(true);
-    setTimeout(() => router.back(), 1400);
+    setTimeout(() => router.back(), 1600);
+  };
+
+  const handleFailure = (reason: string) => {
+    if (reason && reason !== "payment_failed" && reason !== "verification_failed") {
+      Alert.alert("Payment issue", reason);
+    }
   };
 
   return (
@@ -83,8 +95,8 @@ export default function PlanCheckout() {
         <View style={styles.method}>
           <Feather name="credit-card" size={18} color={COLORS.brand} />
           <View style={{ flex: 1 }}>
-            <Text style={styles.methodTitle}>UPI / Cards (Demo)</Text>
-            <Text style={styles.methodSub}>Real Razorpay integration plugs in on deploy.</Text>
+            <Text style={styles.methodTitle}>UPI · Cards · NetBanking · Wallets</Text>
+            <Text style={styles.methodSub}>Powered by Razorpay · 100% secure</Text>
           </View>
           <Feather name="check-circle" size={18} color={COLORS.success} />
         </View>
@@ -92,15 +104,31 @@ export default function PlanCheckout() {
         {ok ? (
           <View style={styles.okBox}>
             <Feather name="check-circle" size={20} color={COLORS.success} />
-            <Text style={styles.okText}>Payment successful (demo). We&apos;ve sent a WhatsApp confirmation.</Text>
+            <Text style={styles.okText}>Payment successful! We&apos;ve sent a WhatsApp confirmation.</Text>
           </View>
         ) : (
-          <TouchableOpacity style={[styles.payBtn, busy && { opacity: 0.6 }]} onPress={pay} disabled={busy} testID="pc-pay">
-            <Text style={styles.payBtnText}>{busy ? "Processing…" : `Pay ₹${plan.price}`}</Text>
+          <TouchableOpacity style={styles.payBtn} onPress={startPayment} testID="pc-pay">
+            <Text style={styles.payBtnText}>Pay ₹{plan.price} securely</Text>
             <Feather name="arrow-right" size={18} color={COLORS.surface} />
           </TouchableOpacity>
         )}
       </ScrollView>
+
+      <RazorpayCheckout
+        visible={showRzp}
+        onClose={() => setShowRzp(false)}
+        onSuccess={handleSuccess}
+        onFailure={handleFailure}
+        amount={plan.price}
+        purpose={plan.purpose}
+        description={plan.title}
+        title="Online Vaidhyaji"
+        prefill={{
+          name: user?.name || "",
+          email: user?.email || "",
+          contact: (user as any)?.phone || "",
+        }}
+      />
     </SafeAreaView>
   );
 }
