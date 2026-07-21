@@ -1,7 +1,7 @@
 // Prakriti (Vata / Pitta / Kapha) constitution quiz.
 // 12 questions across body, digestion, energy, mind, sleep dimensions.
 // Result is saved to the user's patient profile.
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Platform } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, Stack } from "expo-router";
@@ -160,7 +160,7 @@ export default function PrakritiQuiz() {
   };
 
   // When we reach the results step, automatically submit
-  useMemo(() => {
+  useEffect(() => {
     if (isDone && !result && !busy && answered === total) {
       submit();
     }

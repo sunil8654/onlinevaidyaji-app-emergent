@@ -198,6 +198,75 @@ frontend:
 
 metadata:
   created_by: "main_agent"
+
+  - task: "Prakriti (Vata/Pitta/Kapha) constitution assessment — POST /api/prakriti/assess"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "9/9 iter17 tests pass. 400 for <5 answers, correct dosha maths (pure + dual constitution within 10pts), upserts patient_profiles.dosha for patient role only, no persistence for doctor role."
+
+  - task: "Structured multi-day meal plan — POST /api/diet-plan (JSON output)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "duration_days (1/3/7) with clamping, structured=true → Claude Sonnet 4.5 returns valid JSON parsed into plan_structured (3 days × 7 slots verified). Auto-fills dosha from patient profile when not passed. Legacy body still works (text plan, plan_structured=null)."
+
+frontend_task_c:
+  - task: "Prakriti quiz screen"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/prakriti-quiz.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "12 questions with progress bar, auto-advance on pick, auto-submit on completion, results screen with dosha hero, score bars, traits, balance. CTAs wire to diet-plan and retake."
+      - working: true
+        agent: "main"
+        comment: "Replaced useMemo with useEffect for auto-submit (semantic correctness)."
+
+  - task: "Diet plan screen — structured plan renderer + dosha auto-fill + duration selector"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/diet-plan.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Loads saved dosha, shows Prakriti badge or 'Discover your Prakriti' banner. Duration selector (1/3/7), structured toggle, day tabs for multi-day plans, meal cards with slot/title/items/reasoning, favour/avoid boxes. Legacy text plans still render."
+
+  - task: "Prakriti entry points — home tile + profile CTA"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/(tabs)/home.tsx, /app/frontend/app/(tabs)/profile.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "home-prakriti tile (row 2 of engagement grid, replacing 'Near You') and profile-prakriti CTA (on dosha card) both navigate to /prakriti-quiz."
+
+agent_communication_task_c:
+  - agent: "main"
+    message: "Task C (Personalized Diet Plans) complete. Added /api/prakriti/assess (12-question quiz math with dominant + dual dosha), enhanced /api/diet-plan with structured JSON multi-day output via Claude Sonnet 4.5. New /prakriti-quiz screen and fully rewritten /diet-plan screen with day tabs, meal cards, favour/avoid, and Prakriti-aware banners. All 9 iter17 tests + full frontend flow verified. Only Task B (AI Yoga) remaining."
+
   version: "1.1"
   test_sequence: 16
   run_ui: false
