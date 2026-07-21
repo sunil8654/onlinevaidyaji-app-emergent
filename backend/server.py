@@ -594,6 +594,7 @@ async def video_embed(room_name: str, token: str = "", user_name: str = "Guest",
         call.on('error', function(e){{ document.getElementById('loader').innerHTML = 'Connection error: ' + (e && e.errorMsg ? e.errorMsg : 'unknown'); }});
         call.on('left-meeting', function(){{
           try {{ if (window.ReactNativeWebView) {{ window.ReactNativeWebView.postMessage(JSON.stringify({{type:'left'}})); }} }} catch(_) {{}}
+          try {{ if (window.parent && window.parent !== window) {{ window.parent.postMessage(JSON.stringify({{type:'left'}}), '*'); }} }} catch(_) {{}}
         }});
         var joinOpts = {{ url: roomUrl, userName: userName }};
         if (token) joinOpts.token = token;
@@ -864,6 +865,7 @@ async def payment_checkout_page(
 
     function post(payload) {{
       try {{ if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify(payload)); }} catch(_) {{}}
+      try {{ if (window.parent && window.parent !== window) window.parent.postMessage(JSON.stringify(payload), '*'); }} catch(_) {{}}
     }}
 
     function openCheckout() {{

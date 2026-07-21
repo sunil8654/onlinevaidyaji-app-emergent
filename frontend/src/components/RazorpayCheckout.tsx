@@ -1,7 +1,7 @@
 // Reusable Razorpay Checkout modal that works in Expo Go via WebView.
 // Loads Razorpay Standard Checkout inside a WebView (hosted from our backend)
 // and reports success/failure/dismiss events back to the parent.
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Modal,
   View,
@@ -10,6 +10,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
+  Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
@@ -92,13 +93,33 @@ export function RazorpayCheckout({
     };
   }, [visible]);
 
+  const iframeRef = useRef<any>(null);
+
+  // Web: listen to postMessage from iframe
+  useEffect(() => {
+    if (Platform.OS !== "web" || !visible) return;
+    const onMsg = (evt: MessageEvent) => {
+      try {
+        const data = typeof evt.data === "string" ? JSON.parse(evt.data) : evt.data;
+        // route through the same handler shape
+        handleMessage({ nativeEvent: { data: typeof evt.data === "string" ? evt.data : JSON.stringify(data) } } as any);
+      } catch {
+        // ignore
+      }
+    };
+    // @ts-ignore
+    window.addEventListener("message", onMsg);
+    // @ts-ignore
+    return () => window.removeEventListener("message", onMsg);
+  }, [visible, embedUrl]);
+
   const handleMessage = async (evt: any) => {
     try {
       const msg = JSON.parse(evt.nativeEvent.data);
       if (msg?.type === "success") {
         setVerifying(true);
         try {
-          const res = await api.verifyPayment({
+          await api.verifyPayment({
             razorpay_order_id: msg.razorpay_order_id,
             razorpay_payment_id: msg.razorpay_payment_id,
             razorpay_signature: msg.razorpay_signature,
@@ -173,15 +194,28 @@ export function RazorpayCheckout({
           </View>
         )}
         {!loading && !error && embedUrl && (
-          <WebView
-            source={{ uri: embedUrl }}
-            style={{ flex: 1, backgroundColor: COLORS.brand }}
-            javaScriptEnabled
-            domStorageEnabled
-            originWhitelist={["*"]}
-            onMessage={handleMessage}
-            mixedContentMode="always"
-          />
+          Platform.OS === "web" ? (
+            // On web, react-native-webview is a no-op. Render an iframe instead.
+            // @ts-ignore
+            <iframe
+              ref={iframeRef}
+              src={embedUrl}
+              title="Razorpay Checkout"
+              // @ts-ignore
+              allow="payment *; clipboard-read; clipboard-write"
+              style={{ flex: 1, border: 0, backgroundColor: COLORS.brand, width: "100%", height: "100%" }}
+            />
+          ) : (
+            <WebView
+              source={{ uri: embedUrl }}
+              style={{ flex: 1, backgroundColor: COLORS.brand }}
+              javaScriptEnabled
+              domStorageEnabled
+              originWhitelist={["*"]}
+              onMessage={handleMessage}
+              mixedContentMode="always"
+            />
+          )
         )}
         {verifying && (
           <View style={styles.verifying}>

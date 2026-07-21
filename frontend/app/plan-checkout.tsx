@@ -41,13 +41,20 @@ const PLANS: Record<string, { title: string; price: number; period: string; feat
 
 export default function PlanCheckout() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const { type } = useLocalSearchParams<{ type?: string }>();
   const plan = PLANS[type || "weekly-diet"] || PLANS["weekly-diet"];
   const [showRzp, setShowRzp] = useState(false);
   const [ok, setOk] = useState(false);
 
   const startPayment = () => {
+    if (authLoading) return;
+    if (!user) {
+      Alert.alert("Login required", "Please log in to purchase this plan.", [
+        { text: "OK", onPress: () => router.replace("/auth/login") },
+      ]);
+      return;
+    }
     setShowRzp(true);
   };
 
@@ -107,8 +114,8 @@ export default function PlanCheckout() {
             <Text style={styles.okText}>Payment successful! We&apos;ve sent a WhatsApp confirmation.</Text>
           </View>
         ) : (
-          <TouchableOpacity style={styles.payBtn} onPress={startPayment} testID="pc-pay">
-            <Text style={styles.payBtnText}>Pay ₹{plan.price} securely</Text>
+          <TouchableOpacity style={[styles.payBtn, authLoading && { opacity: 0.6 }]} disabled={authLoading} onPress={startPayment} testID="pc-pay">
+            <Text style={styles.payBtnText}>{authLoading ? "Loading…" : `Pay ₹${plan.price} securely`}</Text>
             <Feather name="arrow-right" size={18} color={COLORS.surface} />
           </TouchableOpacity>
         )}

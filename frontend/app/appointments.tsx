@@ -10,7 +10,7 @@ import { useAuth } from "@/src/auth";
 
 export default function Appointments() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [items, setItems] = useState<any[]>([]);
   const [rxOpen, setRxOpen] = useState<string | null>(null);
   const [diagnosis, setDiagnosis] = useState("");
@@ -86,8 +86,12 @@ export default function Appointments() {
                 </TouchableOpacity>
                 {!item.paid && (
                   <TouchableOpacity
-                    style={styles.payBtn}
-                    onPress={() => setPayTarget(item)}
+                    style={[styles.payBtn, authLoading && { opacity: 0.6 }]}
+                    disabled={authLoading}
+                    onPress={() => {
+                      if (!user) return;
+                      setPayTarget(item);
+                    }}
                     testID={`appt-pay-${item.id}`}
                   >
                     <Feather name="credit-card" size={14} color={COLORS.surface} />

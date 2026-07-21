@@ -1,7 +1,7 @@
 // Real video consultation powered by Daily.co (WebView + Daily Prebuilt).
 // Works in Expo Go without a native build.
 import { useEffect, useRef, useState } from "react";
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert, Platform } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { WebView } from "react-native-webview";
@@ -71,6 +71,21 @@ export default function VideoCall() {
     } catch {}
   };
 
+  // Web: listen to postMessage from iframe
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    const onMsg = (evt: MessageEvent) => {
+      try {
+        const data = typeof evt.data === "string" ? evt.data : JSON.stringify(evt.data);
+        handleMessage({ nativeEvent: { data } } as any);
+      } catch {}
+    };
+    // @ts-ignore
+    window.addEventListener("message", onMsg);
+    // @ts-ignore
+    return () => window.removeEventListener("message", onMsg);
+  }, []);
+
   const handleEnd = () => {
     if (ended) return;
     setEnded(true);
@@ -129,25 +144,37 @@ export default function VideoCall() {
             </View>
           )}
           {!loading && !error && embedUrl && (
-            <WebView
-              ref={webviewRef}
-              source={{ uri: embedUrl }}
-              style={{ flex: 1, backgroundColor: "#0F4C36" }}
-              javaScriptEnabled
-              domStorageEnabled
-              originWhitelist={["*"]}
-              allowsInlineMediaPlayback
-              mediaPlaybackRequiresUserAction={false}
-              allowsFullscreenVideo
-              onMessage={handleMessage}
-              onLoad={() => setJoined(true)}
-              onError={(e) => setError("Video failed to load")}
-              // Grant camera/mic on Android
-              onPermissionRequest={(event: any) => {
-                event?.grant?.(event.resources);
-              }}
-              mixedContentMode="always"
-            />
+            Platform.OS === "web" ? (
+              // @ts-ignore
+              <iframe
+                src={embedUrl}
+                title="Vaidhyaji Consultation"
+                // @ts-ignore
+                allow="camera; microphone; autoplay; display-capture; fullscreen"
+                style={{ flex: 1, border: 0, backgroundColor: "#0F4C36", width: "100%", height: "100%" }}
+                onLoad={() => setJoined(true)}
+              />
+            ) : (
+              <WebView
+                ref={webviewRef}
+                source={{ uri: embedUrl }}
+                style={{ flex: 1, backgroundColor: "#0F4C36" }}
+                javaScriptEnabled
+                domStorageEnabled
+                originWhitelist={["*"]}
+                allowsInlineMediaPlayback
+                mediaPlaybackRequiresUserAction={false}
+                allowsFullscreenVideo
+                onMessage={handleMessage}
+                onLoad={() => setJoined(true)}
+                onError={() => setError("Video failed to load")}
+                // Grant camera/mic on Android
+                onPermissionRequest={(event: any) => {
+                  event?.grant?.(event.resources);
+                }}
+                mixedContentMode="always"
+              />
+            )
           )}
         </View>
 
