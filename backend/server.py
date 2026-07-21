@@ -324,6 +324,19 @@ async def create_appointment(body: AppointmentInput, user: dict = Depends(curren
     await log_activity("appointment_booked", actor=user, meta={
         "doctor_name": doctor["name"], "specialty": doctor["specialty"], "slot": body.slot,
     })
+    # Push notification to patient (non-blocking)
+    try:
+        await send_push(
+            recipients=[user["id"]],
+            data={
+                "title": "Appointment booked ✅",
+                "message": f"Consultation with {doctor['name']} on {body.slot}",
+                "action_url": "/appointments",
+            },
+            idempotency_key=f"appt_booked_{appt['id']}",
+        )
+    except Exception as e:
+        logger.warning(f"appt-book push failed (non-blocking): {e}")
     return appt
 
 
@@ -361,6 +374,20 @@ async def add_prescription(appt_id: str, body: PrescriptionInput, user: dict = D
         "author_name": user["name"],
     }
     await db.appointments.update_one({"id": appt_id}, {"$set": {"prescription": prescription}})
+    # Push notify the patient that a new Rx is available (non-blocking)
+    if appt.get("patient_id") and appt["patient_id"] != user["id"]:
+        try:
+            await send_push(
+                recipients=[appt["patient_id"]],
+                data={
+                    "title": "New prescription 📄",
+                    "message": f"Dr. {user['name']} added your prescription. Tap to view.",
+                    "action_url": "/appointments",
+                },
+                idempotency_key=f"rx_{appt_id}",
+            )
+        except Exception as e:
+            logger.warning(f"rx push failed (non-blocking): {e}")
     return prescription
 
 
@@ -777,6 +804,29 @@ async def verify_payment(body: PaymentVerifyInput, user: dict = Depends(current_
         "razorpay_payment_id": body.razorpay_payment_id,
         "purpose": purpose, "reference_id": ref_id,
     })
+
+    # Push notification confirming payment (non-blocking)
+    try:
+        amount_rs = int(payment.get("amount", 0)) / 100
+        purpose_labels = {
+            "appointment": "consultation",
+            "diet_plan": "diet plan",
+            "medicine_order": "medicine order",
+            "lab_booking": "lab test",
+            "custom": "purchase",
+        }
+        label = purpose_labels.get(purpose or "custom", "purchase")
+        await send_push(
+            recipients=[user["id"]],
+            data={
+                "title": "Payment received ✅",
+                "message": f"₹{amount_rs:.0f} paid for your {label}. Thank you!",
+                "action_url": "/(tabs)/profile",
+            },
+            idempotency_key=f"pay_verified_{body.razorpay_payment_id}",
+        )
+    except Exception as e:
+        logger.warning(f"pay-verify push failed (non-blocking): {e}")
 
     return {
         "success": True,
@@ -1429,6 +1479,20 @@ async def admin_approve_doctor(doctor_id: str, admin: dict = Depends(require_adm
     if d.get("user_id"):
         await db.users.update_one({"id": d["user_id"]}, {"$set": {"verified": True}})
     await log_activity("admin_doctor_approved", actor=admin, meta={"doctor_id": doctor_id, "name": d.get("name")})
+    # Push notification to doctor (non-blocking)
+    if d.get("user_id"):
+        try:
+            await send_push(
+                recipients=[d["user_id"]],
+                data={
+                    "title": "You're approved! 🎉",
+                    "message": f"Welcome to Online Vaidhyaji, Dr. {d.get('name', 'Vaidya')}. Start seeing patients now.",
+                    "action_url": "/doctor/home",
+                },
+                idempotency_key=f"doc_approved_{doctor_id}",
+            )
+        except Exception as e:
+            logger.warning(f"doc-approved push failed (non-blocking): {e}")
     return {"ok": True}
 
 

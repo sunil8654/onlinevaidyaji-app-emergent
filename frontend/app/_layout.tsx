@@ -8,8 +8,9 @@ import * as Notifications from "expo-notifications";
 import * as Linking from "expo-linking";
 
 import { useIconFonts } from "@/src/hooks/use-icon-fonts";
-import { AuthProvider } from "@/src/auth";
+import { AuthProvider, useAuth } from "@/src/auth";
 import { I18nProvider } from "@/src/i18n";
+import { registerForPush } from "@/src/push";
 
 LogBox.ignoreAllLogs(true);
 
@@ -85,9 +86,21 @@ export default function RootLayout() {
       <I18nProvider>
         <AuthProvider>
           <StatusBar style="dark" />
+          <PushRegistrar />
           <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#F7F5F0" } }} />
         </AuthProvider>
       </I18nProvider>
     </SafeAreaProvider>
   );
+}
+
+// Re-registers push token whenever the user changes (login/reopen).
+function PushRegistrar() {
+  const { user } = useAuth();
+  useEffect(() => {
+    if (Platform.OS === "web") return;
+    if (!user?.id) return;
+    registerForPush(user.id).catch(() => {});
+  }, [user?.id]);
+  return null;
 }
