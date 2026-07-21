@@ -281,3 +281,57 @@ test_plan:
 agent_communication:
   - agent: "main"
     message: "Task A (Doctor Dashboard) complete. Added backend endpoints for earnings + patient history, enhanced PrescriptionInput with structured medicines, symptoms, advice, follow_up. Frontend now has /doctor/earnings, /doctor/patient/[id], /doctor/prescription/[apptId] with PDF export (expo-print/expo-sharing). Fixed pre-existing doctor auth bug across /appointments listing, prescription, and video session — now resolves doctors.id from users row. Testing agent verified all 12 iter16 tests + regression suite. Next task per user preference: Personalized Diet Plans (Task C)."
+
+task_b_ai_yoga:
+  - task: "Curated yoga video library — GET /api/yoga/library, /yoga/sessions/{id}"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "17/17 iter18 tests pass. 8 sessions across 8 categories, correct filters, dosha-based recommendations for patient (Prakriti-aware), no persistence for doctors."
+
+  - task: "Yoga session logging & streaks — POST /api/yoga/log, GET /api/yoga/mine"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Logs persist to yoga_sessions; mine endpoint computes streak_days from consecutive UTC dates and total_minutes accurately."
+
+  - task: "AI Yoga library screen"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/ai-yoga.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Hero with stats pills, Prakriti-aware 'Recommended for you' row, live category filters, item cards, subscription upsell card."
+
+  - task: "Yoga session detail with embedded video + guided timer"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/yoga/[id].tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "YouTube iframe (web) / WebView (native), pose-by-pose countdown, play/pause/skip controls, jump-to-pose via list, auto-log on completion, End & log button verified."
+
+agent_communication_task_b:
+  - agent: "main"
+    message: "Task B (AI Yoga) complete — closing out the entire P2 sequence (Doctor Dashboard → Diet Plans → AI Yoga). 8 curated yoga sessions with real YouTube videos, pose sequences, guided timer, streak tracking. Dosha-aware recommendations tie back to the Prakriti quiz from Task C. 17/17 backend tests + full frontend flow pass. All three P2 items are live."
+
