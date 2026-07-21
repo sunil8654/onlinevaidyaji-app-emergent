@@ -1,0 +1,36 @@
+{
+  "summary": "Light smoke regression after (a) switching iOS/Android package identifiers from `com.emergent.swasthdaily.g2rsso` -> `com.swasthdaily.app` and (b) re-adding `expo.android.googleServicesFile: ./google-services.json`. All 4 verification pillars pass: (1) File presence — google-services.json exists (679 bytes), valid JSON, contains project_info+client+api_key+oauth_client, no `type: service_account`, no `private_key`, registered package_name matches `com.swasthdaily.app` (project_id=online-vaidyaji). (2) app.json valid JSON; both ios.bundleIdentifier and android.package == com.swasthdaily.app; googleServicesFile correctly wired. (3) Backend smoke 6/6 pass (100%) using existing /app/backend/tests/test_iter13_regression.py suite — GET /api/ (200, {message: 'Online Vaidhyaji API', version: '1.0'}), POST /api/auth/login admin (JWT), POST /api/register-push (201 status=pending with placeholder key, non-500 contract preserved), POST /api/appointments (non-blocking push), POST /api/payments/create-order Razorpay (200 with order_id), POST /api/video/session Daily.co (200 with room url). (4) Frontend web preview loads cleanly at http://localhost:3000, 0 console/page errors, landing screen renders full branding (Online Vaidhyaji, Swasth Raho Hamesha, Symptom checker, Book Vaidya, Medicine reminders, Home Remedies, Sign in). Metro bundled 917/954 modules successfully with NO missing-file errors for google-services.json. The only expo warning in logs is the known/expected `expo-notifications: Android push functionality removed from Expo Go SDK 53 — use dev build` — this is EXPECTED and non-fatal (as flagged in request: FCM push only works after native Android build with new package name). No regressions.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter13_regression.py",
+    "/app/test_reports/pytest/pytest_iter14.xml"
+  ],
+  "action_items": [
+    "NONE — package identifier switch + google-services.json re-add are safe and non-regressive. Ready for EAS native Android build. FCM push delivery must be validated by user in a native build (cannot be tested in Expo Go / web preview)."
+  ],
+  "critical_code_review_comments": [
+    "app.json: ios.bundleIdentifier and android.package both correctly set to com.swasthdaily.app (consistent across platforms). ✅",
+    "app.json: googleServicesFile path './google-services.json' correctly relative to /app/frontend/. ✅",
+    "google-services.json: valid Firebase Android client config — NOT a service-account key (no `type: service_account`, no `private_key`). Safe to commit. Registered package_name matches app.json. ✅",
+    "expo-notifications plugin still present in expo.plugins → iOS APNs + local notifications preserved. ✅"
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "100% (6/6)",
+    "frontend": "smoke pass — loads at localhost:3000, 0 JS errors, landing renders, Sign in visible, no missing-file errors in Metro"
+  },
+  "seed_data_creation": "1 test patient (test_iter14 via test_iter13_<uuid>@vaidhyaji.example.com / Vaidhyaji@123) via /api/auth/register; 2 test appointments (slot=2030-*, reason='TEST iter13 regression'/'TEST video iter13'); 1 Razorpay test order (amount=199, purpose=appointment). Reused iter13 suite — all prefixed TEST_ for cleanup.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iter 14 verified the package-id rename (com.emergent.swasthdaily.g2rsso -> com.swasthdaily.app on both iOS+Android) and the re-addition of googleServicesFile in app.json. No backend regressions; frontend web preview loads cleanly. Canonical smoke suite remains /app/backend/tests/test_iter13_regression.py (reusable for future regression). google-services.json (679B) is now committed at /app/frontend/google-services.json — do NOT delete unless main agent explicitly changes package identifier again. Expo-notifications warning about Expo Go SDK 53 is expected/harmless in web preview.",
+  "rca_of_issue": "N/A — verification-only. The prior EAS build blocker (missing google-services.json) is now fully resolved: user provided a valid Firebase Android config for the new package `com.swasthdaily.app` and app.json references it correctly. FCM push delivery on Android will activate on the next EAS native build."
+}

@@ -10,7 +10,7 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.emergent.swasthdaily.g2rsso",
+      "bundleIdentifier": "com.swasthdaily.app",
       "infoPlist": {
         "NSCameraUsageDescription": "Video-consult your AYUSH doctor face-to-face",
         "NSMicrophoneUsageDescription": "Talk with your Vaidya during consultations"
@@ -22,7 +22,8 @@
         "backgroundColor": "#000000"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.emergent.swasthdaily.g2rsso",
+      "package": "com.swasthdaily.app",
+      "googleServicesFile": "./google-services.json",
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO",
