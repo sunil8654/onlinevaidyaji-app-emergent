@@ -144,6 +144,42 @@ export const api = {
       assessed_at: string;
     }>("/prakriti/assess", "POST", body),
 
+  // Yoga library
+  yogaLibrary: (params?: { category?: string; dosha?: string; level?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.category && params.category !== "All") q.set("category", params.category);
+    if (params?.dosha) q.set("dosha", params.dosha);
+    if (params?.level) q.set("level", params.level);
+    const qs = q.toString();
+    return request<{
+      items: {
+        id: string; title: string; category: string; level: string;
+        duration_min: number; dosha_target: string[]; language: string;
+        premium: boolean; thumbnail: string; instructor: string;
+      }[];
+      categories: string[];
+      levels: string[];
+      recommended: { id: string; title: string; category: string; level: string; duration_min: number; dosha_target: string[]; language: string; premium: boolean; thumbnail: string; instructor: string; }[];
+      dosha: string | null;
+      total: number;
+    }>(`/yoga/library${qs ? "?" + qs : ""}`);
+  },
+  yogaSession: (id: string) => request<{
+    id: string; title: string; category: string; level: string; duration_min: number;
+    dosha_target: string[]; language: string; premium: boolean;
+    video_url: string; youtube_id: string; thumbnail: string; instructor: string;
+    benefits: string[];
+    poses: { name: string; duration_sec: number; cue: string }[];
+  }>(`/yoga/sessions/${id}`),
+  yogaLog: (body: { session_id: string; completed_seconds: number; total_seconds: number; completed_poses: number }) =>
+    request("/yoga/log", "POST", body),
+  yogaMine: () => request<{
+    sessions: any[];
+    streak_days: number;
+    total_minutes: number;
+    total_sessions: number;
+  }>("/yoga/mine"),
+
   // Doctor workspace
   doctorMe: () => request("/doctor/me"),
   doctorOnboard: (body: any) => request("/doctor/onboard", "PUT", body),

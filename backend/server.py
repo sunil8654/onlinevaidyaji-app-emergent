@@ -9,7 +9,7 @@ import json
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Dict, Any
 import uuid
 from datetime import datetime, timedelta, timezone
 import jwt
@@ -2417,6 +2417,393 @@ async def admin_broadcast(body: BroadcastInput, admin: dict = Depends(require_ad
         await send_push(ids[i:i+100], {"title": body.title, "message": body.message})
     await log_activity("admin_broadcast", actor=admin, meta={"audience": body.audience, "recipients": len(ids)})
     return {"sent_to": len(ids)}
+
+
+# ----------------- AI Yoga library -----------------
+# Curated free video library. Videos are public-embed YouTube links from well
+# known yoga teachers. Sequences are structured so the app can guide poses
+# on top of the video.
+
+YOGA_LIBRARY: List[Dict[str, Any]] = [
+    {
+        "id": "morning-energy-20",
+        "title": "Morning Energiser Suryanamaskar",
+        "category": "Morning",
+        "level": "Beginner",
+        "duration_min": 20,
+        "dosha_target": ["Kapha", "Vata"],
+        "language": "English",
+        "premium": False,
+        "video_url": "https://www.youtube.com/watch?v=73sjOu0g58M",
+        "youtube_id": "73sjOu0g58M",
+        "thumbnail": "https://images.pexels.com/photos/3822583/pexels-photo-3822583.jpeg",
+        "instructor": "Yoga With Adriene",
+        "benefits": [
+            "Wakes up the spine & warms every joint",
+            "Kindles agni (digestive fire) for the day",
+            "Improves circulation and breath capacity",
+        ],
+        "poses": [
+            {"name": "Centering breath", "duration_sec": 60, "cue": "Sit tall. 6 slow deep breaths through the nose."},
+            {"name": "Tadasana",         "duration_sec": 45, "cue": "Feet together, crown lifted, palms in prayer."},
+            {"name": "Urdhva Hastasana", "duration_sec": 30, "cue": "Inhale, sweep arms up, gaze between thumbs."},
+            {"name": "Uttanasana",       "duration_sec": 45, "cue": "Exhale, fold forward, soften the neck."},
+            {"name": "Ardha Uttanasana", "duration_sec": 30, "cue": "Inhale, flat back, fingertips to shins."},
+            {"name": "Plank",            "duration_sec": 45, "cue": "Step back, wrists under shoulders, gaze forward."},
+            {"name": "Chaturanga",       "duration_sec": 20, "cue": "Elbows hug in, lower halfway with control."},
+            {"name": "Urdhva Mukha",     "duration_sec": 30, "cue": "Roll open, chest forward, thighs lifted."},
+            {"name": "Adho Mukha",       "duration_sec": 60, "cue": "Downward-facing dog. Pedal the feet, lengthen spine."},
+            {"name": "Warrior I (R)",    "duration_sec": 40, "cue": "Right foot forward, bend front knee 90°."},
+            {"name": "Warrior II (R)",   "duration_sec": 40, "cue": "Open hips, arms wide, gaze over right fingertips."},
+            {"name": "Warrior I (L)",    "duration_sec": 40, "cue": "Repeat on the left side."},
+            {"name": "Warrior II (L)",   "duration_sec": 40, "cue": "Open hips, arms wide, gaze over left fingertips."},
+            {"name": "Balasana",         "duration_sec": 60, "cue": "Child's pose. Big toes together, knees wide."},
+            {"name": "Savasana",         "duration_sec": 120, "cue": "Lie back, palms open. Feel the aliveness."},
+        ],
+    },
+    {
+        "id": "back-pain-relief-25",
+        "title": "Back Pain Relief Flow",
+        "category": "Therapy",
+        "level": "Beginner",
+        "duration_min": 25,
+        "dosha_target": ["Vata"],
+        "language": "English",
+        "premium": False,
+        "video_url": "https://www.youtube.com/watch?v=DWKcox3ExAQ",
+        "youtube_id": "DWKcox3ExAQ",
+        "thumbnail": "https://images.pexels.com/photos/4056723/pexels-photo-4056723.jpeg",
+        "instructor": "Yoga With Kassandra",
+        "benefits": [
+            "Releases tension in lumbar & thoracic spine",
+            "Mobilises hips (a common cause of lower-back pain)",
+            "Strengthens deep core stabilisers",
+        ],
+        "poses": [
+            {"name": "Constructive rest",       "duration_sec": 60, "cue": "Feet on floor, knees bent. Notice the low back settle."},
+            {"name": "Apanasana (knees to chest)","duration_sec": 60, "cue": "Draw knees in, gentle circles."},
+            {"name": "Supine Twist (R)",        "duration_sec": 60, "cue": "Knees to the right, gaze left."},
+            {"name": "Supine Twist (L)",        "duration_sec": 60, "cue": "Knees to the left, gaze right."},
+            {"name": "Cat-Cow",                 "duration_sec": 90, "cue": "Slow round and arch with the breath."},
+            {"name": "Bird-Dog (R)",            "duration_sec": 45, "cue": "Right arm + left leg, extend & hold."},
+            {"name": "Bird-Dog (L)",            "duration_sec": 45, "cue": "Switch sides."},
+            {"name": "Sphinx",                  "duration_sec": 60, "cue": "Forearms down, gentle backbend."},
+            {"name": "Child's Pose",            "duration_sec": 60, "cue": "Knees wide, sit hips back."},
+            {"name": "Setu Bandha (Bridge)",    "duration_sec": 60, "cue": "Feet parallel, lift hips, chest to chin."},
+            {"name": "Happy Baby",              "duration_sec": 45, "cue": "Grip outer feet, rock side to side."},
+            {"name": "Savasana",                "duration_sec": 150, "cue": "Full relaxation, palms up."},
+        ],
+    },
+    {
+        "id": "pcos-hormonal-30",
+        "title": "PCOS & Hormonal Balance",
+        "category": "Women",
+        "level": "Intermediate",
+        "duration_min": 30,
+        "dosha_target": ["Kapha", "Pitta"],
+        "language": "English",
+        "premium": False,
+        "video_url": "https://www.youtube.com/watch?v=CLc8AwaKCyk",
+        "youtube_id": "CLc8AwaKCyk",
+        "thumbnail": "https://images.pexels.com/photos/6787207/pexels-photo-6787207.jpeg",
+        "instructor": "Yoga With Bird",
+        "benefits": [
+            "Massages ovaries + boosts pelvic circulation",
+            "Supports endocrine (thyroid, adrenals) balance",
+            "Calms the nervous system + insulin sensitivity",
+        ],
+        "poses": [
+            {"name": "Nadi Shodhana",       "duration_sec": 180, "cue": "Alternate-nostril breath. 3 minutes."},
+            {"name": "Cat-Cow",             "duration_sec": 60, "cue": "Warm-up the spine."},
+            {"name": "Butterfly (Baddha Konasana)", "duration_sec": 90, "cue": "Soles together, gently press knees down."},
+            {"name": "Setu Bandhasana",     "duration_sec": 60, "cue": "Bridge pose. Lift, roll shoulders in."},
+            {"name": "Supta Baddha Konasana","duration_sec": 90, "cue": "Reclined butterfly, palms on belly."},
+            {"name": "Malasana (Garland)",  "duration_sec": 90, "cue": "Deep squat, hands in prayer, elbows press knees."},
+            {"name": "Marjari Twist",       "duration_sec": 60, "cue": "Thread the needle, both sides."},
+            {"name": "Ustrasana (Camel)",   "duration_sec": 45, "cue": "Hands to sacrum, gentle backbend."},
+            {"name": "Viparita Karani",     "duration_sec": 180, "cue": "Legs up the wall. Total surrender."},
+            {"name": "Bhramari",            "duration_sec": 120, "cue": "Humming bee breath. 8 rounds."},
+            {"name": "Savasana",            "duration_sec": 180, "cue": "Rest deeply."},
+        ],
+    },
+    {
+        "id": "stress-melter-nidra-15",
+        "title": "Stress-melter Yoga Nidra",
+        "category": "Sleep",
+        "level": "Beginner",
+        "duration_min": 15,
+        "dosha_target": ["Vata", "Pitta"],
+        "language": "English",
+        "premium": False,
+        "video_url": "https://www.youtube.com/watch?v=M0u9GST_j8U",
+        "youtube_id": "M0u9GST_j8U",
+        "thumbnail": "https://images.pexels.com/photos/3822730/pexels-photo-3822730.jpeg",
+        "instructor": "Ally Boothroyd",
+        "benefits": [
+            "Down-regulates the sympathetic nervous system",
+            "Improves deep sleep quality",
+            "Restores adrenal capacity",
+        ],
+        "poses": [
+            {"name": "Settling",       "duration_sec": 120, "cue": "Lie flat. Bolster under knees if you have one."},
+            {"name": "Body scan",      "duration_sec": 300, "cue": "Sweep awareness slowly toe-to-crown."},
+            {"name": "Breath awareness","duration_sec": 180, "cue": "Count breaths from 27 down to 1."},
+            {"name": "Sankalpa",       "duration_sec": 60, "cue": "Silently affirm your intention 3 times."},
+            {"name": "Return",         "duration_sec": 240, "cue": "Wiggle fingers/toes. Sit slowly."},
+        ],
+    },
+    {
+        "id": "detox-twist-20",
+        "title": "Kapha-crushing Detox Twists",
+        "category": "Detox",
+        "level": "Intermediate",
+        "duration_min": 20,
+        "dosha_target": ["Kapha"],
+        "language": "English",
+        "premium": False,
+        "video_url": "https://www.youtube.com/watch?v=b1H3xO3x_Js",
+        "youtube_id": "b1H3xO3x_Js",
+        "thumbnail": "https://images.pexels.com/photos/3822455/pexels-photo-3822455.jpeg",
+        "instructor": "Yoga With Adriene",
+        "benefits": [
+            "Fires up metabolism and lymph flow",
+            "Wrings out abdominal organs (agni support)",
+            "Lifts sluggish energy",
+        ],
+        "poses": [
+            {"name": "Kapalabhati",    "duration_sec": 120, "cue": "Skull-shining breath. 2 rounds of 30."},
+            {"name": "Sun A x3",       "duration_sec": 240, "cue": "Move fast to warm the body."},
+            {"name": "Revolved Chair", "duration_sec": 60, "cue": "Chair pose, twist right. Then left."},
+            {"name": "Warrior II → Side Angle (R)", "duration_sec": 90, "cue": "Bind if you can. Deep breath."},
+            {"name": "Warrior II → Side Angle (L)", "duration_sec": 90, "cue": "Repeat on the left."},
+            {"name": "Ardha Matsyendrasana",       "duration_sec": 60, "cue": "Seated spinal twist, both sides."},
+            {"name": "Bhujangasana",   "duration_sec": 45, "cue": "Cobra, lift chest without shoulders climbing."},
+            {"name": "Savasana",       "duration_sec": 120, "cue": "Rest."},
+        ],
+    },
+    {
+        "id": "pitta-cooling-25",
+        "title": "Cooling Pitta Flow",
+        "category": "Cooling",
+        "level": "Beginner",
+        "duration_min": 25,
+        "dosha_target": ["Pitta"],
+        "language": "English",
+        "premium": False,
+        "video_url": "https://www.youtube.com/watch?v=Eml2xnoLpYE",
+        "youtube_id": "Eml2xnoLpYE",
+        "thumbnail": "https://images.pexels.com/photos/6787352/pexels-photo-6787352.jpeg",
+        "instructor": "Yoga With Adriene",
+        "benefits": [
+            "Cools mental heat, irritability & inflammation",
+            "Soft moon-salutation style — no competition",
+            "Calms burnout / high achievers",
+        ],
+        "poses": [
+            {"name": "Sheetali Pranayama","duration_sec": 180, "cue": "Curl tongue, inhale cool, exhale nose."},
+            {"name": "Moon Salutation A", "duration_sec": 240, "cue": "Half moon, side lunge, goddess. Both sides."},
+            {"name": "Uttanpadasana",     "duration_sec": 60, "cue": "Legs up 45°, activate belly."},
+            {"name": "Halasana",          "duration_sec": 60, "cue": "Plough pose. Feet behind head or a chair."},
+            {"name": "Karnapidasana",     "duration_sec": 45, "cue": "Knees to ears. Only if halasana feels ok."},
+            {"name": "Matsyasana",        "duration_sec": 60, "cue": "Fish. Open the heart, chin up gently."},
+            {"name": "Bhramari",          "duration_sec": 120, "cue": "Bee breath. 12 rounds."},
+            {"name": "Savasana",          "duration_sec": 180, "cue": "Cover eyes if bright. Long rest."},
+        ],
+    },
+    {
+        "id": "quick-desk-10",
+        "title": "10-min Desk Reset",
+        "category": "Quick",
+        "level": "Beginner",
+        "duration_min": 10,
+        "dosha_target": ["Vata", "Kapha"],
+        "language": "English",
+        "premium": False,
+        "video_url": "https://www.youtube.com/watch?v=tAUf7aajBWE",
+        "youtube_id": "tAUf7aajBWE",
+        "thumbnail": "https://images.pexels.com/photos/4498135/pexels-photo-4498135.jpeg",
+        "instructor": "Yoga With Adriene",
+        "benefits": [
+            "Un-crunches shoulders + neck",
+            "Opens hip flexors from sitting",
+            "Boosts alertness without caffeine",
+        ],
+        "poses": [
+            {"name": "Neck rolls",      "duration_sec": 45, "cue": "Slow, both directions."},
+            {"name": "Shoulder rolls",  "duration_sec": 45, "cue": "Big circles, forward then back."},
+            {"name": "Seated twist",    "duration_sec": 45, "cue": "Right hand behind, left across, twist."},
+            {"name": "Standing forward fold", "duration_sec": 60, "cue": "Bend knees, ragdoll."},
+            {"name": "Lunge (R)",       "duration_sec": 60, "cue": "Sink into the right hip flexor."},
+            {"name": "Lunge (L)",       "duration_sec": 60, "cue": "Switch sides."},
+            {"name": "Wall chest opener","duration_sec": 45, "cue": "Palm on wall, rotate away."},
+            {"name": "3 deep breaths",  "duration_sec": 60, "cue": "Inhale possibility, exhale tension."},
+        ],
+    },
+    {
+        "id": "pranayama-basics-15",
+        "title": "Pranayama Basics",
+        "category": "Breath",
+        "level": "Beginner",
+        "duration_min": 15,
+        "dosha_target": ["Vata", "Pitta", "Kapha"],
+        "language": "English",
+        "premium": False,
+        "video_url": "https://www.youtube.com/watch?v=OXjlR4mXxSk",
+        "youtube_id": "OXjlR4mXxSk",
+        "thumbnail": "https://images.pexels.com/photos/3822166/pexels-photo-3822166.jpeg",
+        "instructor": "Michael Bijker",
+        "benefits": [
+            "Balances all three doshas via breath ratios",
+            "Regulates heart-rate variability",
+            "Foundation for meditation practice",
+        ],
+        "poses": [
+            {"name": "Comfortable seat", "duration_sec": 60, "cue": "Sukhasana or vajrasana."},
+            {"name": "Diaphragmatic breath","duration_sec": 180, "cue": "Hand on belly, hand on chest. Belly rises first."},
+            {"name": "Ujjayi",           "duration_sec": 180, "cue": "Ocean sound, subtle throat constriction."},
+            {"name": "Nadi Shodhana",    "duration_sec": 240, "cue": "Alternate nostril: 4 in / 4 out."},
+            {"name": "Bhramari",         "duration_sec": 180, "cue": "Humming exhale. 12 rounds."},
+            {"name": "Silent sit",       "duration_sec": 120, "cue": "Watch the natural breath."},
+        ],
+    },
+]
+
+
+def _yoga_summary(item: dict) -> dict:
+    """Return the light-weight card shape (no pose sequence)."""
+    return {
+        "id": item["id"],
+        "title": item["title"],
+        "category": item["category"],
+        "level": item["level"],
+        "duration_min": item["duration_min"],
+        "dosha_target": item["dosha_target"],
+        "language": item["language"],
+        "premium": item["premium"],
+        "thumbnail": item["thumbnail"],
+        "instructor": item["instructor"],
+    }
+
+
+@api_router.get("/yoga/library")
+async def yoga_library(
+    category: Optional[str] = None,
+    dosha: Optional[str] = None,
+    level: Optional[str] = None,
+    user: dict = Depends(current_user),
+):
+    """List curated yoga sessions with optional category/dosha/level filters.
+
+    If the caller is a patient with a saved dosha and no `dosha` filter is
+    passed, the response also includes a `recommended` array sorted so the
+    dosha-matched sessions come first.
+    """
+    items = list(YOGA_LIBRARY)
+    if category:
+        items = [i for i in items if i["category"].lower() == category.lower()]
+    if dosha:
+        d = dosha.lower()
+        items = [i for i in items if any(t.lower() == d for t in i["dosha_target"])]
+    if level:
+        items = [i for i in items if i["level"].lower() == level.lower()]
+
+    saved_dosha = None
+    if user.get("role") == "patient":
+        prof = await db.patient_profiles.find_one({"user_id": user["id"]}, {"_id": 0, "dosha": 1}) or {}
+        saved_dosha = (prof.get("dosha") or "").split("-")[0].strip() or None  # take the dominant
+
+    all_summaries = [_yoga_summary(i) for i in items]
+    categories = sorted({i["category"] for i in YOGA_LIBRARY})
+    recommended: list = []
+    if saved_dosha and not dosha:
+        matched = [s for s in all_summaries if saved_dosha in [d for d in _yoga_by_id(s["id"])["dosha_target"]]]
+        recommended = matched[:6]
+
+    return {
+        "items": all_summaries,
+        "categories": ["All"] + categories,
+        "levels": ["Beginner", "Intermediate", "Advanced"],
+        "recommended": recommended,
+        "dosha": saved_dosha,
+        "total": len(all_summaries),
+    }
+
+
+def _yoga_by_id(sid: str) -> Optional[dict]:
+    for i in YOGA_LIBRARY:
+        if i["id"] == sid:
+            return i
+    return None
+
+
+@api_router.get("/yoga/sessions/{session_id}")
+async def yoga_session_detail(session_id: str, user: dict = Depends(current_user)):
+    item = _yoga_by_id(session_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return item  # full payload including poses
+
+
+class YogaCompletionInput(BaseModel):
+    session_id: str
+    completed_seconds: int = 0
+    total_seconds: int = 0
+    completed_poses: int = 0
+
+
+@api_router.post("/yoga/log")
+async def log_yoga_session(body: YogaCompletionInput, user: dict = Depends(current_user)):
+    item = _yoga_by_id(body.session_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Session not found")
+    entry = {
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "session_id": body.session_id,
+        "session_title": item["title"],
+        "category": item["category"],
+        "duration_min": item["duration_min"],
+        "completed_seconds": max(0, int(body.completed_seconds)),
+        "total_seconds": max(0, int(body.total_seconds)),
+        "completed_poses": max(0, int(body.completed_poses)),
+        "logged_at": now_iso(),
+    }
+    await db.yoga_sessions.insert_one(entry)
+    entry.pop("_id", None)
+    await log_activity("yoga_session_logged", actor=user, meta={"session_id": body.session_id})
+    return entry
+
+
+@api_router.get("/yoga/mine")
+async def my_yoga_sessions(user: dict = Depends(current_user)):
+    """Return a lightweight streak + total-minutes stat plus the last 20 sessions."""
+    items = await db.yoga_sessions.find(
+        {"user_id": user["id"]}, {"_id": 0}
+    ).sort("logged_at", -1).to_list(50)
+
+    # Compute streak from unique days ending today (UTC)
+    days = sorted({str(s["logged_at"])[:10] for s in items}, reverse=True)
+    streak = 0
+    now = datetime.now(timezone.utc).date()
+    for i, d in enumerate(days):
+        try:
+            day = datetime.fromisoformat(d).date()
+        except Exception:
+            continue
+        expected = now - timedelta(days=i)
+        if day == expected:
+            streak += 1
+        else:
+            break
+
+    total_min = sum(int(s.get("completed_seconds", 0)) // 60 for s in items)
+
+    return {
+        "sessions": items[:20],
+        "streak_days": streak,
+        "total_minutes": total_min,
+        "total_sessions": len(items),
+    }
 
 
 # ----------------- End new features -----------------
