@@ -1,0 +1,75 @@
+{
+  "summary": "Frontend E2E test of Razorpay Standard Checkout on Expo web preview. BLOCKER: react-native-webview@13.15.0 does NOT support web platform — when the Pay button opens the Razorpay modal, the WebView area renders the fallback text 'React Native WebView does not support this platform.' instead of loading the backend checkout HTML page. As a result the full happy path (card entry → OTP → success → HMAC verification → success UI) cannot execute on web at all. All non-WebView pieces work: login (admin@vaidhyaji.com/Admin@123 → /admin/dashboard, token persists in localStorage under vaidhyaji.token), plan-checkout page shows correct title/₹200/features/pc-pay button, the Razorpay modal chrome opens (Secure Checkout header, ₹200, Razorpay badge, X close), and (once auth is properly loaded) createPaymentOrder API succeeds — no more 401. No red screen or crash; the modal simply displays the WebView platform-unsupported text.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "RazorpayCheckout.tsx (WebView)",
+        "issue": "On Expo web, `react-native-webview` renders the string 'React Native WebView does not support this platform.' instead of loading the backend Razorpay checkout HTML. The entire real-payment flow is broken on web preview. Need Platform.OS==='web' fallback rendering a native <iframe src={embedUrl}/> and listening to window 'message' events (window.parent.postMessage from backend HTML) instead of onMessage from ReactNativeWebView.",
+        "testID": "rzp-close (modal opens) / WebView area (fails)",
+        "priority": "CRITICAL"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Razorpay Standard Checkout (plan-checkout /appointments Pay)",
+        "issue": "Backend HTML checkout page (server.py L808+) uses `window.ReactNativeWebView.postMessage` for success/failed/dismiss/error events. This bridge does NOT exist on web. Even after switching WebView→iframe, the postMessage path must be adapted to `window.parent.postMessage(payload, '*')` and the frontend must addEventListener('message', ...) to catch it. Without this, HMAC verify step will never fire on web.",
+        "affected_testIDs": ["pc-pay", "rzp-close", "appt-pay-<id>"]
+      },
+      {
+        "flow": "createPaymentOrder auth timing",
+        "issue": "When user hits plan-checkout via direct page.goto (deep link / refresh) before AuthProvider hydrates the token, the Pay tap fires createPaymentOrder without the Authorization header → backend 401 'Missing token' → modal shows 'Missing token' error. This is a race condition on first paint. Consider gating the Pay button on auth loading or awaiting storage.secureGet before enabling."
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "plan-checkout",
+        "issues": [
+          "Layout, spacing, colours, price emphasis, features list, and CTA are all clean and match the brand — no design issues found."
+        ]
+      },
+      {
+        "screen": "RazorpayCheckout modal header",
+        "issues": [
+          "Header is nicely branded (Secure Checkout eyebrow, ₹200 title, Razorpay badge, X close). Only issue is the empty green body due to WebView unsupported-platform (see ui_bugs)."
+        ]
+      }
+    ],
+    "react_native_issues": [
+      {
+        "component": "react-native-webview",
+        "issue": "Not supported on web — must be conditionally rendered (Platform.OS !== 'web') and replaced with an <iframe> component on web. Reference: /app/frontend/src/components/RazorpayCheckout.tsx:15,176 and /app/frontend/package.json:47 (react-native-webview 13.15.0)."
+      }
+    ]
+  },
+  "test_report_links": [
+    "/tmp/3_plan_checkout.png",
+    "/tmp/8_modal_open.png (shows 'React Native WebView does not support this platform.')"
+  ],
+  "action_items": [
+    "CRITICAL: In /app/frontend/src/components/RazorpayCheckout.tsx add a Platform.OS==='web' branch that renders <iframe src={embedUrl} style={{flex:1,border:0,backgroundColor:brand}}/> instead of <WebView/>, and wire `window.addEventListener('message', (e)=>handleMessage({nativeEvent:{data:typeof e.data==='string'?e.data:JSON.stringify(e.data)}}))` for the same JSON payloads.",
+    "CRITICAL: In /app/backend/server.py payment_checkout_page HTML (around L808–866), send events via BOTH `window.ReactNativeWebView?.postMessage(json)` AND `window.parent?.postMessage(payload, '*')` so web + native both receive success/failure/dismiss.",
+    "MEDIUM: Gate the pc-pay/appt-pay buttons on `auth.loading===false` OR await token hydration before calling createPaymentOrder to avoid the 401 'Missing token' race on deep-link/refresh.",
+    "LOW: Once web flow works, retest full happy-path (card 4111 1111 1111 1111, CVV 123, expiry 12/30, OTP 1111) → verify /api/payments/verify called, payment doc status=paid, success box shows, router.back() after 1.6s.",
+    "LOW: Retest failure/dismiss path (close Razorpay modal via X or backdrop) — ensure no crash, no infinite spinner, modal closes cleanly.",
+    "LOW: Retest appointment Pay button (appt-pay-<id>) after WebView fix."
+  ],
+  "critical_code_review_comments": [
+    "RazorpayCheckout.tsx blindly imports WebView from react-native-webview without a Platform guard — this is the whole blocker. A single Platform.select or a small IframeCheckout.web.tsx / .native.tsx split would fix it cleanly.",
+    "The comment on L1 of RazorpayCheckout.tsx says 'works in Expo Go via WebView' — accurate but misleading, since the app also runs on web and the current implementation is broken there.",
+    "The 401 → 'Missing token' race is a UX papercut: users refreshing the checkout URL will see a scary red 'Missing token' inside the Razorpay-looking modal. Add a small delay/spinner tied to auth ready state."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "not retested this iteration (validated 100% in iter 9)",
+    "frontend": "Login OK, plan-checkout render OK, Pay tap opens modal OK — but Razorpay WebView loading FAILS on web → happy-path E2E BLOCKED"
+  },
+  "seed_data_creation": "Used seeded admin account only. No new users or payments created (WebView never loaded so no order/payment reached checkout).",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "After main agent adds the web iframe fallback + window.parent.postMessage in backend HTML, rerun this test flow: login → /plan-checkout?type=weekly-diet → tap pc-pay → verify iframe loads Razorpay Standard Checkout modal → enter card 4111 1111 1111 1111 CVV 123 exp 12/30 name 'Test User' → OTP 1111 → confirm success box + navigation back. Also test /appointments Pay button and the dismiss (X) failure path. Auth token is stored under localStorage key 'vaidhyaji.token' (JWT, 187 chars). Backend base URL comes from EXPO_PUBLIC_BACKEND_URL=https://swasth-daily.preview.emergentagent.com.",
+  "rca_of_issue": "ROOT CAUSE: react-native-webview does not implement web platform support. When rendered on Expo web, it returns a plain <Text> saying 'React Native WebView does not support this platform.' The RazorpayCheckout component imports and uses <WebView/> unconditionally regardless of Platform.OS. Additionally, the backend HTML page (payment_checkout_page in server.py) posts success/failure events only through window.ReactNativeWebView.postMessage, which is a native bridge injected only by react-native-webview and is undefined in browsers. REPRODUCTION: 1) POST /api/auth/login as admin, store token. 2) Open http://localhost:3000/plan-checkout?type=weekly-diet in mobile viewport 390x844. 3) Tap [data-testid='pc-pay']. 4) Observe: Razorpay-branded modal opens; green body shows red text 'React Native WebView does not support this platform.' Screenshot: /tmp/8_modal_open.png. MITIGATION: See action_items #1 and #2 — Platform.OS==='web' branch with <iframe> + dual postMessage on backend."
+}
