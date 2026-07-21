@@ -61,10 +61,16 @@ export default function Profile() {
                 </View>
               ))}
             </View>
-            <TouchableOpacity onPress={() => router.push("/auth/health-profile")} style={styles.editBtn} testID="profile-edit">
-              <Feather name="edit-2" size={14} color={COLORS.brand} />
-              <Text style={styles.editText}>Edit health profile</Text>
-            </TouchableOpacity>
+            <View style={styles.actionRow}>
+              <TouchableOpacity onPress={() => router.push("/prakriti-quiz")} style={styles.prakritiCta} testID="profile-prakriti">
+                <Feather name="feather" size={14} color={COLORS.surface} />
+                <Text style={styles.prakritiCtaText}>{profile.dosha ? "Retake Prakriti quiz" : "Discover my Prakriti"}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => router.push("/auth/health-profile")} style={styles.editBtn} testID="profile-edit">
+                <Feather name="edit-2" size={14} color={COLORS.brand} />
+                <Text style={styles.editText}>Edit</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
 
@@ -142,6 +148,9 @@ const styles = StyleSheet.create({
   chipText: { color: COLORS.brand, fontSize: 12, fontWeight: "600" },
   editBtn: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 12 },
   editText: { color: COLORS.brand, fontWeight: "700", fontSize: 13 },
+  actionRow: { flexDirection: "row", alignItems: "center", gap: SPACING.md, marginTop: 12 },
+  prakritiCta: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, backgroundColor: COLORS.brand, paddingVertical: 10, borderRadius: RADIUS.pill },
+  prakritiCtaText: { color: COLORS.surface, fontWeight: "700", fontSize: 12 },
   statRow: { flexDirection: "row", marginHorizontal: SPACING.lg, gap: SPACING.md, marginBottom: SPACING.md },
   stat: { flex: 1, padding: SPACING.md, backgroundColor: COLORS.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, alignItems: "center" },
   statNum: { fontFamily: FONTS.heading, fontSize: 28, color: COLORS.brand },

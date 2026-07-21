@@ -133,9 +133,16 @@ export const api = {
   getBlog: (id: string) => request(`/blogs/${id}`, "GET", undefined, false),
 
   // Diet plan
-  generateDietPlan: (body: { goal: string; dosha?: string; conditions?: string[]; vegetarian?: boolean }) =>
+  generateDietPlan: (body: { goal: string; dosha?: string; conditions?: string[]; vegetarian?: boolean; duration_days?: number; structured?: boolean }) =>
     request("/diet-plan", "POST", body),
   myDietPlans: () => request("/diet-plans"),
+  prakritiAssess: (body: { answers: ("V" | "P" | "K")[]; age?: number; gender?: string }) =>
+    request<{
+      vata: number; pitta: number; kapha: number;
+      dominant: string; secondary: string | null; dosha: string;
+      description: string; traits: string[]; balance: string;
+      assessed_at: string;
+    }>("/prakriti/assess", "POST", body),
 
   // Doctor workspace
   doctorMe: () => request("/doctor/me"),

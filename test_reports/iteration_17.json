@@ -1,0 +1,42 @@
+{
+  "summary": "Iter 17 — Task C (Prakriti quiz + enhanced Diet Plan). BACKEND: 9/9 tests PASS in test_iter17_prakriti_diet.py (LLM called 3 times, within the budget suggested by the review request). All acceptance criteria met — POST /api/prakriti/assess: 401 unauth, 400 for <5 answers, correct math (Vata=100 for pure-Vata, Vata-Pitta secondary set within 10pt window), upserts `dosha` + `prakriti_result` into patient_profiles for patient role, and skips writes for doctor role (returns computed result but does NOT persist — verified). POST /api/diet-plan: (a) legacy body {goal, dosha, vegetarian} returns duration_days=1 default with text-only plan and plan_structured=null, (b) structured=true with duration_days=3 auto-fills dosha from patient_profiles (verified equals dosha saved by /prakriti/assess), returns plan_structured with days[] shape when Claude returns valid JSON (plan_structured was actually returned as a dict with 3 days and 7-slot meals in the run — reasoning strings present), and (c) duration_days=25 clamped to 7. GET /api/diet-plans returns latest first (verified — freshly-created 'TEST_ boost immunity' plan came first). FRONTEND: patient1@vaidhyaji.example.com logged in via /auth/login (NOT /sign-in — the review used /sign-in mistakenly, real route is /auth/login). Home tile `home-prakriti` present at first fold, tap navigates to `/prakriti-quiz`. All 12 questions (pk-q0..pk-q11) render with V/P/K options and correct testIDs; auto-advance is smooth (~200ms). After the 12th pick the app auto-submits and renders the result hero (Vata 67% / Pitta 33% / Kapha 0%), score bars with correct widths, Traits list, and 'To stay in balance' card. `pk-continue-diet` navigates to `/diet-plan?dosha=Vata` (URL param wiring correct). `pk-retake` visible and functional. On /diet-plan the Prakriti: Vata badge renders, dp-dur-1/3/7 all present, dp-toggle-structured, dp-generate and dp-retake-quiz all render. Because the patient now has a saved dosha the `dp-take-quiz` banner correctly does NOT render (retake link shown instead). Profile CTA `profile-prakriti` present under the 'Your Dosha · Vata' card. No red screens or runtime errors from the new code paths.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/prakriti/assess", "issue": "Descriptive `dosha_str` uses hyphen (e.g. 'Vata-Pitta') which is stored back into patient_profiles.dosha. Downstream code (diet-plan prompt, chip UI on /diet-plan) works with hyphenated string (chip `Vata` matches via startsWith). Not a bug, just note for future filters/aggregations."},
+      {"endpoint": "POST /api/prakriti/assess (doctor role)", "issue": "Endpoint returns 200 for doctor role and STILL writes into `prakriti_assessments` history collection (the history log runs regardless of role — server.py:2015). Only the persistent user-profile write is skipped. This is consistent with the acceptance-criteria wording ('NOT written to patient_profiles') but may be worth noting."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "react-native-web (dev warning)", "issue": "'shadow*' style props are deprecated. Reference: pre-existing across app, warning only, no runtime impact on Android/iOS native."},
+      {"component": "Image resizeMode (dev warning)", "issue": "'Image: style.resizeMode is deprecated. Please use props.resizeMode.' Pre-existing in one or more image components; web-only dev warning."},
+      {"component": "expo-notifications (web)", "issue": "'Listening to push token changes is not yet fully supported on web.' Expected on web preview, no impact on native builds."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter17_prakriti_diet.py",
+    "/app/test_reports/pytest/pytest_iter17.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py:1963-1996 — prakriti/assess correctly computes percentages via round(count/total*100) so the three values can sum to 99/100/101 depending on modulo. Fine for a discovery quiz but if you ever chart these expect the sum to drift by ±1. Consider `math.floor` + assign remainder to dominant if strict sum-to-100 is needed.",
+    "server.py:2031-2034 — /diet-plan auto-fill only runs for role=='patient'. For a doctor calling this endpoint (which is unusual), dosha stays blank. This is intentional and correct.",
+    "server.py:2087-2102 — JSON extraction handles ```-fenced replies and falls back to text-only plan on parse failure. Good defensive parsing. However, `first_nl > 0` is guarding an edge case where the reply is literally '```' with no newline; safer to check `first_nl != -1` (it currently would skip fence-strip and let json.loads fail — recoverable, so acceptable).",
+    "prakriti-quiz.tsx:163-168 — Auto-submit is driven via `useMemo` for side effects. `useMemo` is NOT the right hook for effects; use `useEffect`. Right now it works because the memo body runs during render on `isDone` change, but this violates React's purity rule and could double-invoke submit under StrictMode. Recommend converting to `useEffect(() => { if (isDone && ...) submit(); }, [isDone])`.",
+    "prakriti-quiz.tsx:169 — `answered` is computed but only used in the submit-guard. Fine.",
+    "diet-plan.tsx:147 — `setDosha(dosha.startsWith(d) ? \"\" : d)` intentionally clears when user re-taps the same base dosha; note this ALSO clears saved 'Vata-Pitta' back to '' if user taps 'Vata' — mild UX friction but not a bug."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter17_prakriti_diet.py (new)"
+  ],
+  "success_rate": {"backend": "100% (9/9)", "frontend": "100% — all testIDs present, navigation + auto-submit + results all verified"},
+  "seed_data_creation": "test_iter17_prakriti_diet.py registered 2 ephemeral users (TEST_Patient, TEST_Doctor) per pytest session (via conftest fixtures). Wrote 2 diet_plans (goal prefix 'TEST_') and multiple prakriti_assessments to Mongo — all safely prefixed for cleanup. No mutation of admin/patient1/doctor1 data.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Frontend UX note: the react-hook lint rule about `useMemo` being used as an effect (prakriti-quiz.tsx:163-168) is a real concern under React 18 StrictMode — the file already has `// eslint-disable-next-line react-hooks/exhaustive-deps`. If E1 fixes it, replace with useEffect and dependency [isDone, answered, total, result, busy, submit]. No functional regression seen in this iteration. Real login route is `/auth/login` (not `/sign-in`), testIDs are `login-email`, `login-password`, `login-submit`. Backend LLM ran 3 times this iteration — future testing should also budget-cap LLM tests.",
+  "rca_of_issue": "Not applicable — task C completed cleanly with no critical bugs. The dual-dosha math uses round() rather than floor()+remainder; percentages may sum to 99-101 (documented in critical_code_review_comments)."
+}

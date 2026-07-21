@@ -146,11 +146,11 @@ function PatientHome() {
             </View>
             <Text style={styles.engLabel}>Diseases</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/(tabs)/consult")} testID="home-near-you" activeOpacity={0.85}>
+          <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/prakriti-quiz")} testID="home-prakriti" activeOpacity={0.85}>
             <View style={[styles.engIcon, { backgroundColor: "#F3D9CD" }]}>
-              <Feather name="map-pin" size={16} color={COLORS.accent} />
+              <Feather name="feather" size={16} color={COLORS.accent} />
             </View>
-            <Text style={styles.engLabel}>Near You</Text>
+            <Text style={styles.engLabel}>Prakriti</Text>
           </TouchableOpacity>
         </View>
 

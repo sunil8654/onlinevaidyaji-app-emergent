@@ -1914,19 +1914,164 @@ class DietPlanInput(BaseModel):
     dosha: Optional[str] = None
     conditions: Optional[List[str]] = None
     vegetarian: bool = True
+    duration_days: int = 1  # 1 or 7
+    structured: bool = False  # if True, return day-wise meal breakdown as JSON
+
+
+def _clamp_days(n: int) -> int:
+    if n <= 1:
+        return 1
+    if n <= 3:
+        return 3
+    return 7
+
+
+DOSHA_KEYS = ("vata", "pitta", "kapha")
+
+DOSHA_DESCRIPTIONS = {
+    "vata": {
+        "essence": "Air & Ether — creative, quick, movement-driven.",
+        "traits": ["Light, thin build", "Dry skin & hair", "Cold hands & feet", "Fast talker & thinker", "Irregular appetite", "Light, disturbed sleep"],
+        "balance": "Warmth, routine, oils, grounding foods, slow deep breathing.",
+    },
+    "pitta": {
+        "essence": "Fire & Water — sharp, focused, transformation-driven.",
+        "traits": ["Medium build & muscle tone", "Warm skin, may flush", "Strong appetite & digestion", "Ambitious & sharp-minded", "Sensitive to heat", "Moderate sound sleep"],
+        "balance": "Cool foods, moderation, avoid spicy/oily, meditation, moonlight walks.",
+    },
+    "kapha": {
+        "essence": "Earth & Water — steady, calm, grounding.",
+        "traits": ["Solid, larger build", "Smooth oily skin & thick hair", "Slow, steady digestion", "Calm & patient temperament", "Slow to anger, holds emotions", "Deep, long sleep"],
+        "balance": "Warm spices, movement, light meals, stimulating routines, avoid dairy.",
+    },
+}
+
+
+class PrakritiAssessInput(BaseModel):
+    # answers: list of one of "V", "P", "K" (one per question)
+    answers: List[Literal["V", "P", "K"]]
+    # optional metadata for future use
+    age: Optional[int] = None
+    gender: Optional[str] = None
+
+
+@api_router.post("/prakriti/assess")
+async def prakriti_assess(body: PrakritiAssessInput, user: dict = Depends(current_user)):
+    """Compute Prakriti (constitution) scores from a symptom/habit questionnaire.
+
+    Returns dosha percentages + dominant/secondary + narrative description, and
+    saves the resulting dosha string to the user's patient profile.
+    """
+    if len(body.answers) < 5:
+        raise HTTPException(status_code=400, detail="At least 5 answers required for a meaningful assessment")
+    counts = {"V": 0, "P": 0, "K": 0}
+    for a in body.answers:
+        counts[a] = counts.get(a, 0) + 1
+    total = sum(counts.values()) or 1
+    vata_pct = round(counts["V"] / total * 100)
+    pitta_pct = round(counts["P"] / total * 100)
+    kapha_pct = round(counts["K"] / total * 100)
+
+    # Determine dominant / secondary. Ties within 10 pts of leader → dual dosha
+    ordered = sorted(
+        [("Vata", vata_pct), ("Pitta", pitta_pct), ("Kapha", kapha_pct)],
+        key=lambda x: -x[1],
+    )
+    dominant = ordered[0][0]
+    secondary = ordered[1][0] if (ordered[0][1] - ordered[1][1]) <= 10 and ordered[1][1] > 0 else None
+    dosha_str = f"{dominant}-{secondary}" if secondary else dominant
+
+    key = dominant.lower()
+    desc = DOSHA_DESCRIPTIONS.get(key, {})
+
+    result = {
+        "vata": vata_pct,
+        "pitta": pitta_pct,
+        "kapha": kapha_pct,
+        "dominant": dominant,
+        "secondary": secondary,
+        "dosha": dosha_str,
+        "description": desc.get("essence", ""),
+        "traits": desc.get("traits", []),
+        "balance": desc.get("balance", ""),
+        "assessed_at": now_iso(),
+    }
+
+    # Persist to patient profile (only for patient role — silently skip for doctors)
+    if user.get("role") == "patient":
+        await db.patient_profiles.update_one(
+            {"user_id": user["id"]},
+            {"$set": {
+                "dosha": dosha_str,
+                "prakriti_result": result,
+                "updated_at": now_iso(),
+                "user_id": user["id"],
+            }},
+            upsert=True,
+        )
+
+    # Also log a lightweight history entry
+    try:
+        await db.prakriti_assessments.insert_one({
+            "id": str(uuid.uuid4()),
+            "user_id": user["id"],
+            **result,
+        })
+    except Exception:
+        logger.exception("prakriti_assessment log failed")
+
+    await log_activity("prakriti_assessed", actor=user, meta={"dosha": dosha_str})
+    return result
 
 
 @api_router.post("/diet-plan")
 async def generate_diet_plan(body: DietPlanInput, user: dict = Depends(current_user)):
-    prompt = (
-        f"Create a personalised 1-day AYUSH diet plan.\n"
-        f"Goal: {body.goal}\n"
-        f"Dosha: {body.dosha or 'unknown'}\n"
-        f"Conditions: {', '.join(body.conditions or []) or 'none'}\n"
-        f"Vegetarian: {body.vegetarian}\n\n"
-        "Return sections labelled Early Morning, Breakfast, Mid-morning, Lunch, Evening Snack, Dinner, Bedtime. "
-        "Each section: 1-2 short bullet points with Ayurvedic reasoning. Total under 250 words. Warm, practical Indian foods."
-    )
+    days = _clamp_days(int(body.duration_days or 1))
+    dosha = (body.dosha or "").strip()
+    if not dosha and user.get("role") == "patient":
+        # Fill from saved patient profile if the client didn't send it
+        prof = await db.patient_profiles.find_one({"user_id": user["id"]}, {"_id": 0, "dosha": 1}) or {}
+        dosha = prof.get("dosha") or ""
+
+    if body.structured:
+        prompt = (
+            f"You are an AYUSH nutritionist. Create a PERSONALISED {days}-day meal plan.\n"
+            f"Goal: {body.goal}\n"
+            f"Dosha (Prakriti): {dosha or 'unknown'}\n"
+            f"Conditions: {', '.join(body.conditions or []) or 'none'}\n"
+            f"Vegetarian: {body.vegetarian}\n\n"
+            "Return ONLY a JSON object (no code fences, no commentary) shaped exactly like:\n"
+            '{"summary": "1-2 sentence overview of the plan strategy",\n'
+            ' "principles": ["3-5 short Ayurvedic principles guiding this plan"],\n'
+            ' "days": [\n'
+            '   {"day": 1, "name": "Day 1",\n'
+            '    "meals": [\n'
+            '       {"slot": "Early morning", "title": "…", "items": ["…"], "reasoning": "one-line ayurvedic reasoning"},\n'
+            '       {"slot": "Breakfast", "title": "…", "items": ["…"], "reasoning": "…"},\n'
+            '       {"slot": "Mid-morning", "title": "…", "items": ["…"], "reasoning": "…"},\n'
+            '       {"slot": "Lunch", "title": "…", "items": ["…"], "reasoning": "…"},\n'
+            '       {"slot": "Evening", "title": "…", "items": ["…"], "reasoning": "…"},\n'
+            '       {"slot": "Dinner", "title": "…", "items": ["…"], "reasoning": "…"},\n'
+            '       {"slot": "Bedtime", "title": "…", "items": ["…"], "reasoning": "…"}\n'
+            '    ]}\n'
+            f'   ... (exactly {days} day objects)\n'
+            ' ],\n'
+            ' "avoid": ["3-6 foods this dosha/goal should avoid"],\n'
+            ' "favour": ["3-6 foods this dosha/goal should favour"]\n'
+            "}\n"
+            "Keep items list to 1-3 short lines. Use real, culturally-Indian foods. "
+            "Vary meals across days. Include tastes (rasa) hint in reasoning where useful."
+        )
+    else:
+        prompt = (
+            f"Create a personalised 1-day AYUSH diet plan.\n"
+            f"Goal: {body.goal}\n"
+            f"Dosha: {dosha or 'unknown'}\n"
+            f"Conditions: {', '.join(body.conditions or []) or 'none'}\n"
+            f"Vegetarian: {body.vegetarian}\n\n"
+            "Return sections labelled Early Morning, Breakfast, Mid-morning, Lunch, Evening Snack, Dinner, Bedtime. "
+            "Each section: 1-2 short bullet points with Ayurvedic reasoning. Total under 250 words. Warm, practical Indian foods."
+        )
     chat = LlmChat(
         api_key=EMERGENT_LLM_KEY,
         session_id=f"diet-{user['id']}-{uuid.uuid4()}",
@@ -1937,17 +2082,39 @@ async def generate_diet_plan(body: DietPlanInput, user: dict = Depends(current_u
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"AI error: {e}")
     text = reply if isinstance(reply, str) else str(reply)
+
+    plan_structured = None
+    if body.structured:
+        # Try to extract JSON out of the reply — model may accidentally wrap in ```
+        raw = text.strip()
+        if raw.startswith("```"):
+            # strip code fences
+            first_nl = raw.find("\n")
+            raw = raw[first_nl + 1:] if first_nl > 0 else raw
+            if raw.endswith("```"):
+                raw = raw[:-3]
+            raw = raw.strip()
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict) and isinstance(parsed.get("days"), list):
+                plan_structured = parsed
+        except Exception as e:
+            logger.warning(f"diet-plan JSON parse failed, falling back to text: {e}")
+
     plan = {
         "id": str(uuid.uuid4()),
         "user_id": user["id"],
         "goal": body.goal,
-        "dosha": body.dosha,
+        "dosha": dosha or None,
+        "duration_days": days,
+        "vegetarian": body.vegetarian,
         "plan": text,
+        "plan_structured": plan_structured,
         "created_at": now_iso(),
     }
     await db.diet_plans.insert_one(plan)
     plan.pop("_id", None)
-    await log_activity("diet_plan_generated", actor=user, meta={"goal": body.goal})
+    await log_activity("diet_plan_generated", actor=user, meta={"goal": body.goal, "days": days, "dosha": dosha})
     return plan
 
 
