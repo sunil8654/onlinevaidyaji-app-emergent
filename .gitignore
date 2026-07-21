@@ -31,9 +31,16 @@ dist/
 dist
 
 # Environment files (comprehensive coverage)
-
+.env
+.env.*
+!.env.example
+backend/.env
+frontend/.env
 *token.json*
 *credentials.json*
+# Firebase / Google Cloud service account JSONs
+*-firebase-adminsdk-*.json
+serviceAccountKey*.json
 
 # Logs and debug files
 npm-debug.log*

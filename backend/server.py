@@ -28,6 +28,11 @@ db = client[os.environ['DB_NAME']]
 
 # Auth
 JWT_SECRET = os.environ['JWT_SECRET']
+# Guard against weak/default secrets in production
+if len(JWT_SECRET) < 32 or "change-me" in JWT_SECRET.lower() or JWT_SECRET.lower() in {"secret", "changeme", "vaidhyaji"}:
+    raise RuntimeError(
+        "JWT_SECRET is too weak or a known default. Set a strong random value (>=32 chars) in .env"
+    )
 JWT_ALGORITHM = os.environ['JWT_ALGORITHM']
 JWT_EXPIRE_DAYS = int(os.environ.get('JWT_EXPIRE_DAYS', 30))
 EMERGENT_LLM_KEY = os.environ['EMERGENT_LLM_KEY']
@@ -347,16 +352,16 @@ async def list_appointments(user: dict = Depends(current_user)):
     return items
 
 
-@api_router.post("/appointments/{appt_id}/pay")
+@api_router.post("/appointments/{appt_id}/pay", deprecated=True)
 async def pay_appointment(appt_id: str, user: dict = Depends(current_user)):
-    r = await db.appointments.update_one(
-        {"id": appt_id, "patient_id": user["id"]},
-        {"$set": {"paid": True, "paid_at": now_iso()}}
+    """DISABLED: Use /api/payments/create-order + /api/payments/verify instead.
+
+    Kept as an endpoint so old clients get a clear error; never marks anything paid.
+    """
+    raise HTTPException(
+        status_code=410,
+        detail="Direct pay endpoint disabled. Use Razorpay checkout via /api/payments/create-order.",
     )
-    if r.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Appointment not found")
-    appt = await db.appointments.find_one({"id": appt_id}, {"_id": 0})
-    return appt
 
 
 @api_router.post("/appointments/{appt_id}/prescription")
@@ -556,6 +561,22 @@ async def create_video_session(body: VideoSessionInput, user: dict = Depends(cur
     }
 
 
+def _js_str(val) -> str:
+    """Safely embed a Python value as a JSON literal inside an inline <script>.
+
+    json.dumps does NOT escape `</`, `<script`, `<!--`, `-->`, `U+2028`, `U+2029`.
+    An attacker who can influence val (e.g. token, user_name query params) could
+    inject `</script><img src=x onerror=…>` to break out of the script tag.
+    We post-escape those sequences to make the JSON literal safe inside HTML.
+    """
+    s = json.dumps(val)
+    return (s.replace("<", "\\u003c")
+             .replace(">", "\\u003e")
+             .replace("&", "\\u0026")
+             .replace("\u2028", "\\u2028")
+             .replace("\u2029", "\\u2029"))
+
+
 @app.get("/api/video/embed/{room_name}", response_class=HTMLResponse)
 async def video_embed(room_name: str, token: str = "", user_name: str = "Guest", domain: str = "onlinevaidya"):
     """HTML page that hosts the Daily Prebuilt iframe.
@@ -567,11 +588,15 @@ async def video_embed(room_name: str, token: str = "", user_name: str = "Guest",
     # Basic validation
     safe_room = ''.join(c for c in room_name if c.isalnum() or c in '-_')[:80]
     safe_domain = ''.join(c for c in domain if c.isalnum() or c in '-_')[:60] or "onlinevaidya"
+    # Sanitize free-form user_name — strip anything not alnum/space/dot/hyphen
+    safe_user_name = ''.join(c for c in (user_name or "Guest") if c.isalnum() or c in " .-_'")[:60] or "Guest"
+    # Token is opaque; only permit URL-safe base64 chars used by Daily
+    safe_token = ''.join(c for c in token if c.isalnum() or c in "._-")[:2048]
     if not safe_room:
         raise HTTPException(status_code=400, detail="Invalid room name")
-    room_url_js = json.dumps(f"https://{safe_domain}.daily.co/{safe_room}")
-    token_js = json.dumps(token)
-    user_name_js = json.dumps(user_name or "Guest")
+    room_url_js = _js_str(f"https://{safe_domain}.daily.co/{safe_room}")
+    token_js = _js_str(safe_token)
+    user_name_js = _js_str(safe_user_name)
 
     html = f"""<!doctype html>
 <html>
@@ -667,22 +692,86 @@ class PaymentVerifyInput(BaseModel):
     reference_id: Optional[str] = None
 
 
+# Server-side price catalog — client never sets prices
+_FIXED_PRICES_PAISE = {
+    "diet_plan": 20000,     # ₹200 weekly plan
+    "ai_yoga": 50000,       # ₹500/month
+    "lab_booking": 49900,   # ₹499 default
+    "medicine_order": None, # computed from cart
+}
+
+
+async def _resolve_server_price(purpose: str, reference_id: Optional[str], user: dict) -> int:
+    """Return the authoritative price in paise for a given purpose+reference.
+
+    Client-supplied `amount` is ignored except for `custom` purpose (kept
+    for one-off flows) which still enforces a hard cap.
+    """
+    if purpose == "appointment":
+        if not reference_id:
+            raise HTTPException(status_code=400, detail="appointment reference_id required")
+        appt = await db.appointments.find_one({"id": reference_id}, {"_id": 0})
+        if not appt or appt.get("patient_id") != user["id"]:
+            raise HTTPException(status_code=404, detail="Appointment not found or not yours")
+        if appt.get("paid"):
+            raise HTTPException(status_code=409, detail="Appointment already paid")
+        fee_rs = int(appt.get("amount") or 500)
+        return max(100, fee_rs * 100)
+    if purpose == "diet_plan":
+        return _FIXED_PRICES_PAISE["diet_plan"]
+    if purpose == "ai_yoga":
+        return _FIXED_PRICES_PAISE["ai_yoga"]
+    if purpose == "lab_booking":
+        if not reference_id:
+            return _FIXED_PRICES_PAISE["lab_booking"]
+        booking = await db.lab_bookings.find_one({"id": reference_id, "user_id": user["id"]}, {"_id": 0})
+        if not booking:
+            raise HTTPException(status_code=404, detail="Lab booking not found or not yours")
+        if booking.get("paid"):
+            raise HTTPException(status_code=409, detail="Lab booking already paid")
+        return max(100, int(booking.get("amount") or 499) * 100)
+    if purpose == "medicine_order":
+        if not reference_id:
+            raise HTTPException(status_code=400, detail="medicine_order reference_id required")
+        order = await db.medicine_orders.find_one({"id": reference_id, "user_id": user["id"]}, {"_id": 0})
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found or not yours")
+        if order.get("paid"):
+            raise HTTPException(status_code=409, detail="Order already paid")
+        return max(100, int(order.get("total") or 0) * 100)
+    # purpose == "custom" — one-off amounts capped hard
+    return -1  # signals "use body.amount" with hard cap in caller
+
+
 @api_router.post("/payments/create-order")
 async def create_payment_order(body: PaymentOrderInput, user: dict = Depends(current_user)):
-    """Create a Razorpay order. Amount must be in paise (min 100)."""
+    """Create a Razorpay order. Price is ALWAYS resolved server-side."""
     if _rzp_client is None:
         raise HTTPException(status_code=503, detail="Razorpay not configured on server")
-    if body.amount < 100:
-        raise HTTPException(status_code=400, detail="Amount must be at least 100 paise (₹1)")
     if body.currency.upper() != "INR":
         raise HTTPException(status_code=400, detail="Only INR currency supported")
+
+    resolved = await _resolve_server_price(body.purpose, body.reference_id, user)
+    if resolved == -1:
+        # Custom purpose — accept client amount but hard-cap
+        amount_paise = int(body.amount)
+        if amount_paise < 100 or amount_paise > 5000000:  # min ₹1, max ₹50,000
+            raise HTTPException(status_code=400, detail="Amount out of allowed range")
+    else:
+        amount_paise = resolved
+        # Reject if client tried to send a different amount (log for audit)
+        if body.amount and int(body.amount) != amount_paise:
+            logger.warning(
+                "payment amount mismatch: client=%s server=%s user=%s purpose=%s ref=%s",
+                body.amount, amount_paise, user["id"], body.purpose, body.reference_id,
+            )
 
     # Receipt must be <= 40 chars
     receipt = f"vaidhya_{body.purpose[:8]}_{uuid.uuid4().hex[:8]}"[:40]
 
     try:
         rzp_order = _rzp_client.order.create({
-            "amount": body.amount,
+            "amount": amount_paise,
             "currency": "INR",
             "receipt": receipt,
             "payment_capture": 1,
@@ -702,7 +791,7 @@ async def create_payment_order(body: PaymentOrderInput, user: dict = Depends(cur
         "user_id": user["id"],
         "razorpay_order_id": rzp_order["id"],
         "razorpay_payment_id": None,
-        "amount": body.amount,
+        "amount": amount_paise,
         "currency": "INR",
         "purpose": body.purpose,
         "reference_id": body.reference_id,
@@ -714,7 +803,7 @@ async def create_payment_order(body: PaymentOrderInput, user: dict = Depends(cur
     await db.payments.insert_one(payment_doc)
 
     await log_activity("payment_order_created", actor=user, meta={
-        "razorpay_order_id": rzp_order["id"], "amount": body.amount,
+        "razorpay_order_id": rzp_order["id"], "amount": amount_paise,
         "purpose": body.purpose, "reference_id": body.reference_id,
     })
 
@@ -861,14 +950,18 @@ async def payment_checkout_page(
     safe_order = ''.join(c for c in order_id if c.isalnum() or c in '_-')[:60]
     if not safe_order:
         raise HTTPException(status_code=400, detail="Invalid order id")
-    order_js = json.dumps(safe_order)
-    key_js = json.dumps(RAZORPAY_KEY_ID)
-    amount_js = json.dumps(int(amount))
-    name_js = json.dumps(name)
-    desc_js = json.dumps(description)
-    pn = json.dumps(prefill_name or "")
-    pe = json.dumps(prefill_email or "")
-    pc = json.dumps(prefill_contact or "")
+    # Sanitize display fields (strip <, >, &, control chars, script sequences)
+    def _clean_display(v: str, max_len: int = 80) -> str:
+        v = (v or "")[:max_len]
+        return ''.join(c for c in v if c.isalnum() or c in " .-_'@+")
+    order_js = _js_str(safe_order)
+    key_js = _js_str(RAZORPAY_KEY_ID)
+    amount_js = _js_str(int(amount))
+    name_js = _js_str(_clean_display(name, 60))
+    desc_js = _js_str(_clean_display(description, 100))
+    pn = _js_str(_clean_display(prefill_name, 60))
+    pe = _js_str(_clean_display(prefill_email, 80))
+    pc = _js_str(_clean_display(prefill_contact, 20))
 
     html = f"""<!doctype html>
 <html>
@@ -1879,15 +1972,24 @@ async def doctor_my_patients(user: dict = Depends(current_user)):
 
 # ----------------- Push notifications -----------------
 class RegisterPushBody(BaseModel):
-    user_id: str
+    # user_id is IGNORED here — authoritative id comes from the JWT.
+    # We still accept it in the payload for backward compatibility with the
+    # existing frontend client, but never trust it.
+    user_id: Optional[str] = None
     platform: str
     device_token: str
 
 
 @api_router.post("/register-push", status_code=201)
-async def register_push(body: RegisterPushBody):
+async def register_push(body: RegisterPushBody, user: dict = Depends(current_user)):
+    # Enforce user_id from JWT — never trust client
+    payload = {
+        "user_id": user["id"],
+        "platform": body.platform,
+        "device_token": body.device_token,
+    }
     try:
-        resp = await _push_client.post("/api/v1/push/users/register", json=body.model_dump())
+        resp = await _push_client.post("/api/v1/push/users/register", json=payload)
         if resp.status_code == 401:
             logger.warning("EMERGENT_PUSH_KEY placeholder — push will only work after deploy")
             return {"status": "pending", "note": "push key placeholder"}

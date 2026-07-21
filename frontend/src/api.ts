@@ -69,6 +69,8 @@ export const api = {
     request("/chat/message", "POST", { session_id, message }),
   chatHistory: (session_id: string) => request(`/chat/history/${session_id}`),
 
+  // DEPRECATED: use createPaymentOrder + verifyPayment instead. Kept for
+  // backward-compat with old clients; server now returns 410.
   payAppointment: (id: string) => request(`/appointments/${id}/pay`, "POST"),
   addPrescription: (id: string, body: { diagnosis: string; medicines: string; notes?: string }) =>
     request(`/appointments/${id}/prescription`, "POST", body),
