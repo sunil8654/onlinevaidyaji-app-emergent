@@ -50,9 +50,9 @@ export default function PlanCheckout() {
   const startPayment = () => {
     if (authLoading) return;
     if (!user) {
-      Alert.alert("Login required", "Please log in to purchase this plan.", [
-        { text: "OK", onPress: () => router.replace("/auth/login") },
-      ]);
+      // Alert.alert with buttons is a no-op on react-native-web; use direct navigation.
+      Alert.alert("Login required", "Please log in to purchase this plan.");
+      router.replace("/auth/login");
       return;
     }
     setShowRzp(true);
