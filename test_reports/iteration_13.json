@@ -1,0 +1,37 @@
+{
+  "summary": "Light regression smoke test after removal of `googleServicesFile` from /app/frontend/app.json. All 6 backend smoke tests pass (100%): GET /api/ (200 with correct payload), POST /api/auth/login admin (JWT returned), POST /api/register-push (returns 201 {status: pending, note: 'push key placeholder'} — non-500, contract preserved), POST /api/appointments (200, non-blocking push), POST /api/payments/create-order Razorpay (200 with order_id), POST /api/video/session Daily.co (200 with room url). Frontend web preview loads cleanly at http://localhost:3000 with 0 JS errors, landing screen renders (Online Vaidhyaji branding, Sign in visible). app.json is valid JSON, `expo-notifications` plugin still declared (local notifications + iOS push preserved), no dangling `googleServicesFile` reference. Confirmed google-services.json is not present in /app/frontend/ (as expected — the fix removes the reference until user provides the file). No regressions detected.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter13_regression.py",
+    "/app/test_reports/pytest/pytest_iter13.xml"
+  ],
+  "action_items": [
+    "NONE — the one-line removal is safe. When user provides google-services.json, re-add `\"googleServicesFile\": \"./google-services.json\"` under `expo.android` in app.json to re-enable Android FCM push."
+  ],
+  "critical_code_review_comments": [
+    "app.json: expo.android.googleServicesFile removed cleanly; expo-notifications plugin retained under expo.plugins (still needed for local notifications + iOS APNs). ✅",
+    "No stray google-services.json references elsewhere in /app/frontend/. ✅",
+    "Backend contract for /api/register-push unchanged: returns 201 {status:'pending', note:'push key placeholder'} when EMERGENT_PUSH_KEY is placeholder. ✅"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter13_regression.py (new — 6 regression smoke tests)"
+  ],
+  "success_rate": {
+    "backend": "100% (6/6)",
+    "frontend": "smoke pass — landing loads, 0 JS errors, Sign in visible"
+  },
+  "seed_data_creation": "1 test patient (test_iter13_<uuid>@vaidhyaji.example.com / Vaidhyaji@123) created via /api/auth/register; 2 test appointments booked (slot=2030-*, reason='TEST iter13 regression'/'TEST video iter13'); 1 Razorpay test order (amount=199, purpose=appointment). All prefixed for cleanup.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iter 13 verified: the removal of `googleServicesFile` from app.json did not regress any backend endpoint or frontend load path. Test suite /app/backend/tests/test_iter13_regression.py is the canonical smoke-regression suite (root, admin login, register-push, appointment create+non-blocking push, Razorpay create-order, Daily.co video session). Note contract details: /api/auth/register expects `name` (not `full_name`); /api/register-push expects `user_id` + `device_token` + `platform` and returns 201 with `status: pending` when EMERGENT_PUSH_KEY=placeholder; /api/payments/create-order expects `purpose` in {'appointment','diet_plan','medicine_order','lab_booking','custom'}. google-services.json is intentionally absent — user will provide before next EAS Android build.",
+  "rca_of_issue": "N/A — verification-only. The original EAS build blocker was caused by app.json referencing `./google-services.json` while the file did not exist. Removing that one line unblocks EAS PREBUILD. Local notifications and iOS push remain functional because the expo-notifications plugin is still declared. Android FCM will be re-enabled by adding the file + re-adding the app.json line."
+}
