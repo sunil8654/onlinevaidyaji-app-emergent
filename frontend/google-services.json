@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "333559780075",
+    "project_id": "online-vaidyaji",
+    "storage_bucket": "online-vaidyaji.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:333559780075:android:27aafdd95f37783ae964ae",
+        "android_client_info": {
+          "package_name": "com.swasthdaily.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB80FP5BUpkEVeXmJt51O1qllLaS17ixY4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
