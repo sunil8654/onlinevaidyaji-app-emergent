@@ -1,6 +1,6 @@
 // Doctor workspace — shown as "home" for doctors from the tabs group.
 import { useEffect, useState, useCallback } from "react";
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, ImageBackground, Modal, TextInput } from "react-native";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, ImageBackground } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
@@ -14,22 +14,21 @@ export default function DoctorHome() {
   const [doc, setDoc] = useState<any>(null);
   const [appts, setAppts] = useState<any[]>([]);
   const [patients, setPatients] = useState<any[]>([]);
+  const [earnings, setEarnings] = useState<{ month_paise: number; total_paise: number } | null>(null);
   const [refresh, setRefresh] = useState(false);
-  const [rxOpen, setRxOpen] = useState<any | null>(null);
-  const [diag, setDiag] = useState("");
-  const [meds, setMeds] = useState("");
-  const [notes, setNotes] = useState("");
 
   const load = useCallback(async () => {
     try {
-      const [d, a, p] = await Promise.all([
+      const [d, a, p, e] = await Promise.all([
         api.doctorMe(),
         api.doctorMyAppointments().catch(() => []),
         api.doctorMyPatients().catch(() => []),
+        api.doctorEarnings().catch(() => null as any),
       ]);
       setDoc(d);
       setAppts(a);
       setPatients(p);
+      setEarnings(e);
       // if not onboarded yet, redirect
       if (!d?.onboarded_at) router.replace("/doctor/onboarding");
     } catch {}
@@ -37,17 +36,9 @@ export default function DoctorHome() {
 
   useEffect(() => { load(); }, [load]);
 
-  const submitRx = async () => {
-    if (!rxOpen || !diag.trim() || !meds.trim()) return;
-    try {
-      await api.addPrescription(rxOpen.id, { diagnosis: diag, medicines: meds, notes });
-      setRxOpen(null); setDiag(""); setMeds(""); setNotes("");
-      load();
-    } catch {}
-  };
-
   const upcoming = appts.filter((a) => new Date(a.slot) > new Date()).slice(0, 5);
   const today = appts.filter((a) => new Date(a.slot).toDateString() === new Date().toDateString()).length;
+  const rupees = (paise: number) => `₹${(Math.round(paise) / 100).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
 
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
@@ -73,6 +64,39 @@ export default function DoctorHome() {
           <Stat label="Today" value={today} />
           <Stat label="Upcoming" value={upcoming.length} />
           <Stat label="Patients" value={patients.length} />
+        </View>
+
+        {/* Earnings + quick actions */}
+        <View style={styles.quickRow}>
+          <TouchableOpacity
+            style={styles.earnCard}
+            onPress={() => router.push("/doctor/earnings")}
+            testID="dh-open-earnings"
+          >
+            <View style={styles.earnHead}>
+              <Feather name="trending-up" size={14} color={COLORS.accent} />
+              <Text style={styles.earnLabel}>This month</Text>
+            </View>
+            <Text style={styles.earnValue}>{rupees(earnings?.month_paise || 0)}</Text>
+            <Text style={styles.earnSub}>Total: {rupees(earnings?.total_paise || 0)}</Text>
+            <View style={styles.earnArrow}>
+              <Feather name="arrow-up-right" size={12} color={COLORS.brand} />
+              <Text style={styles.earnArrowText}>Earnings</Text>
+            </View>
+          </TouchableOpacity>
+
+          <View style={{ flex: 1, gap: SPACING.sm }}>
+            <TouchableOpacity style={styles.actionTile} onPress={() => router.push("/doctor/earnings")} testID="dh-earn-tile">
+              <Feather name="bar-chart-2" size={16} color={COLORS.brand} />
+              <Text style={styles.actionText}>Earnings</Text>
+              <Feather name="chevron-right" size={14} color={COLORS.textMuted} style={{ marginLeft: "auto" }} />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.actionTile} onPress={() => { /* stays on page — patients section below */ }} testID="dh-pat-tile">
+              <Feather name="users" size={16} color={COLORS.brand} />
+              <Text style={styles.actionText}>Patients ({patients.length})</Text>
+              <Feather name="chevron-down" size={14} color={COLORS.textMuted} style={{ marginLeft: "auto" }} />
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Upcoming appointments */}
@@ -108,7 +132,7 @@ export default function DoctorHome() {
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.rxBtn, a.prescription && { backgroundColor: COLORS.success }]}
-                onPress={() => { setRxOpen(a); setDiag(a.prescription?.diagnosis || ""); setMeds(a.prescription?.medicines || ""); setNotes(a.prescription?.notes || ""); }}
+                onPress={() => router.push({ pathname: "/doctor/prescription/[apptId]", params: { apptId: a.id } })}
                 testID={`dh-rx-${a.id}`}
               >
                 <Feather name="file-text" size={12} color={COLORS.surface} />
@@ -126,7 +150,12 @@ export default function DoctorHome() {
             <Text style={styles.emptyTitle}>No patients yet</Text>
           </View>
         ) : patients.slice(0, 10).map((p) => (
-          <View key={p.patient_id} style={styles.patCard} testID={`dh-pat-${p.patient_id}`}>
+          <TouchableOpacity
+            key={p.patient_id}
+            style={styles.patCard}
+            onPress={() => router.push({ pathname: "/doctor/patient/[id]", params: { id: p.patient_id } })}
+            testID={`dh-pat-${p.patient_id}`}
+          >
             <View style={styles.patAvatar}>
               <Text style={styles.patAvatarText}>{p.patient_name?.[0]?.toUpperCase() || "?"}</Text>
             </View>
@@ -140,40 +169,10 @@ export default function DoctorHome() {
                 <Text style={styles.tagLiteText}>Rx</Text>
               </View>
             )}
-          </View>
+            <Feather name="chevron-right" size={16} color={COLORS.textMuted} />
+          </TouchableOpacity>
         ))}
       </ScrollView>
-
-      {/* Rx modal */}
-      <Modal visible={rxOpen !== null} animationType="slide" transparent onRequestClose={() => setRxOpen(null)}>
-        <View style={styles.modalWrap}>
-          <View style={styles.sheet}>
-            <View style={styles.grabber} />
-            <ScrollView keyboardShouldPersistTaps="handled">
-              <Text style={styles.sheetTitle}>Prescription for {rxOpen?.patient_name}</Text>
-              <Text style={styles.sheetSub}>{rxOpen?.slot ? new Date(rxOpen.slot).toLocaleString() : ""}</Text>
-
-              <Text style={styles.rxLabel}>Diagnosis</Text>
-              <TextInput style={styles.rxInput} value={diag} onChangeText={setDiag} placeholder="e.g. Vata-Pitta imbalance, acid reflux" placeholderTextColor={COLORS.textMuted} testID="dh-rx-diag" />
-
-              <Text style={styles.rxLabel}>Medicines / herbs</Text>
-              <TextInput style={[styles.rxInput, { minHeight: 100 }]} value={meds} onChangeText={setMeds} multiline placeholder="1. Avipattikar Churna — ½ tsp with warm water, before meals&#10;2. Yashtimadhu tab — 1 tab BD" placeholderTextColor={COLORS.textMuted} testID="dh-rx-meds" />
-
-              <Text style={styles.rxLabel}>Lifestyle notes</Text>
-              <TextInput style={styles.rxInput} value={notes} onChangeText={setNotes} placeholder="Avoid spicy food, dinner by 8pm" placeholderTextColor={COLORS.textMuted} testID="dh-rx-notes" />
-
-              <View style={{ flexDirection: "row", gap: 8, marginTop: SPACING.md, marginBottom: SPACING.md }}>
-                <TouchableOpacity style={styles.cancel} onPress={() => setRxOpen(null)} testID="dh-rx-cancel">
-                  <Text style={{ color: COLORS.textPrimary, fontWeight: "700" }}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.save} onPress={submitRx} testID="dh-rx-save">
-                  <Text style={{ color: COLORS.surface, fontWeight: "700" }}>Save & send to patient</Text>
-                </TouchableOpacity>
-              </View>
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -200,6 +199,16 @@ const styles = StyleSheet.create({
   stat: { flex: 1, backgroundColor: COLORS.surface, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: COLORS.border, padding: SPACING.md, alignItems: "center" },
   statVal: { fontFamily: FONTS.heading, fontSize: 26, color: COLORS.brand },
   statLbl: { color: COLORS.textSecondary, textTransform: "uppercase", fontSize: 10, letterSpacing: 2, fontWeight: "700", marginTop: 4 },
+  quickRow: { flexDirection: "row", gap: SPACING.md, paddingHorizontal: SPACING.lg, marginTop: -8 },
+  earnCard: { flex: 1.1, backgroundColor: COLORS.brand, borderRadius: RADIUS.lg, padding: SPACING.md },
+  earnHead: { flexDirection: "row", alignItems: "center", gap: 6 },
+  earnLabel: { color: COLORS.accentSoft, textTransform: "uppercase", letterSpacing: 2, fontSize: 10, fontWeight: "700" },
+  earnValue: { color: COLORS.surface, fontFamily: FONTS.heading, fontSize: 26, marginTop: 6 },
+  earnSub: { color: COLORS.accentSoft, fontSize: 11, marginTop: 2 },
+  earnArrow: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: COLORS.surface, alignSelf: "flex-start", paddingHorizontal: 8, paddingVertical: 4, borderRadius: RADIUS.pill, marginTop: 8 },
+  earnArrowText: { color: COLORS.brand, fontWeight: "700", fontSize: 11, letterSpacing: 1 },
+  actionTile: { flexDirection: "row", alignItems: "center", gap: SPACING.sm, backgroundColor: COLORS.surface, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: COLORS.border, padding: SPACING.md, flex: 1 },
+  actionText: { color: COLORS.textPrimary, fontWeight: "700", fontSize: 13 },
   sectionTitle: { fontFamily: FONTS.heading, fontSize: 22, color: COLORS.textPrimary, paddingHorizontal: SPACING.lg, marginTop: SPACING.md, marginBottom: SPACING.md },
   emptyBox: { marginHorizontal: SPACING.lg, alignItems: "center", padding: SPACING.lg, backgroundColor: COLORS.surface, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: COLORS.border },
   emptyTitle: { fontFamily: FONTS.heading, fontSize: 18, color: COLORS.textPrimary, marginTop: 8 },
@@ -223,13 +232,4 @@ const styles = StyleSheet.create({
   patMeta: { color: COLORS.textSecondary, fontSize: 12, marginTop: 2 },
   tagLite: { flexDirection: "row", alignItems: "center", gap: 3, backgroundColor: COLORS.surfaceAlt, paddingHorizontal: 8, paddingVertical: 4, borderRadius: RADIUS.pill },
   tagLiteText: { color: COLORS.brand, fontSize: 10, fontWeight: "700" },
-  modalWrap: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "flex-end" },
-  sheet: { backgroundColor: COLORS.bg, padding: SPACING.lg, borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: "88%" },
-  grabber: { width: 42, height: 4, backgroundColor: COLORS.border, borderRadius: 2, alignSelf: "center", marginBottom: SPACING.md },
-  sheetTitle: { fontFamily: FONTS.heading, fontSize: 24, color: COLORS.textPrimary },
-  sheetSub: { color: COLORS.textSecondary, fontSize: 12, marginTop: 4 },
-  rxLabel: { color: COLORS.textSecondary, fontSize: 11, textTransform: "uppercase", letterSpacing: 2, marginTop: SPACING.md, marginBottom: 6, fontWeight: "700" },
-  rxInput: { backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: RADIUS.md, paddingHorizontal: SPACING.md, paddingVertical: 12, color: COLORS.textPrimary, fontSize: 14 },
-  cancel: { flex: 1, paddingVertical: 14, alignItems: "center", borderRadius: RADIUS.pill, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border },
-  save: { flex: 1.4, paddingVertical: 14, alignItems: "center", borderRadius: RADIUS.pill, backgroundColor: COLORS.brand },
 });

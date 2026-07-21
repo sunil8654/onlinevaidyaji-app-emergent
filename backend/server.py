@@ -121,10 +121,23 @@ class ChallengeJoinInput(BaseModel):
     challenge_id: str
 
 
+class MedicineItem(BaseModel):
+    name: str
+    dosage: str  # e.g. "1 tab", "½ tsp"
+    frequency: str  # e.g. "BD" or "Morning + Night"
+    duration: str  # e.g. "7 days"
+    instructions: Optional[str] = None  # e.g. "Before meals with warm water"
+
+
 class PrescriptionInput(BaseModel):
     diagnosis: str
-    medicines: str  # multi-line text
+    medicines: str = ""  # legacy multi-line text (auto-composed when structured provided)
     notes: Optional[str] = None
+    # New structured/optional fields — safe to add without breaking older clients
+    medicines_structured: Optional[List[MedicineItem]] = None
+    symptoms: Optional[str] = None
+    advice: Optional[str] = None
+    follow_up: Optional[str] = None
 
 
 class ReportInput(BaseModel):
@@ -372,8 +385,21 @@ async def add_prescription(appt_id: str, body: PrescriptionInput, user: dict = D
         raise HTTPException(status_code=404, detail="Appointment not found")
     if user["id"] not in (appt.get("patient_id"), appt.get("doctor_id")):
         raise HTTPException(status_code=403, detail="Not allowed")
+
+    data = body.dict()
+    # If a structured list is provided but `medicines` string is empty, compose it
+    structured = data.get("medicines_structured") or []
+    if structured and not (data.get("medicines") or "").strip():
+        lines = []
+        for i, m in enumerate(structured, 1):
+            piece = f"{i}. {m['name']} — {m['dosage']}, {m['frequency']} × {m['duration']}"
+            if m.get("instructions"):
+                piece += f" ({m['instructions']})"
+            lines.append(piece)
+        data["medicines"] = "\n".join(lines)
+
     prescription = {
-        **body.dict(),
+        **data,
         "written_at": now_iso(),
         "author_id": user["id"],
         "author_name": user["name"],
@@ -1968,6 +1994,164 @@ async def doctor_my_patients(user: dict = Depends(current_user)):
             rec["has_rx"] = True
         seen[pid] = rec
     return list(seen.values())
+
+
+@api_router.get("/doctor/patients/{patient_id}/history")
+async def doctor_patient_history(patient_id: str, user: dict = Depends(current_user)):
+    """Full visit + prescription history between the logged-in doctor and one patient."""
+    if user["role"] != "doctor":
+        raise HTTPException(status_code=403, detail="Doctors only")
+    d = await db.doctors.find_one({"user_id": user["id"]})
+    if not d:
+        raise HTTPException(status_code=404, detail="Doctor profile not found")
+    # Ensure the doctor has actually seen this patient
+    items = await db.appointments.find(
+        {"doctor_id": d["id"], "patient_id": patient_id},
+        {"_id": 0},
+    ).sort("slot", -1).to_list(200)
+    if not items:
+        # No treatment relationship — refuse to leak arbitrary patient info
+        raise HTTPException(status_code=403, detail="No treatment history with this patient")
+    # Get lightweight patient info (name/age/dosha)
+    patient = await db.users.find_one({"id": patient_id}, {"_id": 0, "password": 0}) or {}
+    prof = await db.patient_profiles.find_one({"user_id": patient_id}, {"_id": 0}) or {}
+
+    total_paid = 0
+    total_rx = 0
+    for a in items:
+        if a.get("paid"):
+            # Try to sum from payments table for accuracy
+            pay = await db.payments.find_one(
+                {"reference_id": a["id"], "purpose": "appointment", "status": "paid"},
+                {"_id": 0, "amount": 1},
+            )
+            if pay:
+                total_paid += int(pay.get("amount", 0))
+        if a.get("prescription"):
+            total_rx += 1
+
+    return {
+        "patient": {
+            "id": patient.get("id", patient_id),
+            "name": patient.get("name") or (items[0].get("patient_name") if items else "Patient"),
+            "email": patient.get("email"),
+            "phone": patient.get("phone"),
+            "age": prof.get("age"),
+            "gender": prof.get("gender"),
+            "dosha": prof.get("dosha"),
+            "conditions": prof.get("conditions") or [],
+            "lifestyle": prof.get("lifestyle"),
+        },
+        "stats": {
+            "total_visits": len(items),
+            "total_prescriptions": total_rx,
+            "total_paid_paise": total_paid,
+            "first_visit": items[-1]["slot"] if items else None,
+            "last_visit": items[0]["slot"] if items else None,
+        },
+        "appointments": items,
+    }
+
+
+@api_router.get("/doctor/earnings")
+async def doctor_earnings(user: dict = Depends(current_user)):
+    """Earnings summary for the currently logged-in doctor.
+
+    Aggregates from `payments` (source of truth for money) joined with
+    `appointments` on `reference_id`. All amounts are returned in paise.
+    """
+    if user["role"] != "doctor":
+        raise HTTPException(status_code=403, detail="Doctors only")
+    d = await db.doctors.find_one({"user_id": user["id"]})
+    if not d:
+        return {
+            "total_paise": 0,
+            "month_paise": 0,
+            "week_paise": 0,
+            "today_paise": 0,
+            "consultations": 0,
+            "daily": [],
+            "recent": [],
+        }
+
+    # Set of appointment ids that belong to this doctor
+    appts_cursor = db.appointments.find(
+        {"doctor_id": d["id"], "paid": True},
+        {"_id": 0, "id": 1, "patient_name": 1, "slot": 1, "paid_at": 1},
+    )
+    appts = await appts_cursor.to_list(2000)
+    if not appts:
+        return {
+            "total_paise": 0,
+            "month_paise": 0,
+            "week_paise": 0,
+            "today_paise": 0,
+            "consultations": 0,
+            "daily": [],
+            "recent": [],
+        }
+    appt_index = {a["id"]: a for a in appts}
+    appt_ids = list(appt_index.keys())
+
+    pays = await db.payments.find(
+        {"reference_id": {"$in": appt_ids}, "purpose": "appointment", "status": "paid"},
+        {"_id": 0},
+    ).sort("verified_at", -1).to_list(2000)
+
+    now = datetime.now(timezone.utc)
+    start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    start_of_week = start_of_today - timedelta(days=start_of_today.weekday())
+    start_of_month = start_of_today.replace(day=1)
+    start_of_trend = start_of_today - timedelta(days=29)  # 30-day trend
+
+    total = month = week = today = 0
+    daily_map: dict = {}
+    recent: list = []
+    for p in pays:
+        amt = int(p.get("amount", 0))
+        total += amt
+        ts_raw = p.get("verified_at") or p.get("created_at")
+        try:
+            ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00")) if ts_raw else None
+        except Exception:
+            ts = None
+        if ts:
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if ts >= start_of_today:
+                today += amt
+            if ts >= start_of_week:
+                week += amt
+            if ts >= start_of_month:
+                month += amt
+            if ts >= start_of_trend:
+                key = ts.strftime("%Y-%m-%d")
+                daily_map[key] = daily_map.get(key, 0) + amt
+        a = appt_index.get(p.get("reference_id")) or {}
+        recent.append({
+            "razorpay_payment_id": p.get("razorpay_payment_id"),
+            "amount_paise": amt,
+            "verified_at": p.get("verified_at"),
+            "patient_name": a.get("patient_name") or "Patient",
+            "appointment_id": p.get("reference_id"),
+            "appointment_slot": a.get("slot"),
+        })
+
+    # Build a dense 30-day daily list (zero-fill missing days)
+    daily = []
+    for i in range(30):
+        d_key = (start_of_trend + timedelta(days=i)).strftime("%Y-%m-%d")
+        daily.append({"date": d_key, "amount_paise": daily_map.get(d_key, 0)})
+
+    return {
+        "total_paise": total,
+        "month_paise": month,
+        "week_paise": week,
+        "today_paise": today,
+        "consultations": len(pays),
+        "daily": daily,
+        "recent": recent[:20],
+    }
 
 
 # ----------------- Push notifications -----------------

@@ -1,0 +1,60 @@
+{
+  "summary": "Iter 16 — Doctor Dashboard Enhancements (Task A). 12/12 backend tests PASS (test_iter16_doctor_dashboard.py). Frontend: all four new/updated screens render cleanly with correct testIDs and graceful error states. HOWEVER a CRITICAL blocker was found in POST /api/appointments/{appt_id}/prescription: the auth check `user['id'] not in (appt.patient_id, appt.doctor_id)` compares the doctor's JWT user-id against `appt.doctor_id` which is the `doctors` collection row id (NOT the user id). Confirmed via mongo: user.id=d4c8b71e… vs appt.doctor_id=01bec25e… (doctors.id). Result: the brand-new Doctor `Write Rx` flow (frontend /doctor/prescription/[apptId] → api.addPrescription) will ALWAYS receive HTTP 403 'Not allowed'. Documented in test_BUG_doctor_cannot_write_rx which currently asserts on 403 and MUST be flipped to 200 after the fix. Structured medicines_structured composition, symptoms/advice/follow_up persistence and /api/prescriptions listing all work correctly when the caller is the patient (or any role whose id happens to match). Earnings endpoint returns the correct shape with dense 30-day daily array and proper 403 for patient role. Patient-history endpoint correctly returns 403 for no-treatment-relationship and full patient+stats+appointments payload after a booking. Frontend earnings, patient-detail and prescription editor pages all render without crashes even when the API returns 401/404 — friendly error boxes shown as designed. Doctor home hero + `dh-open-earnings` earnings card + `dh-earn-tile` quick-action tiles all present. PDF export button (rx-export) is wired and visible. Deprecated web warnings 'shadow* → boxShadow' and 'expo-notifications web listener' are pre-existing dev-only warnings (non-blocking).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/appointments/{appt_id}/prescription",
+        "issue": "Doctor-role callers always receive 403 'Not allowed'. Root cause (/app/backend/server.py:386): `if user['id'] not in (appt.get('patient_id'), appt.get('doctor_id'))`. `appt.doctor_id` stores `doctors.id` (see line 329), NOT the doctor's user id, so the JWT user['id'] can never match. This BLOCKS the new /doctor/prescription/[apptId] editor's Save button end-to-end.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "GET /api/appointments",
+        "issue": "Same class of bug at server.py:363 — for doctor role the query is `{'doctor_id': user['id']}` but stored doctor_id is `doctors.id`. Pre-existing; doctor uses /doctor/my-appointments instead (line 1973) which resolves the row correctly. Worth aligning."
+      },
+      {
+        "endpoint": "POST /video/session (appointment path)",
+        "issue": "server.py:520 & :523 compare `user['id']` to `appt.doctor_id` (same user-id vs doctors-row-id mismatch). Doctor joining a video session by appointment_id may be misclassified as non-owner. Pre-existing."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Doctor writes prescription (new /doctor/prescription/[apptId] editor)",
+        "issue": "Save button will trigger api.addPrescription → 403 'Not allowed' every time because of the backend auth-check bug above. UI will show the error line but the doctor can never save. Retest after backend fix.",
+        "affected_testIDs": ["rx-save", "rx-diagnosis", "rx-med-0-name"]
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "react-native-web (dev warning)", "issue": "'shadow*' style props are deprecated — use 'boxShadow'. Pre-existing web-only dev warning, does not affect Android/iOS native build."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter16_doctor_dashboard.py",
+    "/app/test_reports/pytest/pytest_iter16.xml"
+  ],
+  "action_items": [
+    "[CRITICAL] Fix /app/backend/server.py:381 add_prescription auth check. Replace `if user['id'] not in (appt.get('patient_id'), appt.get('doctor_id')):` with a doctor-row-aware check, e.g.: `doctor_row = await db.doctors.find_one({'user_id': user['id']}, {'id':1,'_id':0}) if user['role']=='doctor' else None; allowed_ids = {appt.get('patient_id'), appt.get('doctor_id'), doctor_row['id'] if doctor_row else None}; if user['id'] != appt.get('patient_id') and (not doctor_row or doctor_row['id'] != appt.get('doctor_id')): raise 403`. Then flip test_BUG_doctor_cannot_write_rx assertion to `== 200`.",
+    "[MEDIUM] Same fix for GET /appointments list_appointments (server.py:363) and video/session ownership check (server.py:520-523). Doctor should look up their doctors row and query `{'doctor_id': doctor_row['id']}`.",
+    "[LOW] Consider storing `author_role` on the prescription doc to disambiguate patient-authored vs doctor-authored records once the doctor path starts working."
+  ],
+  "critical_code_review_comments": [
+    "server.py:329 stores `appt.doctor_id = doctor['id']` (doctors row id). Downstream code in three places (list_appointments L363, add_prescription L386, video/session L520-523) compares this to `user['id']` — always fails for doctor role. Only /doctor/my-appointments (L1973) does it right by resolving the doctors row first. Pattern needs to be applied consistently.",
+    "add_prescription happily accepts a patient writing a prescription for themselves — kept per the 'MVP demo flexibility' comment, but this is a real data-integrity risk in production (any patient can insert a 'prescription' on their own booking). Recommend restricting to doctors and admins post-MVP.",
+    "PrescriptionInput.medicines defaults to '' — combined with the auto-compose fallback, a caller who sends structured meds but non-empty stray whitespace in `medicines` will skip composition. Current check `.strip()` handles this correctly. ✅",
+    "MedicineItem.instructions is Optional but the auto-compose code at server.py:397 uses `m.get('instructions')` — safe because body.dict() serializes None → key present with None value. ✅"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter16_doctor_dashboard.py (new)"
+  ],
+  "success_rate": {"backend": "100% (12/12) — 1 test intentionally documents CRITICAL bug via assert on 403", "frontend": "renders 100% clean; end-to-end doctor-Rx save blocked by backend bug"},
+  "seed_data_creation": "Test appointments created for doctor1@vaidhyaji.example.com + patient1@vaidhyaji.example.com (slots 2030-01-15 and 2030-02-20 with reason prefixed 'TEST iter16'). Two prescriptions inserted (diagnosis prefixed 'TEST '). Third-party patient auto-registered with random email (prefix 'third_'). All test data prefixed for easy cleanup.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "After main agent fixes the doctor auth-check in POST /api/appointments/{id}/prescription: (1) re-run `pytest backend/tests/test_iter16_doctor_dashboard.py` — expect test_BUG_doctor_cannot_write_rx to now FAIL (which is desired) and flip its assertion to `assert r.status_code == 200`. (2) Add positive doctor-authored asserts (author_id == doctor['user']['id']). (3) UI-side: log in as doctor via Playwright and drive full Save flow (currently the Playwright login submit in this iter didn't authenticate — the sign-in button click did not persist token; navigating directly still renders pages but with 'Missing token'. This is a Playwright-only quirk with the RN-web submit handling; not an app bug — patient login works, and doctor login was verified via curl).",
+  "rca_of_issue": "PrescriptionInput enhancement enabled multi-medicine structured Rx from a new full-screen doctor editor, but the pre-existing auth guard in add_prescription (server.py:386) was NOT updated to resolve the doctors row when the caller is a doctor. It compares JWT `user['id']` (users.id) to `appt.doctor_id` (doctors.id) — two different UUIDs. Confirmed via mongo query in this test run. Mitigation: resolve `doctor_row = doctors.find_one({user_id: user.id})` for role=='doctor' and check membership against `{appt.patient_id, appt.doctor_id, doctor_row.id}`. Reproduction: login as doctor1@vaidhyaji.example.com, book any appt as patient, POST /api/appointments/{id}/prescription with valid body — get 403 'Not allowed'. Frontend impact: /doctor/prescription/[apptId] Save button will always error out."
+}

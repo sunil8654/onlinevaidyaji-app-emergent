@@ -72,7 +72,21 @@ export const api = {
   // DEPRECATED: use createPaymentOrder + verifyPayment instead. Kept for
   // backward-compat with old clients; server now returns 410.
   payAppointment: (id: string) => request(`/appointments/${id}/pay`, "POST"),
-  addPrescription: (id: string, body: { diagnosis: string; medicines: string; notes?: string }) =>
+  addPrescription: (id: string, body: {
+    diagnosis: string;
+    medicines?: string;
+    notes?: string;
+    medicines_structured?: {
+      name: string;
+      dosage: string;
+      frequency: string;
+      duration: string;
+      instructions?: string;
+    }[];
+    symptoms?: string;
+    advice?: string;
+    follow_up?: string;
+  }) =>
     request(`/appointments/${id}/prescription`, "POST", body),
   listPrescriptions: () => request("/prescriptions"),
 
@@ -128,6 +142,37 @@ export const api = {
   doctorOnboard: (body: any) => request("/doctor/onboard", "PUT", body),
   doctorMyAppointments: () => request("/doctor/my-appointments"),
   doctorMyPatients: () => request("/doctor/my-patients"),
+  doctorEarnings: () => request<{
+    total_paise: number;
+    month_paise: number;
+    week_paise: number;
+    today_paise: number;
+    consultations: number;
+    daily: { date: string; amount_paise: number }[];
+    recent: {
+      razorpay_payment_id: string | null;
+      amount_paise: number;
+      verified_at: string | null;
+      patient_name: string;
+      appointment_id: string;
+      appointment_slot: string | null;
+    }[];
+  }>("/doctor/earnings"),
+  doctorPatientHistory: (patient_id: string) => request<{
+    patient: {
+      id: string; name: string; email?: string; phone?: string;
+      age?: number; gender?: string; dosha?: string;
+      conditions?: string[]; lifestyle?: string;
+    };
+    stats: {
+      total_visits: number;
+      total_prescriptions: number;
+      total_paid_paise: number;
+      first_visit: string | null;
+      last_visit: string | null;
+    };
+    appointments: any[];
+  }>(`/doctor/patients/${patient_id}/history`),
 
   // Push
   registerPush: (body: { user_id: string; platform: string; device_token: string }) =>
