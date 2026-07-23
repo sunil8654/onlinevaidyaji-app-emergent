@@ -15,8 +15,16 @@ load_dotenv(BACKEND_ENV)
 PUBLIC_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "").rstrip("/")
 BASE_URL = PUBLIC_URL or "http://localhost:8001"
 # Admin password now comes from env (no more hardcoded default — SEC-001).
+# Tests must set ADMIN_PASSWORD in env or load it from /app/backend/.env.
 ADMIN_EMAIL_TEST = os.environ.get("ADMIN_EMAIL", "admin@vaidhyaji.com")
-ADMIN_PASSWORD_TEST = os.environ.get("ADMIN_PASSWORD", "Admin@123")
+ADMIN_PASSWORD_TEST = os.environ.get("ADMIN_PASSWORD", "")
+if not ADMIN_PASSWORD_TEST:
+    import warnings
+    warnings.warn(
+        "ADMIN_PASSWORD not set — admin-flow tests will be skipped. "
+        "Set it in backend/.env or environment before running admin tests.",
+        stacklevel=2,
+    )
 
 
 @pytest.fixture(scope="session")

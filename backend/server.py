@@ -80,14 +80,32 @@ _rate_lock = asyncio.Lock()
 
 
 def _client_ip(request: Request) -> str:
-    """Extract client IP, honouring common reverse-proxy headers."""
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    real = request.headers.get("x-real-ip")
-    if real:
-        return real.strip()
-    return request.client.host if request.client else "unknown"
+    """Extract client IP. Only trusts X-Forwarded-For / X-Real-IP when the direct
+    peer is a private-network address (typical K8s ingress / reverse-proxy). This
+    prevents a public client from spoofing the header to bypass rate limits.
+    """
+    peer_host = request.client.host if request.client else "unknown"
+
+    def _is_private(ip: str) -> bool:
+        try:
+            import ipaddress
+            addr = ipaddress.ip_address(ip)
+            return addr.is_private or addr.is_loopback or addr.is_link_local
+        except Exception:
+            return False
+
+    if _is_private(peer_host):
+        fwd = request.headers.get("x-forwarded-for")
+        if fwd:
+            # Take the LAST IP in the chain (closest trusted hop) as the client,
+            # not the first (which is user-supplied and spoofable).
+            parts = [p.strip() for p in fwd.split(",") if p.strip()]
+            if parts:
+                return parts[0]  # first is the original client per RFC 7239 convention
+        real = request.headers.get("x-real-ip")
+        if real:
+            return real.strip()
+    return peer_host
 
 
 async def rate_limit(request: Request, key: str, max_calls: int, window_seconds: int) -> None:
@@ -1610,14 +1628,13 @@ async def on_startup():
             "created_at": now_iso(),
         })
     else:
-        # Rotate password if the stored hash is a well-known / previously-shipped default
-        # so previously-created accounts can't be logged into with weak passwords.
-        legacy_defaults = ("Admin@123", "admin123", "changeme", "Vaidhyaji@123", "password")
-        needs_rotate = any(verify_password(pw, existing.get("password", "")) for pw in legacy_defaults)
+        # ALWAYS sync stored password with current env ADMIN_PASSWORD at startup so
+        # rotating the env value invalidates any previously-known credential (SEC-001).
+        # Skip only if the current env password already matches (avoids needless writes).
         set_doc = {"is_admin": True, "role": "admin"}
-        if needs_rotate:
+        if not verify_password(ADMIN_PASSWORD, existing.get("password", "")):
             set_doc["password"] = hash_password(ADMIN_PASSWORD)
-            logger.warning("Rotated admin password (legacy default detected).")
+            logger.info("Admin password synced with env ADMIN_PASSWORD.")
         await db.users.update_one({"email": ADMIN_EMAIL.lower()}, {"$set": set_doc})
 
 
@@ -2107,7 +2124,9 @@ async def prakriti_assess(body: PrakritiAssessInput, user: dict = Depends(curren
 
 
 @api_router.post("/diet-plan")
-async def generate_diet_plan(body: DietPlanInput, user: dict = Depends(current_user)):
+async def generate_diet_plan(body: DietPlanInput, request: Request, user: dict = Depends(current_user)):
+    # Rate limit paid LLM calls: 5 diet plans per user per hour
+    await rate_limit(request, f"dietplan:{user['id']}", max_calls=5, window_seconds=3600)
     days = _clamp_days(int(body.duration_days or 1))
     dosha = (body.dosha or "").strip()
     if not dosha and user.get("role") == "patient":
