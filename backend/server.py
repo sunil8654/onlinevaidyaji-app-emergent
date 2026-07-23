@@ -97,11 +97,12 @@ def _client_ip(request: Request) -> str:
     if _is_private(peer_host):
         fwd = request.headers.get("x-forwarded-for")
         if fwd:
-            # Take the LAST IP in the chain (closest trusted hop) as the client,
-            # not the first (which is user-supplied and spoofable).
+            # Take the LAST (rightmost) IP in the chain — this is the address the
+            # trusted proxy actually saw. Earlier entries are attacker-controllable
+            # if the ingress appends rather than overwrites.
             parts = [p.strip() for p in fwd.split(",") if p.strip()]
             if parts:
-                return parts[0]  # first is the original client per RFC 7239 convention
+                return parts[-1]
         real = request.headers.get("x-real-ip")
         if real:
             return real.strip()
@@ -1908,12 +1909,21 @@ async def order_medicines(body: MedicineOrderInput, user: dict = Depends(current
     resolved = []
     for it in body.items:
         m = med_map.get(it.get("medicine_id"))
-        qty = int(it.get("qty", 1))
+        try:
+            qty = int(it.get("qty", 1))
+        except (TypeError, ValueError):
+            qty = 0
+        # Clamp qty to a safe positive range (prevents negative-price manipulation
+        # or DoS via huge quantities on this mock endpoint).
+        if qty < 1 or qty > 99:
+            continue
         if not m:
             continue
         line = qty * m.get("price", 0)
         total += line
         resolved.append({"medicine_id": m["id"], "name": m["name"], "qty": qty, "unit_price": m["price"], "line_total": line})
+    if not resolved:
+        raise HTTPException(status_code=400, detail="No valid items in order")
     order = {
         "id": str(uuid.uuid4()),
         "user_id": user["id"],
@@ -1921,7 +1931,9 @@ async def order_medicines(body: MedicineOrderInput, user: dict = Depends(current
         "items": resolved,
         "address": body.address,
         "total": total,
-        "status": "paid",  # mock
+        # Pending payment — client must invoke /payments/create-order+/payments/verify
+        # to move to "paid" (see payment verification flow at server.py ~1020).
+        "status": "pending",
         "created_at": now_iso(),
     }
     await db.medicine_orders.insert_one(order)
