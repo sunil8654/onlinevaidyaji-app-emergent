@@ -1,3 +1,4 @@
+import os
 """
 Regression tests for deployment readiness changes:
 - CORS reads from CORS_ORIGINS env var
@@ -54,7 +55,7 @@ class TestAdminAuth:
     def test_admin_login_returns_jwt_and_flag(self, api_client, base_url):
         r = api_client.post(
             f"{base_url}/api/auth/login",
-            json={"email": "admin@vaidhyaji.com", "password": "Admin@123"},
+            json={"email": "admin@vaidhyaji.com", "password": os.environ.get("ADMIN_PASSWORD", "Admin@123")},
             timeout=30,
         )
         assert r.status_code == 200, r.text
@@ -71,7 +72,7 @@ class TestAdminAuth:
 def admin_ctx(api_client, base_url):
     r = api_client.post(
         f"{base_url}/api/auth/login",
-        json={"email": "admin@vaidhyaji.com", "password": "Admin@123"},
+        json={"email": "admin@vaidhyaji.com", "password": os.environ.get("ADMIN_PASSWORD", "Admin@123")},
         timeout=30,
     )
     assert r.status_code == 200, f"admin login failed: {r.text}"

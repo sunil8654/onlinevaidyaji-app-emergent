@@ -1,3 +1,4 @@
+import os
 """Iteration 5 backend tests:
 - Medicines shop (list/detail/order/orders-mine, category filter)
 - Lab tests (list/detail/book/bookings-mine)
@@ -15,7 +16,7 @@ import pytest
 def admin_ctx(api_client, base_url):
     r = api_client.post(
         f"{base_url}/api/auth/login",
-        json={"email": "admin@vaidhyaji.com", "password": "Admin@123"},
+        json={"email": "admin@vaidhyaji.com", "password": os.environ.get("ADMIN_PASSWORD", "Admin@123")},
         timeout=15,
     )
     assert r.status_code == 200, r.text

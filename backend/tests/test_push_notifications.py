@@ -233,7 +233,7 @@ class TestAdminDoctorApprovePush:
     def _admin_headers(self, api_client, base_url):
         r = api_client.post(
             f"{base_url}/api/auth/login",
-            json={"email": "admin@vaidhyaji.com", "password": "Admin@123"},
+            json={"email": "admin@vaidhyaji.com", "password": os.environ.get("ADMIN_PASSWORD", "Admin@123")},
             timeout=30,
         )
         assert r.status_code == 200, r.text
@@ -337,7 +337,7 @@ class TestAdminBroadcast:
     def test_admin_broadcast_non_blocking(self, api_client, base_url):
         r = api_client.post(
             f"{base_url}/api/auth/login",
-            json={"email": "admin@vaidhyaji.com", "password": "Admin@123"},
+            json={"email": "admin@vaidhyaji.com", "password": os.environ.get("ADMIN_PASSWORD", "Admin@123")},
             timeout=30,
         )
         assert r.status_code == 200

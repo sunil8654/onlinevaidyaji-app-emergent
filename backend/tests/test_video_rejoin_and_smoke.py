@@ -39,7 +39,7 @@ def _register(role: str) -> dict:
 def _admin_headers() -> dict:
     r = requests.post(
         f"{BASE_URL}/api/auth/login",
-        json={"email": "admin@vaidhyaji.com", "password": "Admin@123"},
+        json={"email": "admin@vaidhyaji.com", "password": os.environ.get("ADMIN_PASSWORD", "Admin@123")},
         timeout=30,
     )
     assert r.status_code == 200, f"admin login failed: {r.status_code} {r.text}"
@@ -162,7 +162,7 @@ class TestBackendSmoke:
     def test_admin_login(self):
         r = requests.post(
             f"{BASE_URL}/api/auth/login",
-            json={"email": "admin@vaidhyaji.com", "password": "Admin@123"},
+            json={"email": "admin@vaidhyaji.com", "password": os.environ.get("ADMIN_PASSWORD", "Admin@123")},
             timeout=30,
         )
         assert r.status_code == 200

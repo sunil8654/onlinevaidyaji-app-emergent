@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
 from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
@@ -12,6 +12,9 @@ from pydantic import BaseModel, Field, EmailStr, validator
 from typing import List, Optional, Literal, Dict, Any
 import uuid
 from datetime import datetime, timedelta, timezone
+from collections import defaultdict, deque
+import asyncio
+import time
 import jwt
 import bcrypt
 
@@ -36,8 +39,20 @@ if len(JWT_SECRET) < 32 or "change-me" in JWT_SECRET.lower() or JWT_SECRET.lower
 JWT_ALGORITHM = os.environ['JWT_ALGORITHM']
 JWT_EXPIRE_DAYS = int(os.environ.get('JWT_EXPIRE_DAYS', 30))
 EMERGENT_LLM_KEY = os.environ['EMERGENT_LLM_KEY']
-ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'admin@vaidhyaji.com')
-ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'Admin@123')
+ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL')
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
+# Guard against missing / weak / well-known admin creds (prevents SEC-001)
+_WEAK_ADMIN_PWDS = {"admin", "admin123", "admin@123", "password", "changeme", "vaidhyaji", "admin@vaidhyaji"}
+if not ADMIN_EMAIL or not ADMIN_PASSWORD:
+    raise RuntimeError(
+        "ADMIN_EMAIL and ADMIN_PASSWORD must be set in environment. "
+        "The seeded admin account will NOT be created without an explicit strong password."
+    )
+if len(ADMIN_PASSWORD) < 12 or ADMIN_PASSWORD.lower() in _WEAK_ADMIN_PWDS:
+    raise RuntimeError(
+        "ADMIN_PASSWORD is too weak or a well-known default. "
+        "Use at least 12 characters with mixed case, numbers and symbols."
+    )
 
 # Push
 PUSH_BASE_URL = "https://integrations.emergentagent.com"
@@ -55,6 +70,43 @@ bearer = HTTPBearer(auto_error=False)
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+
+# ----------------- Rate Limiter (in-memory, per-IP) -----------------
+# Lightweight sliding-window limiter. Good enough for a single-worker deploy;
+# for multi-worker, back this with Redis (SEC-002 mitigation).
+_rate_buckets: Dict[str, "deque[float]"] = defaultdict(deque)
+_rate_lock = asyncio.Lock()
+
+
+def _client_ip(request: Request) -> str:
+    """Extract client IP, honouring common reverse-proxy headers."""
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    real = request.headers.get("x-real-ip")
+    if real:
+        return real.strip()
+    return request.client.host if request.client else "unknown"
+
+
+async def rate_limit(request: Request, key: str, max_calls: int, window_seconds: int) -> None:
+    """Raise 429 if `key` (usually IP+route) exceeds `max_calls` per window."""
+    now = time.monotonic()
+    bucket_key = f"{key}:{_client_ip(request)}"
+    async with _rate_lock:
+        bucket = _rate_buckets[bucket_key]
+        # drop entries outside the window
+        while bucket and (now - bucket[0]) > window_seconds:
+            bucket.popleft()
+        if len(bucket) >= max_calls:
+            retry_after = max(1, int(window_seconds - (now - bucket[0])))
+            raise HTTPException(
+                status_code=429,
+                detail="Too many requests. Please slow down and try again shortly.",
+                headers={"Retry-After": str(retry_after)},
+            )
+        bucket.append(now)
 
 
 # ----------------- Models -----------------
@@ -240,7 +292,9 @@ async def _is_appt_participant(user: dict, appt: dict) -> bool:
 
 # ----------------- Auth Routes -----------------
 @api_router.post("/auth/register")
-async def register(body: RegisterInput):
+async def register(body: RegisterInput, request: Request):
+    # Rate limit: 8 registrations per IP per hour (prevents mass signup abuse)
+    await rate_limit(request, "auth:register", max_calls=8, window_seconds=3600)
     existing = await db.users.find_one({"email": body.email.lower()})
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -292,7 +346,9 @@ async def register(body: RegisterInput):
 
 
 @api_router.post("/auth/login")
-async def login(body: LoginInput):
+async def login(body: LoginInput, request: Request):
+    # Rate limit: 10 login attempts per IP per 5 minutes (prevents brute-force)
+    await rate_limit(request, "auth:login", max_calls=10, window_seconds=300)
     user = await db.users.find_one({"email": body.email.lower()})
     if not user or not verify_password(body.password, user["password"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
@@ -417,12 +473,16 @@ async def pay_appointment(appt_id: str, user: dict = Depends(current_user)):
 
 @api_router.post("/appointments/{appt_id}/prescription")
 async def add_prescription(appt_id: str, body: PrescriptionInput, user: dict = Depends(current_user)):
-    # Either the patient (demo) or the doctor of the appt can add — for MVP demo flexibility
+    # Only the doctor of record can create/update a prescription (SEC-003).
+    # Patients writing their own prescriptions creates fabricated clinical records.
     appt = await db.appointments.find_one({"id": appt_id}, {"_id": 0})
     if not appt:
         raise HTTPException(status_code=404, detail="Appointment not found")
-    if not await _is_appt_participant(user, appt):
-        raise HTTPException(status_code=403, detail="Not allowed")
+    if user.get("role") != "doctor":
+        raise HTTPException(status_code=403, detail="Only the treating doctor can add a prescription")
+    _, doc_id = await _appt_actor_ids(user)
+    if not doc_id or appt.get("doctor_id") != doc_id:
+        raise HTTPException(status_code=403, detail="You are not the doctor of record for this appointment")
 
     data = body.dict()
     # If a structured list is provided but `medicines` string is empty, compose it
@@ -1253,7 +1313,9 @@ SYSTEM_PROMPT = (
 
 
 @api_router.post("/chat/message")
-async def chat_message(body: ChatMessageInput, user: dict = Depends(current_user)):
+async def chat_message(body: ChatMessageInput, request: Request, user: dict = Depends(current_user)):
+    # Rate limit LLM calls: 20 per user per 5 min (prevents cost amplification)
+    await rate_limit(request, f"chat:msg:{user['id']}", max_calls=20, window_seconds=300)
     # persist user message
     await db.chat_messages.insert_one({
         "id": str(uuid.uuid4()),
@@ -1274,7 +1336,7 @@ async def chat_message(body: ChatMessageInput, user: dict = Depends(current_user
         reply = await chat.send_message(UserMessage(text=body.message))
     except Exception as e:
         logger.exception("LLM error")
-        raise HTTPException(status_code=502, detail=f"AI error: {str(e)}")
+        raise HTTPException(status_code=502, detail="AI assistant is temporarily unavailable. Please try again.")
 
     reply_text = reply if isinstance(reply, str) else str(reply)
 
@@ -1548,7 +1610,15 @@ async def on_startup():
             "created_at": now_iso(),
         })
     else:
-        await db.users.update_one({"email": ADMIN_EMAIL.lower()}, {"$set": {"is_admin": True, "role": "admin"}})
+        # Rotate password if the stored hash is a well-known / previously-shipped default
+        # so previously-created accounts can't be logged into with weak passwords.
+        legacy_defaults = ("Admin@123", "admin123", "changeme", "Vaidhyaji@123", "password")
+        needs_rotate = any(verify_password(pw, existing.get("password", "")) for pw in legacy_defaults)
+        set_doc = {"is_admin": True, "role": "admin"}
+        if needs_rotate:
+            set_doc["password"] = hash_password(ADMIN_PASSWORD)
+            logger.warning("Rotated admin password (legacy default detected).")
+        await db.users.update_one({"email": ADMIN_EMAIL.lower()}, {"$set": set_doc})
 
 
 # ----------------- App wiring -----------------
@@ -1739,7 +1809,9 @@ class LeadInput(BaseModel):
 
 
 @api_router.post("/support/chat")
-async def support_chat(body: SupportChatInput):
+async def support_chat(body: SupportChatInput, request: Request):
+    # Rate limit: anonymous LLM endpoint — 10 msgs per IP per 5 min
+    await rate_limit(request, "support:chat", max_calls=10, window_seconds=300)
     # session-based (anonymous OK). Store both messages.
     await db.support_messages.insert_one({
         "id": str(uuid.uuid4()),
@@ -1757,7 +1829,7 @@ async def support_chat(body: SupportChatInput):
         reply = await chat.send_message(UserMessage(text=body.message))
     except Exception as e:
         logger.exception("support LLM error")
-        raise HTTPException(status_code=502, detail=f"AI error: {str(e)}")
+        raise HTTPException(status_code=502, detail="Support assistant is temporarily unavailable. Please try again.")
     reply_text = reply if isinstance(reply, str) else str(reply)
     await db.support_messages.insert_one({
         "id": str(uuid.uuid4()),
@@ -3144,10 +3216,14 @@ app.include_router(api_router)
 
 cors_origins = os.environ.get("CORS_ORIGINS", "*")
 allow_origins_list = [o.strip() for o in cors_origins.split(",")] if cors_origins != "*" else ["*"]
+# Security: wildcard + credentials is disallowed by the CORS spec and unsafe.
+# When origins are "*" we drop credentials automatically (JWT is sent via Authorization header,
+# not cookies, so this is safe). Set CORS_ORIGINS to your explicit prod domain for stricter posture.
+_allow_credentials = "*" not in allow_origins_list
 
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials=True,
+    allow_credentials=_allow_credentials,
     allow_origins=allow_origins_list,
     allow_methods=["*"],
     allow_headers=["*"],

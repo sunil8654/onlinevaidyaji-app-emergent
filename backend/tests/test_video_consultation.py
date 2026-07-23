@@ -241,7 +241,7 @@ class TestAdminRegression:
     def test_admin_login_and_patients_aggregation(self):
         r = requests.post(
             f"{BASE_URL}/api/auth/login",
-            json={"email": "admin@vaidhyaji.com", "password": "Admin@123"},
+            json={"email": "admin@vaidhyaji.com", "password": os.environ.get("ADMIN_PASSWORD", "Admin@123")},
             timeout=30,
         )
         assert r.status_code == 200, f"admin login: {r.status_code} {r.text}"

@@ -14,7 +14,7 @@ import pytest
 
 
 ADMIN_EMAIL = "admin@vaidhyaji.com"
-ADMIN_PASSWORD = "Admin@123"
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Admin@123")
 
 
 # --------------- Admin auth ---------------

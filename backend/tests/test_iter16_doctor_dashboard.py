@@ -22,7 +22,7 @@ DOCTOR_PASS = "Vaidhyaji@123"
 PATIENT_EMAIL = "patient1@vaidhyaji.example.com"
 PATIENT_PASS = "Vaidhyaji@123"
 ADMIN_EMAIL = "admin@vaidhyaji.com"
-ADMIN_PASS = "Admin@123"
+ADMIN_PASS = os.environ.get("ADMIN_PASSWORD", "Admin@123")
 
 
 # ---------- helpers ----------

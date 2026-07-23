@@ -8,9 +8,20 @@ from dotenv import load_dotenv
 # Load backend .env to reuse public URL from frontend .env
 FRONTEND_ENV = Path(__file__).resolve().parents[2] / "frontend" / ".env"
 load_dotenv(FRONTEND_ENV)
+# Also load backend .env to pick up rotated ADMIN_PASSWORD for admin-flow tests
+BACKEND_ENV = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(BACKEND_ENV)
 
 PUBLIC_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "").rstrip("/")
 BASE_URL = PUBLIC_URL or "http://localhost:8001"
+# Admin password now comes from env (no more hardcoded default — SEC-001).
+ADMIN_EMAIL_TEST = os.environ.get("ADMIN_EMAIL", "admin@vaidhyaji.com")
+ADMIN_PASSWORD_TEST = os.environ.get("ADMIN_PASSWORD", "Admin@123")
+
+
+@pytest.fixture(scope="session")
+def admin_credentials():
+    return {"email": ADMIN_EMAIL_TEST, "password": ADMIN_PASSWORD_TEST}
 
 
 @pytest.fixture(scope="session")

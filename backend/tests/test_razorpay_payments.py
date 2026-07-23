@@ -265,7 +265,7 @@ class TestRegression:
     def test_admin_login_and_patients(self, api_client, base_url):
         r = api_client.post(
             f"{base_url}/api/auth/login",
-            json={"email": "admin@vaidhyaji.com", "password": "Admin@123"},
+            json={"email": "admin@vaidhyaji.com", "password": os.environ.get("ADMIN_PASSWORD", "Admin@123")},
             timeout=30,
         )
         assert r.status_code == 200, r.text
