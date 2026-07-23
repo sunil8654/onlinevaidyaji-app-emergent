@@ -2887,6 +2887,8 @@ async def wellness_log(body: WellnessLogInput, user: dict = Depends(current_user
         else:
             doc["category"] = "Stage 2"
     elif body.type == "sugar":
+        if body.fasting is None and body.post_meal is None:
+            raise HTTPException(status_code=400, detail="fasting or post_meal required for sugar")
         doc["fasting"] = body.fasting
         doc["post_meal"] = body.post_meal
         doc["value"] = body.fasting or body.post_meal
