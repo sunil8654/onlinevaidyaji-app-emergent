@@ -34,6 +34,7 @@ class TestAuth:
             "email": patient_ctx["email"],
             "password": "whatever",
             "role": "patient",
+            "phone": "9999999998",
         }, timeout=15)
         assert r.status_code == 400, r.text
 

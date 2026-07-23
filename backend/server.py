@@ -130,12 +130,12 @@ async def rate_limit(request: Request, key: str, max_calls: int, window_seconds:
 
 # ----------------- Models -----------------
 class RegisterInput(BaseModel):
-    name: str
+    name: str = Field(..., min_length=1, max_length=120)
     email: EmailStr
-    password: str
+    password: str = Field(..., min_length=6, max_length=200)
     phone: str  # MANDATORY — 10-digit Indian mobile
     role: Literal["patient", "doctor"] = "patient"
-    registration_number: Optional[str] = None  # for doctors
+    registration_number: Optional[str] = Field(None, max_length=100)  # for doctors
 
     @validator("phone")
     def validate_phone(cls, v: str) -> str:
@@ -150,7 +150,7 @@ class RegisterInput(BaseModel):
 
 class LoginInput(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(..., min_length=1, max_length=200)
 
 
 class User(BaseModel):
@@ -194,39 +194,39 @@ class ReminderInput(BaseModel):
 
 
 class ChatMessageInput(BaseModel):
-    session_id: str
-    message: str
+    session_id: str = Field(..., min_length=1, max_length=100)
+    message: str = Field(..., min_length=1, max_length=4000)
 
 
 class ChallengeJoinInput(BaseModel):
-    challenge_id: str
+    challenge_id: str = Field(..., min_length=1, max_length=100)
 
 
 class MedicineItem(BaseModel):
-    name: str
-    dosage: str  # e.g. "1 tab", "½ tsp"
-    frequency: str  # e.g. "BD" or "Morning + Night"
-    duration: str  # e.g. "7 days"
-    instructions: Optional[str] = None  # e.g. "Before meals with warm water"
+    name: str = Field(..., min_length=1, max_length=200)
+    dosage: str = Field(..., max_length=100)      # e.g. "1 tab", "½ tsp"
+    frequency: str = Field(..., max_length=100)   # e.g. "BD" or "Morning + Night"
+    duration: str = Field(..., max_length=100)    # e.g. "7 days"
+    instructions: Optional[str] = Field(None, max_length=500)
 
 
 class PrescriptionInput(BaseModel):
-    diagnosis: str
-    medicines: str = ""  # legacy multi-line text (auto-composed when structured provided)
-    notes: Optional[str] = None
-    # New structured/optional fields — safe to add without breaking older clients
+    diagnosis: str = Field(..., min_length=1, max_length=1000)
+    medicines: str = Field("", max_length=4000)   # legacy multi-line text
+    notes: Optional[str] = Field(None, max_length=2000)
     medicines_structured: Optional[List[MedicineItem]] = None
-    symptoms: Optional[str] = None
-    advice: Optional[str] = None
-    follow_up: Optional[str] = None
+    symptoms: Optional[str] = Field(None, max_length=2000)
+    advice: Optional[str] = Field(None, max_length=2000)
+    follow_up: Optional[str] = Field(None, max_length=500)
 
 
 class ReportInput(BaseModel):
-    title: str
-    kind: str = "lab"  # lab | scan | note
-    date: Optional[str] = None
-    notes: Optional[str] = None
-    image_base64: Optional[str] = None  # optional
+    title: str = Field(..., min_length=1, max_length=200)
+    kind: str = Field("lab", max_length=40)       # lab | scan | note
+    date: Optional[str] = Field(None, max_length=40)
+    notes: Optional[str] = Field(None, max_length=2000)
+    # Cap base64 payload at ~4 MB (base64 is 4/3 of raw, so raw ≈ 3 MB)
+    image_base64: Optional[str] = Field(None, max_length=4_000_000)
 
 
 # ----------------- Helpers -----------------
@@ -312,8 +312,9 @@ async def _is_appt_participant(user: dict, appt: dict) -> bool:
 # ----------------- Auth Routes -----------------
 @api_router.post("/auth/register")
 async def register(body: RegisterInput, request: Request):
-    # Rate limit: 8 registrations per IP per hour (prevents mass signup abuse)
-    await rate_limit(request, "auth:register", max_calls=8, window_seconds=3600)
+    # Rate limit: 30 registrations per IP per hour (prevents mass signup abuse
+    # while allowing legitimate signup bursts and CI/test runs on shared IPs)
+    await rate_limit(request, "auth:register", max_calls=30, window_seconds=3600)
     existing = await db.users.find_one({"email": body.email.lower()})
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -405,18 +406,28 @@ async def upsert_patient_profile(body: HealthProfileInput, user: dict = Depends(
 
 
 # ----------------- Doctors -----------------
+# Fields safe to expose in the public directory (no personal contact / govt IDs).
+_PUBLIC_DOCTOR_PROJECTION = {
+    "_id": 0,
+    "id": 1, "name": 1, "specialty": 1, "qualification": 1,
+    "experience_years": 1, "languages": 1, "consultation_fee": 1,
+    "bio": 1, "avatar_url": 1, "rating": 1, "reviews": 1, "verified": 1,
+    # Deliberately NOT included: phone, email, registration_number, user_id.
+}
+
+
 @api_router.get("/doctors")
 async def list_doctors(specialty: Optional[str] = None):
     q = {"verified": True}
     if specialty and specialty.lower() != "all":
         q["specialty"] = specialty
-    docs = await db.doctors.find(q, {"_id": 0}).to_list(200)
+    docs = await db.doctors.find(q, _PUBLIC_DOCTOR_PROJECTION).to_list(200)
     return docs
 
 
 @api_router.get("/doctors/{doctor_id}")
 async def get_doctor(doctor_id: str):
-    doc = await db.doctors.find_one({"id": doctor_id}, {"_id": 0})
+    doc = await db.doctors.find_one({"id": doctor_id}, _PUBLIC_DOCTOR_PROJECTION)
     if not doc:
         raise HTTPException(status_code=404, detail="Doctor not found")
     return doc
@@ -1815,15 +1826,15 @@ SUPPORT_PROMPT = (
 
 
 class SupportChatInput(BaseModel):
-    session_id: str
-    message: str
+    session_id: str = Field(..., min_length=1, max_length=100)
+    message: str = Field(..., min_length=1, max_length=2000)
 
 
 class LeadInput(BaseModel):
-    name: str
-    contact: str  # phone or email
-    goal: Optional[str] = None
-    source: Optional[str] = "support-chat"
+    name: str = Field(..., min_length=1, max_length=120)
+    contact: str = Field(..., min_length=1, max_length=200)  # phone or email
+    goal: Optional[str] = Field(None, max_length=500)
+    source: Optional[str] = Field("support-chat", max_length=60)
 
 
 @api_router.post("/support/chat")
