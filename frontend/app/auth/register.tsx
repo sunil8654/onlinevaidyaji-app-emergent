@@ -25,6 +25,12 @@ export default function Register() {
       setErr("Please fill all required fields");
       return;
     }
+    // Phone mandatory + Indian 10-digit validation
+    const cleanedPhone = phone.replace(/[^0-9]/g, "").replace(/^91(?=\d{10}$)/, "");
+    if (!/^[6-9]\d{9}$/.test(cleanedPhone)) {
+      setErr("Enter a valid 10-digit Indian mobile number");
+      return;
+    }
     if (!isPatient && !regNumber.trim()) {
       setErr("Registration number is required for doctors");
       return;
@@ -36,10 +42,10 @@ export default function Register() {
         email: email.trim().toLowerCase(),
         password,
         role: isPatient ? "patient" : "doctor",
-        phone,
+        phone: cleanedPhone,
         registration_number: isPatient ? undefined : regNumber,
       });
-      router.replace({ pathname: "/auth/otp", params: { phone } });
+      router.replace({ pathname: "/auth/otp", params: { phone: cleanedPhone } });
     } catch (e: any) {
       setErr(e.message || "Registration failed");
     } finally {
@@ -73,8 +79,22 @@ export default function Register() {
             <Label>Password</Label>
             <TextInput style={styles.input} value={password} onChangeText={setPassword} secureTextEntry placeholder="At least 6 characters" placeholderTextColor={COLORS.textMuted} testID="register-password" />
 
-            <Label>Phone (optional)</Label>
-            <TextInput style={styles.input} value={phone} onChangeText={setPhone} keyboardType="phone-pad" placeholder="+91 9xxxxxxxxx" placeholderTextColor={COLORS.textMuted} testID="register-phone" />
+            <Label>Phone Number *</Label>
+            <View style={styles.phoneRow}>
+              <View style={styles.phonePrefix}>
+                <Text style={styles.phonePrefixText}>+91</Text>
+              </View>
+              <TextInput
+                style={styles.phoneInput}
+                value={phone}
+                onChangeText={(t) => setPhone(t.replace(/[^0-9]/g, "").slice(0, 10))}
+                keyboardType="phone-pad"
+                placeholder="98xxxxxxxx"
+                placeholderTextColor={COLORS.textMuted}
+                maxLength={10}
+                testID="register-phone"
+              />
+            </View>
 
             {!isPatient && (
               <>
@@ -158,4 +178,27 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border,
   },
   docText: { color: COLORS.textSecondary, fontSize: 13 },
+  phoneRow: { flexDirection: "row", gap: 8 },
+  phonePrefix: {
+    backgroundColor: COLORS.surfaceAlt,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: RADIUS.md,
+    paddingHorizontal: 14,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  phonePrefixText: { color: COLORS.textPrimary, fontWeight: "700", fontSize: 15 },
+  phoneInput: {
+    flex: 1,
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: RADIUS.md,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: 14,
+    fontSize: 15,
+    color: COLORS.textPrimary,
+    letterSpacing: 1,
+  },
 });

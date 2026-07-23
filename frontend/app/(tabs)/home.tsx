@@ -128,12 +128,34 @@ function PatientHome() {
 
         {/* Row 2: water, journal, lifestyle, near-you */}
         <View style={styles.engagementRow}>
+          <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/wellness")} testID="home-wellness" activeOpacity={0.85}>
+            <View style={[styles.engIcon, { backgroundColor: COLORS.surfaceAlt }]}>
+              <Feather name="activity" size={16} color={COLORS.brand} />
+            </View>
+            <Text style={styles.engLabel}>Wellness</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/family")} testID="home-family" activeOpacity={0.85}>
+            <View style={[styles.engIcon, { backgroundColor: "#F3D9CD" }]}>
+              <Feather name="users" size={16} color={COLORS.accent} />
+            </View>
+            <Text style={styles.engLabel}>Family</Text>
+          </TouchableOpacity>
           <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/water")} testID="home-water" activeOpacity={0.85}>
             <View style={[styles.engIcon, { backgroundColor: COLORS.surfaceAlt }]}>
               <Feather name="droplet" size={16} color={COLORS.brand} />
             </View>
             <Text style={styles.engLabel}>Water</Text>
           </TouchableOpacity>
+          <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/prakriti-quiz")} testID="home-prakriti" activeOpacity={0.85}>
+            <View style={[styles.engIcon, { backgroundColor: "#F3D9CD" }]}>
+              <Feather name="feather" size={16} color={COLORS.accent} />
+            </View>
+            <Text style={styles.engLabel}>Prakriti</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Row 3: journal, diseases */}
+        <View style={styles.engagementRow}>
           <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/blogs")} testID="home-blogs" activeOpacity={0.85}>
             <View style={[styles.engIcon, { backgroundColor: "#F3D9CD" }]}>
               <Feather name="book-open" size={16} color={COLORS.accent} />
@@ -146,12 +168,8 @@ function PatientHome() {
             </View>
             <Text style={styles.engLabel}>Diseases</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/prakriti-quiz")} testID="home-prakriti" activeOpacity={0.85}>
-            <View style={[styles.engIcon, { backgroundColor: "#F3D9CD" }]}>
-              <Feather name="feather" size={16} color={COLORS.accent} />
-            </View>
-            <Text style={styles.engLabel}>Prakriti</Text>
-          </TouchableOpacity>
+          <View style={styles.engBtn} />
+          <View style={styles.engBtn} />
         </View>
 
         {/* Bento grid */}

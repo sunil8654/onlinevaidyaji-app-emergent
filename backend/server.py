@@ -8,7 +8,7 @@ import os
 import json
 import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field, EmailStr, validator
 from typing import List, Optional, Literal, Dict, Any
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -62,9 +62,19 @@ class RegisterInput(BaseModel):
     name: str
     email: EmailStr
     password: str
+    phone: str  # MANDATORY — 10-digit Indian mobile
     role: Literal["patient", "doctor"] = "patient"
-    phone: Optional[str] = None
     registration_number: Optional[str] = None  # for doctors
+
+    @validator("phone")
+    def validate_phone(cls, v: str) -> str:
+        # Normalise: strip spaces, plus, hyphens, and country code 91
+        raw = "".join(ch for ch in (v or "") if ch.isdigit())
+        if raw.startswith("91") and len(raw) == 12:
+            raw = raw[2:]
+        if len(raw) != 10 or not raw[0] in "6789":
+            raise ValueError("Enter a valid 10-digit Indian mobile number")
+        return raw
 
 
 class LoginInput(BaseModel):
@@ -2807,6 +2817,320 @@ async def my_yoga_sessions(user: dict = Depends(current_user)):
 
 
 # ----------------- End new features -----------------
+
+
+# ----------------- Wellness Dashboard (BMI, Weight, Sleep, Steps, BP, Sugar, Mood) -----------------
+WELLNESS_TYPES = {
+    "bmi", "weight", "sleep", "steps", "bp", "sugar", "mood", "water"
+}
+
+
+class WellnessLogInput(BaseModel):
+    type: Literal["bmi", "weight", "sleep", "steps", "bp", "sugar", "mood", "water"]
+    # Flexible numeric payload — depends on type
+    value: Optional[float] = None            # weight kg, sleep hrs, steps count, mood 1-5, water glasses
+    systolic: Optional[int] = None           # for bp
+    diastolic: Optional[int] = None          # for bp
+    fasting: Optional[int] = None            # for sugar (mg/dL)
+    post_meal: Optional[int] = None          # for sugar (mg/dL)
+    height_cm: Optional[float] = None        # for bmi
+    weight_kg: Optional[float] = None        # for bmi
+    note: Optional[str] = None
+    date: Optional[str] = None               # ISO date (defaults to today)
+    member_id: Optional[str] = None          # optional family member scope
+
+
+def _wellness_today() -> str:
+    return datetime.utcnow().date().isoformat()
+
+
+@api_router.post("/wellness/log")
+async def wellness_log(body: WellnessLogInput, user: dict = Depends(current_user)):
+    log_date = body.date or _wellness_today()
+    doc: Dict[str, Any] = {
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "member_id": body.member_id,
+        "type": body.type,
+        "date": log_date,
+        "created_at": now_iso(),
+        "note": body.note,
+    }
+    # Compute derived fields
+    if body.type == "bmi":
+        if not body.height_cm or not body.weight_kg or body.height_cm <= 0:
+            raise HTTPException(status_code=400, detail="height_cm and weight_kg required for BMI")
+        h_m = body.height_cm / 100.0
+        bmi = round(body.weight_kg / (h_m * h_m), 1)
+        doc["height_cm"] = body.height_cm
+        doc["weight_kg"] = body.weight_kg
+        doc["value"] = bmi
+        doc["category"] = (
+            "Underweight" if bmi < 18.5 else
+            "Normal" if bmi < 25 else
+            "Overweight" if bmi < 30 else
+            "Obese"
+        )
+    elif body.type == "bp":
+        if not body.systolic or not body.diastolic:
+            raise HTTPException(status_code=400, detail="systolic and diastolic required for BP")
+        doc["systolic"] = body.systolic
+        doc["diastolic"] = body.diastolic
+        doc["value"] = body.systolic  # primary for chart
+        s, d = body.systolic, body.diastolic
+        if s < 120 and d < 80:
+            doc["category"] = "Normal"
+        elif s < 130 and d < 80:
+            doc["category"] = "Elevated"
+        elif s < 140 or d < 90:
+            doc["category"] = "Stage 1"
+        else:
+            doc["category"] = "Stage 2"
+    elif body.type == "sugar":
+        doc["fasting"] = body.fasting
+        doc["post_meal"] = body.post_meal
+        doc["value"] = body.fasting or body.post_meal
+        if body.fasting:
+            if body.fasting < 100:
+                doc["category"] = "Normal"
+            elif body.fasting < 126:
+                doc["category"] = "Pre-diabetic"
+            else:
+                doc["category"] = "Diabetic"
+    else:
+        if body.value is None:
+            raise HTTPException(status_code=400, detail="value required")
+        doc["value"] = body.value
+
+    await db.wellness_logs.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/wellness/history")
+async def wellness_history(
+    type: Optional[str] = None,
+    days: int = 30,
+    member_id: Optional[str] = None,
+    user: dict = Depends(current_user),
+):
+    days = min(max(days, 1), 365)
+    since = (datetime.utcnow().date() - timedelta(days=days)).isoformat()
+    q: Dict[str, Any] = {"user_id": user["id"], "date": {"$gte": since}}
+    if type:
+        q["type"] = type
+    if member_id:
+        q["member_id"] = member_id
+    else:
+        # By default only user's own logs (no member scope)
+        q["member_id"] = None
+    items = await db.wellness_logs.find(q).sort("date", -1).to_list(500)
+    for i in items:
+        i.pop("_id", None)
+    return {"items": items, "days": days}
+
+
+@api_router.get("/wellness/dashboard")
+async def wellness_dashboard(member_id: Optional[str] = None, user: dict = Depends(current_user)):
+    """Return the latest reading for each metric + basic trends."""
+    q_scope: Dict[str, Any] = {"user_id": user["id"], "member_id": member_id}
+    result: Dict[str, Any] = {}
+    for t in ["bmi", "weight", "sleep", "steps", "bp", "sugar", "mood", "water"]:
+        last = await db.wellness_logs.find_one({**q_scope, "type": t}, sort=[("date", -1), ("created_at", -1)])
+        if last:
+            last.pop("_id", None)
+            result[t] = last
+        else:
+            result[t] = None
+
+    # Weekly aggregates for main metrics (last 7 days)
+    since = (datetime.utcnow().date() - timedelta(days=7)).isoformat()
+    weekly: Dict[str, List[Dict[str, Any]]] = {}
+    for t in ["weight", "sleep", "steps", "water"]:
+        items = await db.wellness_logs.find(
+            {**q_scope, "type": t, "date": {"$gte": since}}
+        ).sort("date", 1).to_list(200)
+        weekly[t] = [{"date": i["date"], "value": i.get("value")} for i in items]
+
+    # Compute a naive health score (0-100) from available metrics
+    score = 50
+    if result.get("water") and (result["water"].get("value") or 0) >= 8:
+        score += 10
+    if result.get("sleep") and 6.5 <= (result["sleep"].get("value") or 0) <= 8.5:
+        score += 10
+    if result.get("steps") and (result["steps"].get("value") or 0) >= 6000:
+        score += 10
+    if result.get("bmi") and result["bmi"].get("category") == "Normal":
+        score += 10
+    if result.get("bp") and result["bp"].get("category") == "Normal":
+        score += 10
+    score = min(score, 100)
+
+    return {"latest": result, "weekly": weekly, "health_score": score}
+
+
+@api_router.delete("/wellness/log/{log_id}")
+async def wellness_delete(log_id: str, user: dict = Depends(current_user)):
+    res = await db.wellness_logs.delete_one({"id": log_id, "user_id": user["id"]})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Log not found")
+    return {"deleted": True}
+
+
+# ----------------- Family Health (multiple member profiles) -----------------
+class FamilyMemberInput(BaseModel):
+    name: str
+    relation: str  # e.g. Spouse, Child, Parent, Sibling
+    gender: Optional[str] = None
+    dob: Optional[str] = None            # ISO date
+    blood_group: Optional[str] = None
+    conditions: List[str] = []
+    allergies: List[str] = []
+    avatar_url: Optional[str] = None
+
+
+class GrowthEntry(BaseModel):
+    date: Optional[str] = None
+    height_cm: Optional[float] = None
+    weight_kg: Optional[float] = None
+    head_circ_cm: Optional[float] = None
+    note: Optional[str] = None
+
+
+class VaccinationEntry(BaseModel):
+    vaccine: str
+    scheduled_date: Optional[str] = None
+    given_date: Optional[str] = None
+    dose: Optional[str] = None
+    notes: Optional[str] = None
+
+
+def _member_dict(body: FamilyMemberInput) -> Dict[str, Any]:
+    return {
+        "name": body.name,
+        "relation": body.relation,
+        "gender": body.gender,
+        "dob": body.dob,
+        "blood_group": body.blood_group,
+        "conditions": body.conditions,
+        "allergies": body.allergies,
+        "avatar_url": body.avatar_url,
+    }
+
+
+@api_router.post("/family/members")
+async def add_family_member(body: FamilyMemberInput, user: dict = Depends(current_user)):
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        **_member_dict(body),
+        "growth": [],
+        "vaccinations": [],
+        "created_at": now_iso(),
+    }
+    await db.family_members.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/family/members")
+async def list_family_members(user: dict = Depends(current_user)):
+    items = await db.family_members.find({"user_id": user["id"]}).sort("created_at", 1).to_list(50)
+    for i in items:
+        i.pop("_id", None)
+    return {"items": items}
+
+
+@api_router.get("/family/members/{member_id}")
+async def get_family_member(member_id: str, user: dict = Depends(current_user)):
+    m = await db.family_members.find_one({"id": member_id, "user_id": user["id"]})
+    if not m:
+        raise HTTPException(status_code=404, detail="Member not found")
+    m.pop("_id", None)
+    return m
+
+
+@api_router.put("/family/members/{member_id}")
+async def update_family_member(member_id: str, body: FamilyMemberInput, user: dict = Depends(current_user)):
+    res = await db.family_members.update_one(
+        {"id": member_id, "user_id": user["id"]},
+        {"$set": _member_dict(body)},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Member not found")
+    return {"updated": True}
+
+
+@api_router.delete("/family/members/{member_id}")
+async def delete_family_member(member_id: str, user: dict = Depends(current_user)):
+    res = await db.family_members.delete_one({"id": member_id, "user_id": user["id"]})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Member not found")
+    return {"deleted": True}
+
+
+@api_router.post("/family/members/{member_id}/growth")
+async def add_growth_entry(member_id: str, body: GrowthEntry, user: dict = Depends(current_user)):
+    m = await db.family_members.find_one({"id": member_id, "user_id": user["id"]})
+    if not m:
+        raise HTTPException(status_code=404, detail="Member not found")
+    entry = {
+        "id": str(uuid.uuid4()),
+        "date": body.date or _wellness_today(),
+        "height_cm": body.height_cm,
+        "weight_kg": body.weight_kg,
+        "head_circ_cm": body.head_circ_cm,
+        "note": body.note,
+    }
+    # Compute BMI if both available
+    if body.height_cm and body.weight_kg and body.height_cm > 0:
+        h_m = body.height_cm / 100.0
+        entry["bmi"] = round(body.weight_kg / (h_m * h_m), 1)
+    await db.family_members.update_one(
+        {"id": member_id, "user_id": user["id"]},
+        {"$push": {"growth": entry}},
+    )
+    return entry
+
+
+@api_router.post("/family/members/{member_id}/vaccination")
+async def add_vaccination_entry(member_id: str, body: VaccinationEntry, user: dict = Depends(current_user)):
+    m = await db.family_members.find_one({"id": member_id, "user_id": user["id"]})
+    if not m:
+        raise HTTPException(status_code=404, detail="Member not found")
+    entry = {
+        "id": str(uuid.uuid4()),
+        "vaccine": body.vaccine,
+        "scheduled_date": body.scheduled_date,
+        "given_date": body.given_date,
+        "dose": body.dose,
+        "notes": body.notes,
+        "created_at": now_iso(),
+    }
+    await db.family_members.update_one(
+        {"id": member_id, "user_id": user["id"]},
+        {"$push": {"vaccinations": entry}},
+    )
+    return entry
+
+
+@api_router.delete("/family/members/{member_id}/vaccination/{entry_id}")
+async def delete_vaccination_entry(member_id: str, entry_id: str, user: dict = Depends(current_user)):
+    await db.family_members.update_one(
+        {"id": member_id, "user_id": user["id"]},
+        {"$pull": {"vaccinations": {"id": entry_id}}},
+    )
+    return {"deleted": True}
+
+
+@api_router.delete("/family/members/{member_id}/growth/{entry_id}")
+async def delete_growth_entry(member_id: str, entry_id: str, user: dict = Depends(current_user)):
+    await db.family_members.update_one(
+        {"id": member_id, "user_id": user["id"]},
+        {"$pull": {"growth": {"id": entry_id}}},
+    )
+    return {"deleted": True}
+
 
 
 @api_router.get("/")

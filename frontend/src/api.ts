@@ -236,5 +236,52 @@ export const api = {
   adminBroadcast: (body: { title: string; message: string; audience: string }) =>
     request("/admin/broadcast", "POST", body),
 
+  // Wellness Dashboard v2
+  wellnessLog: (body: {
+    type: "bmi" | "weight" | "sleep" | "steps" | "bp" | "sugar" | "mood" | "water";
+    value?: number;
+    systolic?: number;
+    diastolic?: number;
+    fasting?: number;
+    post_meal?: number;
+    height_cm?: number;
+    weight_kg?: number;
+    note?: string;
+    date?: string;
+    member_id?: string;
+  }) => request("/wellness/log", "POST", body),
+  wellnessHistory: (type?: string, days = 30, member_id?: string) => {
+    const q = new URLSearchParams();
+    if (type) q.set("type", type);
+    q.set("days", String(days));
+    if (member_id) q.set("member_id", member_id);
+    return request<{ items: any[]; days: number }>(`/wellness/history?${q.toString()}`);
+  },
+  wellnessDashboard: (member_id?: string) =>
+    request<{ latest: Record<string, any | null>; weekly: Record<string, any[]>; health_score: number }>(
+      `/wellness/dashboard${member_id ? `?member_id=${member_id}` : ""}`
+    ),
+  wellnessDelete: (log_id: string) => request(`/wellness/log/${log_id}`, "DELETE"),
+
+  // Family Health
+  addFamilyMember: (body: {
+    name: string; relation: string; gender?: string; dob?: string;
+    blood_group?: string; conditions?: string[]; allergies?: string[]; avatar_url?: string;
+  }) => request("/family/members", "POST", body),
+  listFamilyMembers: () => request<{ items: any[] }>("/family/members"),
+  getFamilyMember: (id: string) => request<any>(`/family/members/${id}`),
+  updateFamilyMember: (id: string, body: any) => request(`/family/members/${id}`, "PUT", body),
+  deleteFamilyMember: (id: string) => request(`/family/members/${id}`, "DELETE"),
+  addGrowthEntry: (id: string, body: {
+    date?: string; height_cm?: number; weight_kg?: number; head_circ_cm?: number; note?: string;
+  }) => request(`/family/members/${id}/growth`, "POST", body),
+  addVaccination: (id: string, body: {
+    vaccine: string; scheduled_date?: string; given_date?: string; dose?: string; notes?: string;
+  }) => request(`/family/members/${id}/vaccination`, "POST", body),
+  deleteVaccination: (id: string, entry_id: string) =>
+    request(`/family/members/${id}/vaccination/${entry_id}`, "DELETE"),
+  deleteGrowth: (id: string, entry_id: string) =>
+    request(`/family/members/${id}/growth/${entry_id}`, "DELETE"),
+
   track: (event: string, props?: any) => request("/analytics", "POST", { event, props }),
 };
