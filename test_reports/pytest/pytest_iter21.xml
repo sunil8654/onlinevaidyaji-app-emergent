@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="1" tests="22" time="124.192" timestamp="2026-07-26T17:19:30.776385+00:00" hostname="agent-env-3bb3f580-1b45-49e2-807f-5dd171852300"><testcase classname="backend.tests.test_iter21_security_hardening.TestFix1LikeOnMissingPost" name="test_like_on_nonexistent_uuid_returns_404" time="0.629" /><testcase classname="backend.tests.test_iter21_security_hardening.TestFix1LikeOnMissingPost" name="test_like_on_random_uuid_returns_404" time="0.215" /><testcase classname="backend.tests.test_iter21_security_hardening.TestFix1LikeOnMissingPost" name="test_like_on_deleted_post_returns_404" time="0.488" /><testcase classname="backend.tests.test_iter21_security_hardening.TestFix1LikeOnMissingPost" name="test_regression_valid_like_toggle_still_works" time="1.146" /><testcase classname="backend.tests.test_iter21_security_hardening.TestFix2RaceSafeLikeCounter" name="test_unique_index_present" time="0.100" /><testcase classname="backend.tests.test_iter21_security_hardening.TestFix2RaceSafeLikeCounter" name="test_concurrent_double_like_does_not_double_increment" time="0.740" /><testcase classname="backend.tests.test_iter21_security_hardening.TestFix2RaceSafeLikeCounter" name="test_toggle_off_on_off_final_zero" time="0.755" /><testcase classname="backend.tests.test_iter21_security_hardening.TestFix3RateLimits" name="test_period_log_20_per_hour_21st_returns_429" time="2.813" /><testcase classname="backend.tests.test_iter21_security_hardening.TestFix3RateLimits" name="test_pregnancy_30_per_hour_31st_returns_429" time="3.821" /><testcase classname="backend.tests.test_iter21_security_hardening.TestFix3RateLimits" name="test_gynae_profile_30_per_hour_31st_returns_429" time="33.212"><failure message="requests.exceptions.ConnectTimeout: HTTPSConnectionPool(host='swasth-daily.preview.emergentagent.com', port=443): Max retries exceeded with url: /api/women/gynae-profile (Caused by ConnectTimeoutError(&lt;HTTPSConnection(host='swasth-daily.preview.emergentagent.com', port=443) at 0xf9e8117f2950&gt;, 'Connection to swasth-daily.preview.emergentagent.com timed out. (connect timeout=15)'))">/root/.venv/lib/python3.11/site-packages/urllib3/connection.py:204: in _new_conn
+    sock = connection.create_connection(
+/root/.venv/lib/python3.11/site-packages/urllib3/util/connection.py:85: in create_connection
+    raise err
+/root/.venv/lib/python3.11/site-packages/urllib3/util/connection.py:73: in create_connection
+    sock.connect(sa)
+E   TimeoutError: timed out
+
+The above exception was the direct cause of the following exception:
+/root/.venv/lib/python3.11/site-packages/urllib3/connectionpool.py:788: in urlopen
+    response = self._make_request(
+/root/.venv/lib/python3.11/site-packages/urllib3/connectionpool.py:488: in _make_request
+    raise new_e
+/root/.venv/lib/python3.11/site-packages/urllib3/connectionpool.py:464: in _make_request
+    self._validate_conn(conn)
+/root/.venv/lib/python3.11/site-packages/urllib3/connectionpool.py:1106: in _validate_conn
+    conn.connect()
+/root/.venv/lib/python3.11/site-packages/urllib3/connection.py:759: in connect
+    self.sock = sock = self._new_conn()
+                       ^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/urllib3/connection.py:213: in _new_conn
+    raise ConnectTimeoutError(
+E   urllib3.exceptions.ConnectTimeoutError: (&lt;HTTPSConnection(host='swasth-daily.preview.emergentagent.com', port=443) at 0xf9e8117f2950&gt;, 'Connection to swasth-daily.preview.emergentagent.com timed out. (connect timeout=15)')
+
+The above exception was the direct cause of the following exception:
+/root/.venv/lib/python3.11/site-packages/requests/adapters.py:696: in send
+    resp = conn.urlopen(
+/root/.venv/lib/python3.11/site-packages/urllib3/connectionpool.py:842: in urlopen
+    retries = retries.increment(
+/root/.venv/lib/python3.11/site-packages/urllib3/util/retry.py:543: in increment
+    raise MaxRetryError(_pool, url, reason) from reason  # type: ignore[arg-type]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   urllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host='swasth-daily.preview.emergentagent.com', port=443): Max retries exceeded with url: /api/women/gynae-profile (Caused by ConnectTimeoutError(&lt;HTTPSConnection(host='swasth-daily.preview.emergentagent.com', port=443) at 0xf9e8117f2950&gt;, 'Connection to swasth-daily.preview.emergentagent.com timed out. (connect timeout=15)'))
+
+During handling of the above exception, another exception occurred:
+backend/tests/test_iter21_security_hardening.py:294: in test_gynae_profile_30_per_hour_31st_returns_429
+    r = requests.put(f"{BASE_URL}/api/women/gynae-profile",
+/root/.venv/lib/python3.11/site-packages/requests/api.py:151: in put
+    return request("put", url, data=data, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/api.py:71: in request
+    return session.request(method=method, url=url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:651: in request
+    resp = self.send(prep, **send_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:784: in send
+    r = adapter.send(request, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/adapters.py:717: in send
+    raise ConnectTimeout(e, request=request)
+E   requests.exceptions.ConnectTimeout: HTTPSConnectionPool(host='swasth-daily.preview.emergentagent.com', port=443): Max retries exceeded with url: /api/women/gynae-profile (Caused by ConnectTimeoutError(&lt;HTTPSConnection(host='swasth-daily.preview.emergentagent.com', port=443) at 0xf9e8117f2950&gt;, 'Connection to swasth-daily.preview.emergentagent.com timed out. (connect timeout=15)'))</failure></testcase><testcase classname="backend.tests.test_iter21_security_hardening.TestFix3RateLimits" name="test_milestone_toggle_120_per_hour_5_to_10_successive_ok" time="21.349" /><testcase classname="backend.tests.test_iter21_security_hardening.TestFix3RateLimits" name="test_wellness_tips_60_per_5min_per_ip_61st_returns_429" time="18.065" /><testcase classname="backend.tests.test_iter21_security_hardening.TestRegressionWomensHealth" name="test_period_log_create_list_delete" time="0.776" /><testcase classname="backend.tests.test_iter21_security_hardening.TestRegressionWomensHealth" name="test_pregnancy_set_get_weeks_and_due_date" time="0.547" /><testcase classname="backend.tests.test_iter21_security_hardening.TestRegressionWomensHealth" name="test_gynae_upsert_and_get_roundtrip" time="0.541" /><testcase classname="backend.tests.test_iter21_security_hardening.TestRegressionWomensHealth" name="test_wellness_tips_for_all_6_phases" time="0.097"><skipped type="pytest.skip" message="wellness-tips bucket exhausted for phase=menstrual (expected — the rate-limit test already ran)">/app/backend/tests/test_iter21_security_hardening.py:423: wellness-tips bucket exhausted for phase=menstrual (expected — the rate-limit test already ran)</skipped></testcase><testcase classname="backend.tests.test_iter21_security_hardening.TestRegressionCommunity" name="test_post_create_list_get_delete_with_comments" time="0.622" /><testcase classname="backend.tests.test_iter21_security_hardening.TestRegressionMilestonesScoping" name="test_get_and_toggle_and_cross_user_404" time="0.531" /><testcase classname="backend.tests.test_iter21_security_hardening.TestPriorSecurityFindings" name="test_sec001_admin_default_password_rejected" time="1.639" /><testcase classname="backend.tests.test_iter21_security_hardening.TestPriorSecurityFindings" name="test_sec001_admin_login_with_env_password_works" time="0.342" /><testcase classname="backend.tests.test_iter21_security_hardening.TestPriorSecurityFindings" name="test_sec002_support_chat_rate_limited" time="35.177" /><testcase classname="backend.tests.test_iter21_security_hardening.TestPriorSecurityFindings" name="test_sec003_patient_cannot_write_prescription" time="0.417" /></testsuite></testsuites>

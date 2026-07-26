@@ -1626,6 +1626,14 @@ async def on_startup():
     await db.doctors.update_many(
         {"verified": None, "user_id": {"$exists": False}}, {"$set": {"verified": True}}
     )
+    # Ensure a unique index on community_likes to prevent duplicate likes
+    # under concurrent taps (race-safe like count).
+    try:
+        await db.community_likes.create_index(
+            [("post_id", 1), ("user_id", 1)], unique=True, name="uniq_post_user_like"
+        )
+    except Exception as e:
+        logger.warning(f"Could not create community_likes unique index: {e}")
     # Seed / upsert single admin
     existing = await db.users.find_one({"email": ADMIN_EMAIL.lower()})
     if not existing:
@@ -3295,7 +3303,8 @@ class MilestoneToggle(BaseModel):
 
 
 @api_router.post("/family/members/{member_id}/milestones/toggle")
-async def toggle_milestone(member_id: str, body: MilestoneToggle, user: dict = Depends(current_user)):
+async def toggle_milestone(member_id: str, body: MilestoneToggle, request: Request, user: dict = Depends(current_user)):
+    await rate_limit(request, f"family:mile:{user['id']}", max_calls=120, window_seconds=3600)
     m = await db.family_members.find_one({"id": member_id, "user_id": user["id"]})
     if not m:
         raise HTTPException(status_code=404, detail="Member not found")
@@ -3353,7 +3362,9 @@ def _weeks_from(iso_date: str) -> int:
 
 
 @api_router.post("/women/period-log")
-async def log_period(body: PeriodLogInput, user: dict = Depends(current_user)):
+async def log_period(body: PeriodLogInput, request: Request, user: dict = Depends(current_user)):
+    # Cap cycle inserts per user to prevent unbounded storage growth
+    await rate_limit(request, f"women:period:{user['id']}", max_calls=20, window_seconds=3600)
     doc = {
         "id": str(uuid.uuid4()),
         "user_id": user["id"],
@@ -3406,7 +3417,8 @@ async def delete_period(log_id: str, user: dict = Depends(current_user)):
 
 
 @api_router.put("/women/pregnancy")
-async def set_pregnancy(body: PregnancyInput, user: dict = Depends(current_user)):
+async def set_pregnancy(body: PregnancyInput, request: Request, user: dict = Depends(current_user)):
+    await rate_limit(request, f"women:preg:{user['id']}", max_calls=30, window_seconds=3600)
     doc = {
         "user_id": user["id"],
         "is_active": body.is_active,
@@ -3447,7 +3459,8 @@ async def get_pregnancy(user: dict = Depends(current_user)):
 
 
 @api_router.put("/women/gynae-profile")
-async def upsert_gynae(body: GynaeProfileInput, user: dict = Depends(current_user)):
+async def upsert_gynae(body: GynaeProfileInput, request: Request, user: dict = Depends(current_user)):
+    await rate_limit(request, f"women:gynae:{user['id']}", max_calls=30, window_seconds=3600)
     doc = body.dict()
     doc.update({"user_id": user["id"], "updated_at": now_iso()})
     await db.women_gynae.update_one({"user_id": user["id"]}, {"$set": doc}, upsert=True)
@@ -3461,7 +3474,10 @@ async def get_gynae(user: dict = Depends(current_user)):
 
 
 @api_router.get("/women/wellness-tips")
-async def wellness_tips(phase: str = "follicular"):
+async def wellness_tips(phase: str = "follicular", request: Request = None):
+    # Light IP-level throttle on this public endpoint
+    if request is not None:
+        await rate_limit(request, "women:tips", max_calls=60, window_seconds=300)
     tips_by_phase = {
         "menstrual": [
             "Warm sesame oil abhyanga for cramps. Sip ginger-jaggery tea.",
@@ -3584,13 +3600,23 @@ async def get_post(post_id: str, user: dict = Depends(current_user)):
 
 @api_router.post("/community/posts/{post_id}/like")
 async def toggle_like(post_id: str, user: dict = Depends(current_user)):
+    # 404 if the post does not exist — prevents orphan likes / counter drift on stale IDs.
+    exists = await db.community_posts.find_one({"id": post_id}, {"_id": 1})
+    if not exists:
+        raise HTTPException(status_code=404, detail="Post not found")
     existing = await db.community_likes.find_one({"post_id": post_id, "user_id": user["id"]})
     if existing:
-        await db.community_likes.delete_one({"post_id": post_id, "user_id": user["id"]})
-        await db.community_posts.update_one({"id": post_id}, {"$inc": {"like_count": -1}})
+        res = await db.community_likes.delete_one({"post_id": post_id, "user_id": user["id"]})
+        # Only decrement if we actually deleted (race-safe)
+        if res.deleted_count:
+            await db.community_posts.update_one({"id": post_id}, {"$inc": {"like_count": -1}})
         return {"liked": False}
-    await db.community_likes.insert_one({"post_id": post_id, "user_id": user["id"], "created_at": now_iso()})
-    await db.community_posts.update_one({"id": post_id}, {"$inc": {"like_count": 1}})
+    # Insert-then-inc; ignore duplicate insert if a concurrent tap already inserted
+    try:
+        await db.community_likes.insert_one({"post_id": post_id, "user_id": user["id"], "created_at": now_iso()})
+        await db.community_posts.update_one({"id": post_id}, {"$inc": {"like_count": 1}})
+    except Exception:
+        pass
     return {"liked": True}
 
 
