@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView, KeyboardAvoidingView, Platform } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView, KeyboardAvoidingView, Platform, Image, Alert } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
+import * as ImagePicker from "expo-image-picker";
 import { COLORS, FONTS, RADIUS, SPACING, SPECIALTIES } from "@/src/theme";
 import { api } from "@/src/api";
 import { useAuth } from "@/src/auth";
@@ -24,6 +25,7 @@ export default function DoctorOnboarding() {
     clinic_address: "",
     languages: ["Hindi", "English"] as string[],
     documentsAttached: false,
+    avatar_base64: "" as string,  // profile photo (base64 or data URI)
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -39,6 +41,36 @@ export default function DoctorOnboarding() {
 
   const toggleLang = (l: string) =>
     setForm((f) => ({ ...f, languages: f.languages.includes(l) ? f.languages.filter((x) => x !== l) : [...f.languages, l] }));
+
+  const pickPhoto = async () => {
+    try {
+      // Ask for photo library permission (contextual — right after user taps)
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert(
+          "Permission needed",
+          "We need access to your photos to set a profile picture. You can grant it from Settings.",
+          [{ text: "OK" }]
+        );
+        return;
+      }
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.6,
+        base64: true,
+      });
+      if (res.canceled || !res.assets?.[0]?.base64) return;
+      const asset = res.assets[0];
+      const dataUri = asset.uri?.startsWith("data:")
+        ? asset.uri
+        : `data:image/jpeg;base64,${asset.base64}`;
+      setForm((f) => ({ ...f, avatar_base64: dataUri }));
+    } catch (e: any) {
+      Alert.alert("Could not attach photo", e?.message || "Try again");
+    }
+  };
 
   const next = () => setStep((s) => Math.min(s + 1, 3));
   const back = () => setStep((s) => Math.max(s - 1, 0));
@@ -57,6 +89,7 @@ export default function DoctorOnboarding() {
         clinic_name: form.clinic_name,
         clinic_address: form.clinic_address,
         languages: form.languages,
+        avatar_base64: form.avatar_base64 || undefined,
         documents: form.documentsAttached ? ["degree_certificate.pdf", "reg_certificate.pdf"] : [],
       });
       router.replace("/(tabs)/home");
@@ -161,6 +194,31 @@ export default function DoctorOnboarding() {
           {step === 3 && (
             <View>
               <Text style={styles.sectionTitle}>Clinic & bio</Text>
+
+              <Text style={styles.label}>Profile photo</Text>
+              <View style={styles.photoRow}>
+                <TouchableOpacity style={styles.photoCircle} onPress={pickPhoto} testID="do-photo">
+                  {form.avatar_base64 ? (
+                    <Image source={{ uri: form.avatar_base64 }} style={styles.photoImg} />
+                  ) : (
+                    <Feather name="camera" size={26} color={COLORS.textMuted} />
+                  )}
+                </TouchableOpacity>
+                <View style={{ flex: 1 }}>
+                  <TouchableOpacity style={styles.photoBtn} onPress={pickPhoto} testID="do-photo-btn">
+                    <Feather name={form.avatar_base64 ? "refresh-cw" : "upload"} size={14} color={COLORS.brand} />
+                    <Text style={styles.photoBtnText}>{form.avatar_base64 ? "Change photo" : "Choose photo"}</Text>
+                  </TouchableOpacity>
+                  {form.avatar_base64 ? (
+                    <TouchableOpacity style={styles.photoRemove} onPress={() => setForm({ ...form, avatar_base64: "" })}>
+                      <Text style={styles.photoRemoveText}>Remove</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <Text style={styles.photoHint}>A clear headshot builds patient trust.</Text>
+                  )}
+                </View>
+              </View>
+
               <Text style={styles.label}>Clinic name (optional)</Text>
               <TextInput style={styles.input} value={form.clinic_name} onChangeText={(v) => setForm({ ...form, clinic_name: v })} placeholder="Ayurveda Sanjeevani Clinic" placeholderTextColor={COLORS.textMuted} testID="do-clinic" />
               <Text style={styles.label}>Clinic address (optional)</Text>
@@ -215,6 +273,14 @@ const styles = StyleSheet.create({
   chipTextActive: { color: COLORS.surface },
   uploader: { alignItems: "center", padding: SPACING.lg, backgroundColor: COLORS.surface, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: COLORS.brand, borderStyle: "dashed", marginTop: SPACING.md },
   uploaderDone: { backgroundColor: "#E8F5E9", borderColor: COLORS.success, borderStyle: "solid" },
+  photoRow: { flexDirection: "row", alignItems: "center", gap: SPACING.md, marginTop: 4 },
+  photoCircle: { width: 88, height: 88, borderRadius: 44, backgroundColor: COLORS.surfaceAlt, borderWidth: 1, borderColor: COLORS.border, alignItems: "center", justifyContent: "center", overflow: "hidden" },
+  photoImg: { width: "100%", height: "100%" },
+  photoBtn: { flexDirection: "row", alignItems: "center", gap: 8, alignSelf: "flex-start", paddingHorizontal: 14, paddingVertical: 10, borderRadius: RADIUS.pill, borderWidth: 1, borderColor: COLORS.brand, backgroundColor: COLORS.surface },
+  photoBtnText: { color: COLORS.brand, fontWeight: "700", fontSize: 13 },
+  photoHint: { color: COLORS.textMuted, fontSize: 12, marginTop: 6 },
+  photoRemove: { marginTop: 6, alignSelf: "flex-start" },
+  photoRemoveText: { color: COLORS.error, fontSize: 12, fontWeight: "600" },
   uploaderTitle: { fontFamily: FONTS.heading, fontSize: 16, color: COLORS.textPrimary, marginTop: 10 },
   uploaderSub: { color: COLORS.textSecondary, fontSize: 12, marginTop: 4 },
   info: { flexDirection: "row", gap: 6, marginTop: SPACING.md, padding: 10, backgroundColor: COLORS.surfaceAlt, borderRadius: RADIUS.md, alignItems: "flex-start" },

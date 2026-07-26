@@ -2268,6 +2268,21 @@ class DoctorOnboardInput(BaseModel):
     clinic_name: Optional[str] = None
     clinic_address: Optional[str] = None
     documents: Optional[List[str]] = None  # base64 or filename placeholders
+    # Base64-encoded profile photo (data URI or raw base64). Cap ~4 MB.
+    avatar_base64: Optional[str] = Field(None, max_length=4_000_000)
+
+
+class DoctorProfileUpdate(BaseModel):
+    """Fields a doctor is allowed to edit after onboarding."""
+    specialty: Optional[str] = Field(None, max_length=100)
+    qualification: Optional[str] = Field(None, max_length=200)
+    experience_years: Optional[int] = Field(None, ge=0, le=80)
+    languages: Optional[List[str]] = None
+    consultation_fee: Optional[int] = Field(None, ge=0, le=100000)
+    bio: Optional[str] = Field(None, max_length=1000)
+    clinic_name: Optional[str] = Field(None, max_length=200)
+    clinic_address: Optional[str] = Field(None, max_length=500)
+    avatar_base64: Optional[str] = Field(None, max_length=4_000_000)
 
 
 @api_router.get("/doctor/me")
@@ -2283,11 +2298,34 @@ async def doctor_onboard(body: DoctorOnboardInput, user: dict = Depends(current_
     if user["role"] != "doctor":
         raise HTTPException(status_code=403, detail="Doctors only")
     upd = body.dict()
+    # Convert base64 photo → data URI stored as avatar_url so it renders directly in <Image>.
+    avatar_b64 = upd.pop("avatar_base64", None)
+    if avatar_b64:
+        upd["avatar_url"] = avatar_b64 if avatar_b64.startswith("data:") else f"data:image/jpeg;base64,{avatar_b64}"
     upd["onboarded_at"] = now_iso()
     upd["documents_uploaded"] = bool(body.documents) or bool(body.registration_number)
     r = await db.doctors.update_one({"user_id": user["id"]}, {"$set": upd}, upsert=True)
     d = await db.doctors.find_one({"user_id": user["id"]}, {"_id": 0})
     await log_activity("doctor_onboarded", actor=user, meta={"specialty": body.specialty})
+    return d
+
+
+@api_router.put("/doctor/profile")
+async def doctor_update_profile(body: DoctorProfileUpdate, user: dict = Depends(current_user)):
+    """Doctor edits their own profile (bio, fee, avatar, etc.) after onboarding."""
+    if user["role"] != "doctor":
+        raise HTTPException(status_code=403, detail="Doctors only")
+    upd = {k: v for k, v in body.dict().items() if v is not None}
+    avatar_b64 = upd.pop("avatar_base64", None)
+    if avatar_b64:
+        upd["avatar_url"] = avatar_b64 if avatar_b64.startswith("data:") else f"data:image/jpeg;base64,{avatar_b64}"
+    if not upd:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    upd["updated_at"] = now_iso()
+    res = await db.doctors.update_one({"user_id": user["id"]}, {"$set": upd})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Complete onboarding first")
+    d = await db.doctors.find_one({"user_id": user["id"]}, {"_id": 0})
     return d
 
 

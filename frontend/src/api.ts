@@ -183,6 +183,11 @@ export const api = {
   // Doctor workspace
   doctorMe: () => request("/doctor/me"),
   doctorOnboard: (body: any) => request("/doctor/onboard", "PUT", body),
+  updateDoctorProfile: (body: {
+    specialty?: string; qualification?: string; experience_years?: number;
+    languages?: string[]; consultation_fee?: number; bio?: string;
+    clinic_name?: string; clinic_address?: string; avatar_base64?: string;
+  }) => request<any>("/doctor/profile", "PUT", body),
   doctorMyAppointments: () => request("/doctor/my-appointments"),
   doctorMyPatients: () => request("/doctor/my-patients"),
   doctorEarnings: () => request<{

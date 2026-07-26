@@ -1,0 +1,39 @@
+{
+  "summary": "Doctor profile photo upload + PUT /api/doctor/profile fully verified. Backend: 9/9 pytest cases pass (onboard with avatar_base64 → data URI avatar_url; PUT /doctor/profile bio+avatar happy path + persistence via GET /doctor/me; data URI prefix preserved; patient 403 'Doctors only'; empty body 400 'No fields to update'; >4MB avatar 422; unauth 401; public /api/doctors regression still projects safe fields). Frontend (Playwright, 390×844): doctor drtest@vaidhyaji login → Profile tab shows 'Edit profile & photo' button (testID profile-edit-doctor) → tap routes to /doctor/edit-profile → verified 'CLINIC PROFILE' eyebrow, 'Edit profile' title, Profile photo section (testIDs edit-photo + edit-photo-btn), specialty/qualification/experience/fee/languages/clinic fields, Save button (testID edit-save). Photo picker tap does not crash. Fresh patient login: profile-edit-doctor NOT rendered, patient's profile-edit (Edit health profile) still present (regression pass). Onboarding source code confirms Step 4/4 renders 'Profile photo' with testIDs do-photo + do-photo-btn.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "PUT /api/doctor/profile",
+        "issue": "Review request expected 404 'Complete onboarding first' when a fresh doctor account (registered but never onboarded) hits the endpoint, but /api/auth/register already inserts a stub doctor doc for role=doctor (server.py:339-354), so matched_count is never 0 and the endpoint returns 200. The 404 branch is effectively unreachable in the current registration flow. Consider gating on the presence of onboarded_at instead of matched_count if the business rule is to require onboarding first."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter23_doctor_avatar.py",
+    "/app/test_reports/pytest/pytest_iter23.xml",
+    "/tmp/iter23_doc_profile.png",
+    "/tmp/iter23_edit_profile.png",
+    "/tmp/iter23_pat_profile.png"
+  ],
+  "action_items": [
+    "Optional: If business intent is truly 'block profile edits until onboarding complete', change /doctor/profile guard to check for onboarded_at (server.py ~2326) rather than matched_count, since register() pre-creates the doctor stub."
+  ],
+  "critical_code_review_comments": [
+    "PUT /api/doctor/profile: matched_count==0 check is dead code because /api/auth/register inserts a doctor doc for role=doctor at signup (server.py:339-354). Behavior mismatch with review request but not a functional regression for the reported bug (photo upload works).",
+    "Onboarding step 3 language-chip tap flakiness in Playwright headless was noted in iteration 22 and is not affected by this change; unrelated to bug fix."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (9/9)", "frontend": "100%"},
+  "seed_data_creation": "Registered ephemeral patient pat_iter23_* and doctor doc_iter23_* / docob_* accounts via /api/auth/register for authz + fresh-doctor tests. drtest doctor account bio was updated to 'Test bio iter23' with a 1x1 PNG avatar during pytest.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter23 verified doctor photo upload end-to-end. Endpoints: PUT /api/doctor/onboard and PUT /api/doctor/profile both accept avatar_base64 and store it as data URI in avatar_url. Frontend Profile tab renders 'Edit profile & photo' only for role=doctor (profile.tsx:48-57). /doctor/edit-profile screen (edit-profile.tsx) has testIDs edit-photo, edit-photo-btn, edit-save. Onboarding step 3 has do-photo, do-photo-btn. Minor design mismatch: 404 branch of /doctor/profile unreachable due to register() pre-creating doctor stub — flagged for main agent's discretion.",
+  "rca_of_issue": "Original bug: doctor onboarding/profile screens had no photo picker. Fix (already applied by main agent) — backend added avatar_base64 field to DoctorOnboardInput and new DoctorProfileUpdate model + PUT /doctor/profile endpoint that converts base64 → data URI stored in avatar_url; frontend installed expo-image-picker and added photo picker on onboarding Step 3 plus new /doctor/edit-profile screen accessible via 'Edit profile & photo' button on Profile tab (doctor-only). All verified working via 9 pytest cases + Playwright UI walkthrough."
+}

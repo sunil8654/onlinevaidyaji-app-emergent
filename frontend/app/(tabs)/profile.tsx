@@ -45,6 +45,16 @@ export default function Profile() {
             <View style={styles.rolePill}>
               <Text style={styles.rolePillText}>{user?.role?.toUpperCase()}</Text>
             </View>
+            {user?.role === "doctor" && (
+              <TouchableOpacity
+                style={styles.editProfileBtn}
+                onPress={() => router.push("/doctor/edit-profile")}
+                testID="profile-edit-doctor"
+              >
+                <Feather name="camera" size={14} color={COLORS.brand} />
+                <Text style={styles.editProfileText}>Edit profile & photo</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
 
@@ -140,6 +150,8 @@ const styles = StyleSheet.create({
   userMeta: { color: COLORS.accentSoft, marginTop: 2, fontSize: 13 },
   rolePill: { marginTop: 8, paddingHorizontal: 10, paddingVertical: 4, backgroundColor: COLORS.accent, borderRadius: RADIUS.pill },
   rolePillText: { color: COLORS.surface, fontSize: 10, letterSpacing: 2, fontWeight: "700" },
+  editProfileBtn: { marginTop: 10, flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 14, paddingVertical: 8, borderRadius: RADIUS.pill, borderWidth: 1, borderColor: COLORS.brand, backgroundColor: COLORS.surface },
+  editProfileText: { color: COLORS.brand, fontSize: 12, fontWeight: "700" },
   card: { margin: SPACING.lg, padding: SPACING.md, backgroundColor: COLORS.surface, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: COLORS.border },
   cardKicker: { textTransform: "uppercase", letterSpacing: 2, color: COLORS.accent, fontSize: 10, fontWeight: "700" },
   doshaHeading: { fontFamily: FONTS.heading, fontSize: 32, color: COLORS.textPrimary, marginTop: 4 },
