@@ -1661,26 +1661,43 @@ async def submit_quiz(quiz_id: str, body: QuizSubmitInput, user: dict = Depends(
             "ok": ok, "explain": qq.get("explain", ""),
         })
     pct = int((score / len(q["questions"])) * 100)
-    # Award points: 5 per correct + full-quiz bonus if perfect
-    earned = 5 * score
-    if pct == 100:
-        earned += int(q.get("points", 30))
+    # SEC-001 fix: only award points on first attempt or improved score.
+    # Any subsequent attempt is still allowed (users get their review + explanations),
+    # but no points/badges are re-granted → self-farming loop closed.
+    prev = await db.quiz_attempts.find(
+        {"user_id": user["id"], "quiz_id": quiz_id}, {"_id": 0, "score": 1}
+    ).sort("at", -1).to_list(200)
+    prev_best = max((int(a.get("score", 0)) for a in prev), default=-1)
+    is_first = len(prev) == 0
+    improved = score > prev_best
+    earned = 0
+    if is_first or improved:
+        earned = 5 * score
+        if pct == 100:
+            earned += int(q.get("points", 30))
     attempt = {
         "id": str(uuid.uuid4()), "user_id": user["id"], "quiz_id": quiz_id,
         "score": score, "total": len(q["questions"]), "pct": pct,
         "answers": body.answers, "at": now_iso(),
+        "points_awarded": earned,
     }
     await db.quiz_attempts.insert_one(attempt)
     attempt.pop("_id", None)
-    await _award_points(user["id"], earned, reason="quiz_submitted",
-                        meta={"quiz_id": quiz_id, "score": score, "total": len(q["questions"])})
-    newly_earned = []
-    if pct == 100 and await _grant_badge(user["id"], "quiz_master"):
+    if earned > 0:
+        await _award_points(
+            user["id"], earned, reason="quiz_submitted",
+            meta={"quiz_id": quiz_id, "score": score, "total": len(q["questions"])},
+        )
+    newly_earned: List[str] = []
+    # Only grant badge on a fresh perfect score (idempotent — _grant_badge already dedupes,
+    # but this saves the DB write on replays).
+    if pct == 100 and (is_first or improved) and await _grant_badge(user["id"], "quiz_master"):
         newly_earned.append("quiz_master")
     return {
         "score": score, "total": len(q["questions"]), "pct": pct,
         "points_awarded": earned, "details": details,
         "new_badges": newly_earned,
+        "already_attempted": not (is_first or improved),
     }
 
 

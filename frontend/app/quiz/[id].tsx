@@ -60,9 +60,13 @@ export default function QuizTaker() {
           <View style={styles.resultHero}>
             <Text style={styles.resultPct}>{result.pct}%</Text>
             <Text style={styles.resultLine}>{result.score} of {result.total} correct</Text>
-            <View style={styles.pointsPill}>
-              <Feather name="award" size={13} color={COLORS.surface} />
-              <Text style={styles.pointsPillText}>+{result.points_awarded} points</Text>
+            <View style={[styles.pointsPill, result.points_awarded === 0 && { backgroundColor: COLORS.textMuted }]}>
+              <Feather name={result.points_awarded === 0 ? "info" : "award"} size={13} color={COLORS.surface} />
+              <Text style={styles.pointsPillText}>
+                {result.points_awarded === 0
+                  ? (result.already_attempted ? "No new points — already scored this or higher" : "No points awarded")
+                  : `+${result.points_awarded} points`}
+              </Text>
             </View>
             {result.new_badges?.length > 0 && (
               <Text style={styles.badgeUnlock}>🏅 Badge unlocked: {result.new_badges.join(", ")}</Text>

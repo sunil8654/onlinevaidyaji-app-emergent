@@ -371,6 +371,7 @@ export const api = {
     score: number; total: number; pct: number; points_awarded: number;
     details: { q: string; picked: number; correct: number; ok: boolean; explain: string }[];
     new_badges?: string[];
+    already_attempted?: boolean;
   }>(`/quizzes/${id}/submit`, "POST", { answers }),
 
   track: (event: string, props?: any) => request("/analytics", "POST", { event, props }),
