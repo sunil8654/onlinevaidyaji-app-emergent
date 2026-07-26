@@ -156,6 +156,18 @@ function PatientHome() {
 
         {/* Row 3: journal, diseases */}
         <View style={styles.engagementRow}>
+          <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/community")} testID="home-community" activeOpacity={0.85}>
+            <View style={[styles.engIcon, { backgroundColor: COLORS.surfaceAlt }]}>
+              <Feather name="message-circle" size={16} color={COLORS.brand} />
+            </View>
+            <Text style={styles.engLabel}>Community</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/womens-health")} testID="home-womens" activeOpacity={0.85}>
+            <View style={[styles.engIcon, { backgroundColor: "#F3D9CD" }]}>
+              <Feather name="heart" size={16} color={COLORS.accent} />
+            </View>
+            <Text style={styles.engLabel}>Women</Text>
+          </TouchableOpacity>
           <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/blogs")} testID="home-blogs" activeOpacity={0.85}>
             <View style={[styles.engIcon, { backgroundColor: "#F3D9CD" }]}>
               <Feather name="book-open" size={16} color={COLORS.accent} />
@@ -164,12 +176,10 @@ function PatientHome() {
           </TouchableOpacity>
           <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/lifestyle")} testID="home-lifestyle" activeOpacity={0.85}>
             <View style={[styles.engIcon, { backgroundColor: COLORS.surfaceAlt }]}>
-              <Feather name="heart" size={16} color={COLORS.brand} />
+              <Feather name="activity" size={16} color={COLORS.brand} />
             </View>
             <Text style={styles.engLabel}>Diseases</Text>
           </TouchableOpacity>
-          <View style={styles.engBtn} />
-          <View style={styles.engBtn} />
         </View>
 
         {/* Bento grid */}

@@ -3248,6 +3248,405 @@ async def delete_growth_entry(member_id: str, entry_id: str, user: dict = Depend
     return {"deleted": True}
 
 
+# ----------------- Child Developmental Milestones (age-based checklist) -----------------
+CHILD_MILESTONES = [
+    {"age_months": 2, "items": ["Smiles at people", "Coos", "Follows objects with eyes", "Holds head up briefly"]},
+    {"age_months": 4, "items": ["Laughs out loud", "Reaches for toys", "Holds head steady", "Rolls tummy to back"]},
+    {"age_months": 6, "items": ["Sits with support", "Recognises familiar faces", "Babbles (baba, mama)", "Passes objects hand-to-hand"]},
+    {"age_months": 9, "items": ["Sits without support", "Crawls", "Waves bye-bye", "Responds to own name"]},
+    {"age_months": 12, "items": ["Stands with support", "Says 1-2 words", "Waves & claps", "Uses pincer grasp (thumb+finger)"]},
+    {"age_months": 18, "items": ["Walks alone", "Says 6-10 words", "Points to show interest", "Drinks from a cup"]},
+    {"age_months": 24, "items": ["Runs", "2-word sentences", "Points to body parts", "Follows simple instructions"]},
+    {"age_months": 36, "items": ["Rides a tricycle", "3-word sentences", "Names colours", "Plays with other children"]},
+    {"age_months": 60, "items": ["Draws a person (3+ parts)", "Counts to 10", "Tells stories", "Dresses without help"]},
+]
+
+
+@api_router.get("/family/members/{member_id}/milestones")
+async def get_milestones(member_id: str, user: dict = Depends(current_user)):
+    m = await db.family_members.find_one({"id": member_id, "user_id": user["id"]})
+    if not m:
+        raise HTTPException(status_code=404, detail="Member not found")
+    # Compute age in months from DOB
+    age_months = None
+    if m.get("dob"):
+        try:
+            dob = datetime.fromisoformat(m["dob"]).date()
+            today = datetime.utcnow().date()
+            age_months = (today.year - dob.year) * 12 + (today.month - dob.month)
+        except Exception:
+            pass
+    achieved = set(m.get("milestones_done", []))
+    groups = []
+    for g in CHILD_MILESTONES:
+        applicable = age_months is None or age_months >= g["age_months"] - 3
+        groups.append({
+            "age_months": g["age_months"],
+            "age_label": (f"{g['age_months']} mo" if g["age_months"] < 24 else f"{g['age_months']//12} yr"),
+            "applicable": applicable,
+            "items": [{"text": it, "done": it in achieved} for it in g["items"]],
+        })
+    return {"age_months": age_months, "groups": groups}
+
+
+class MilestoneToggle(BaseModel):
+    text: str = Field(..., min_length=1, max_length=200)
+    done: bool
+
+
+@api_router.post("/family/members/{member_id}/milestones/toggle")
+async def toggle_milestone(member_id: str, body: MilestoneToggle, user: dict = Depends(current_user)):
+    m = await db.family_members.find_one({"id": member_id, "user_id": user["id"]})
+    if not m:
+        raise HTTPException(status_code=404, detail="Member not found")
+    op = {"$addToSet": {"milestones_done": body.text}} if body.done else {"$pull": {"milestones_done": body.text}}
+    await db.family_members.update_one({"id": member_id, "user_id": user["id"]}, op)
+    return {"ok": True}
+
+
+# ----------------- Women's Health -----------------
+class PeriodLogInput(BaseModel):
+    start_date: str = Field(..., max_length=40)      # ISO date YYYY-MM-DD
+    end_date: Optional[str] = Field(None, max_length=40)
+    cycle_length: Optional[int] = Field(28, ge=15, le=60)
+    flow: Optional[Literal["light", "normal", "heavy"]] = "normal"
+    symptoms: List[str] = []
+    mood: Optional[Literal["happy", "calm", "anxious", "sad", "irritable"]] = None
+    notes: Optional[str] = Field(None, max_length=1000)
+
+
+class PregnancyInput(BaseModel):
+    is_active: bool
+    lmp_date: Optional[str] = Field(None, max_length=40)  # last menstrual period
+    notes: Optional[str] = Field(None, max_length=1000)
+
+
+class GynaeProfileInput(BaseModel):
+    pcos: bool = False
+    pcod: bool = False
+    conditions: List[str] = []
+    surgeries: List[str] = []
+    medications: List[str] = []
+    notes: Optional[str] = Field(None, max_length=2000)
+
+
+PREGNANCY_MILESTONES = [
+    (4,  "Heart begins to form. Take folic acid 400mcg daily."),
+    (8,  "Baby is the size of a raspberry. Morning sickness may peak."),
+    (12, "First trimester ends! Miscarriage risk drops significantly."),
+    (16, "You may feel first tiny movements (quickening)."),
+    (20, "Anatomy scan — baby's organs are visible on ultrasound."),
+    (24, "Baby can hear your voice. Talk & sing to your bump."),
+    (28, "Third trimester begins. Track kick counts daily."),
+    (32, "Baby's brain developing rapidly. Rest well."),
+    (36, "Baby is nearly full-term. Prepare hospital bag."),
+    (40, "Due date! Baby ready for the world."),
+]
+
+
+def _weeks_from(iso_date: str) -> int:
+    try:
+        d = datetime.fromisoformat(iso_date).date()
+        return max(0, (datetime.utcnow().date() - d).days // 7)
+    except Exception:
+        return 0
+
+
+@api_router.post("/women/period-log")
+async def log_period(body: PeriodLogInput, user: dict = Depends(current_user)):
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "start_date": body.start_date,
+        "end_date": body.end_date,
+        "cycle_length": body.cycle_length,
+        "flow": body.flow,
+        "symptoms": body.symptoms,
+        "mood": body.mood,
+        "notes": body.notes,
+        "created_at": now_iso(),
+    }
+    await db.women_cycles.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/women/cycles")
+async def list_cycles(limit: int = 12, user: dict = Depends(current_user)):
+    limit = min(max(limit, 1), 50)
+    items = await db.women_cycles.find({"user_id": user["id"]}).sort("start_date", -1).to_list(limit)
+    for i in items:
+        i.pop("_id", None)
+    # Predict next period based on latest cycle
+    next_predicted = None
+    fertile_window = None
+    if items:
+        latest = items[0]
+        try:
+            start = datetime.fromisoformat(latest["start_date"]).date()
+            length = int(latest.get("cycle_length") or 28)
+            next_predicted = (start + timedelta(days=length)).isoformat()
+            # Fertile window: roughly day 10-16 of next cycle (approx)
+            ov = start + timedelta(days=length - 14)
+            fertile_window = {
+                "start": (ov - timedelta(days=3)).isoformat(),
+                "end": (ov + timedelta(days=1)).isoformat(),
+            }
+        except Exception:
+            pass
+    return {"cycles": items, "next_period_predicted": next_predicted, "fertile_window": fertile_window}
+
+
+@api_router.delete("/women/period-log/{log_id}")
+async def delete_period(log_id: str, user: dict = Depends(current_user)):
+    res = await db.women_cycles.delete_one({"id": log_id, "user_id": user["id"]})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"deleted": True}
+
+
+@api_router.put("/women/pregnancy")
+async def set_pregnancy(body: PregnancyInput, user: dict = Depends(current_user)):
+    doc = {
+        "user_id": user["id"],
+        "is_active": body.is_active,
+        "lmp_date": body.lmp_date,
+        "notes": body.notes,
+        "updated_at": now_iso(),
+    }
+    await db.women_pregnancy.update_one(
+        {"user_id": user["id"]}, {"$set": doc}, upsert=True,
+    )
+    return {"ok": True, **doc}
+
+
+@api_router.get("/women/pregnancy")
+async def get_pregnancy(user: dict = Depends(current_user)):
+    p = await db.women_pregnancy.find_one({"user_id": user["id"]}, {"_id": 0}) or {}
+    if not p.get("is_active") or not p.get("lmp_date"):
+        return {"is_active": False}
+    weeks = _weeks_from(p["lmp_date"])
+    due_date = None
+    try:
+        lmp = datetime.fromisoformat(p["lmp_date"]).date()
+        due_date = (lmp + timedelta(days=280)).isoformat()
+    except Exception:
+        pass
+    # Latest milestone applicable
+    current_milestone = None
+    for wk, msg in PREGNANCY_MILESTONES:
+        if weeks >= wk:
+            current_milestone = {"week": wk, "message": msg}
+    return {
+        **p,
+        "weeks": weeks,
+        "due_date": due_date,
+        "current_milestone": current_milestone,
+        "milestones": [{"week": w, "message": m, "reached": weeks >= w} for w, m in PREGNANCY_MILESTONES],
+    }
+
+
+@api_router.put("/women/gynae-profile")
+async def upsert_gynae(body: GynaeProfileInput, user: dict = Depends(current_user)):
+    doc = body.dict()
+    doc.update({"user_id": user["id"], "updated_at": now_iso()})
+    await db.women_gynae.update_one({"user_id": user["id"]}, {"$set": doc}, upsert=True)
+    return doc
+
+
+@api_router.get("/women/gynae-profile")
+async def get_gynae(user: dict = Depends(current_user)):
+    p = await db.women_gynae.find_one({"user_id": user["id"]}, {"_id": 0}) or {}
+    return p
+
+
+@api_router.get("/women/wellness-tips")
+async def wellness_tips(phase: str = "follicular"):
+    tips_by_phase = {
+        "menstrual": [
+            "Warm sesame oil abhyanga for cramps. Sip ginger-jaggery tea.",
+            "Restorative yoga: child's pose, supported bridge. Skip strong inversions.",
+            "Iron-rich foods: dates, beetroot, sesame, spinach, jaggery.",
+        ],
+        "follicular": [
+            "Energy is rising — good time for new routines and workouts.",
+            "Include ghee, almonds and dates for ojas (vitality).",
+            "Pranayama: Anulom-Vilom for hormonal balance.",
+        ],
+        "ovulation": [
+            "Peak energy — light meals, cooling foods (coconut water, cucumber).",
+            "Shatavari + warm milk for reproductive tonic (consult Vaidya).",
+            "Moderate cardio + yoga; avoid excess spice.",
+        ],
+        "luteal": [
+            "Nurture yourself — magnesium-rich foods (pumpkin seeds, cacao).",
+            "Skip heavy exercise; do gentle yin yoga & meditation.",
+            "Reduce caffeine & salt to ease PMS symptoms.",
+        ],
+        "pregnancy": [
+            "Daily Garbhini pranayama (gentle deep breathing) for baby's wellbeing.",
+            "Ojas-building foods: ghee, milk, almonds, dates. Avoid papaya & pineapple.",
+            "Prenatal yoga: cat-cow, seated twists, gentle squats.",
+        ],
+        "pcos": [
+            "Cinnamon + fenugreek water helps insulin sensitivity.",
+            "Surya Namaskar 12 rounds daily — great for PCOS.",
+            "Avoid dairy, refined sugar; favour warm cooked meals.",
+        ],
+    }
+    return {"phase": phase, "tips": tips_by_phase.get(phase, tips_by_phase["follicular"])}
+
+
+# ----------------- Community Feed -----------------
+class CommunityPostInput(BaseModel):
+    content: str = Field(..., min_length=1, max_length=2000)
+    hashtags: List[str] = []
+    image_base64: Optional[str] = Field(None, max_length=4_000_000)
+    is_question: bool = False
+
+
+class CommunityCommentInput(BaseModel):
+    text: str = Field(..., min_length=1, max_length=1000)
+
+
+async def _author_snapshot(user: dict) -> Dict[str, Any]:
+    """Small stable snapshot for display (name + role + verified badge)."""
+    role = user.get("role", "patient")
+    verified = False
+    avatar = None
+    if role == "doctor":
+        d = await db.doctors.find_one({"user_id": user["id"]}, {"_id": 0, "verified": 1, "avatar_url": 1, "specialty": 1})
+        verified = bool(d and d.get("verified"))
+        avatar = (d or {}).get("avatar_url")
+    if user.get("is_admin"):
+        verified = True  # official account
+    return {
+        "id": user["id"],
+        "name": user.get("name") or "User",
+        "role": "admin" if user.get("is_admin") else role,
+        "verified": verified,
+        "avatar_url": avatar,
+    }
+
+
+@api_router.post("/community/posts")
+async def create_post(body: CommunityPostInput, request: Request, user: dict = Depends(current_user)):
+    # Rate limit: 10 posts per user per hour
+    await rate_limit(request, f"community:post:{user['id']}", max_calls=10, window_seconds=3600)
+    tags = [t.strip().lower().lstrip("#") for t in body.hashtags if t.strip()][:8]
+    doc = {
+        "id": str(uuid.uuid4()),
+        "author": await _author_snapshot(user),
+        "content": body.content,
+        "hashtags": tags,
+        "image_base64": body.image_base64,
+        "is_question": body.is_question,
+        "like_count": 0,
+        "comment_count": 0,
+        "created_at": now_iso(),
+    }
+    await db.community_posts.insert_one(doc)
+    doc.pop("_id", None)
+    await log_activity("community_post", actor=user, meta={"post_id": doc["id"], "is_question": body.is_question})
+    return doc
+
+
+@api_router.get("/community/posts")
+async def list_posts(hashtag: Optional[str] = None, is_question: Optional[bool] = None,
+                     limit: int = 20, before: Optional[str] = None,
+                     user: dict = Depends(current_user)):
+    limit = min(max(limit, 1), 50)
+    q: Dict[str, Any] = {}
+    if hashtag:
+        q["hashtags"] = hashtag.lower().lstrip("#")
+    if is_question is not None:
+        q["is_question"] = is_question
+    if before:
+        q["created_at"] = {"$lt": before}
+    items = await db.community_posts.find(q, {"image_base64": 0}).sort("created_at", -1).to_list(limit)
+    # Mark liked_by_me
+    my_likes = await db.community_likes.find({"user_id": user["id"]}, {"_id": 0, "post_id": 1}).to_list(500)
+    liked_set = {r["post_id"] for r in my_likes}
+    for it in items:
+        it.pop("_id", None)
+        it["liked_by_me"] = it["id"] in liked_set
+    return {"items": items}
+
+
+@api_router.get("/community/posts/{post_id}")
+async def get_post(post_id: str, user: dict = Depends(current_user)):
+    p = await db.community_posts.find_one({"id": post_id}, {"_id": 0})
+    if not p:
+        raise HTTPException(status_code=404, detail="Post not found")
+    p["liked_by_me"] = bool(await db.community_likes.find_one({"post_id": post_id, "user_id": user["id"]}))
+    return p
+
+
+@api_router.post("/community/posts/{post_id}/like")
+async def toggle_like(post_id: str, user: dict = Depends(current_user)):
+    existing = await db.community_likes.find_one({"post_id": post_id, "user_id": user["id"]})
+    if existing:
+        await db.community_likes.delete_one({"post_id": post_id, "user_id": user["id"]})
+        await db.community_posts.update_one({"id": post_id}, {"$inc": {"like_count": -1}})
+        return {"liked": False}
+    await db.community_likes.insert_one({"post_id": post_id, "user_id": user["id"], "created_at": now_iso()})
+    await db.community_posts.update_one({"id": post_id}, {"$inc": {"like_count": 1}})
+    return {"liked": True}
+
+
+@api_router.post("/community/posts/{post_id}/comments")
+async def add_comment(post_id: str, body: CommunityCommentInput, request: Request, user: dict = Depends(current_user)):
+    await rate_limit(request, f"community:comment:{user['id']}", max_calls=30, window_seconds=3600)
+    p = await db.community_posts.find_one({"id": post_id}, {"_id": 0, "id": 1})
+    if not p:
+        raise HTTPException(status_code=404, detail="Post not found")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "post_id": post_id,
+        "author": await _author_snapshot(user),
+        "text": body.text,
+        "created_at": now_iso(),
+    }
+    await db.community_comments.insert_one(doc)
+    await db.community_posts.update_one({"id": post_id}, {"$inc": {"comment_count": 1}})
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/community/posts/{post_id}/comments")
+async def list_comments(post_id: str, user: dict = Depends(current_user)):
+    items = await db.community_comments.find({"post_id": post_id}).sort("created_at", 1).to_list(200)
+    for i in items:
+        i.pop("_id", None)
+    return {"items": items}
+
+
+@api_router.delete("/community/posts/{post_id}")
+async def delete_post(post_id: str, user: dict = Depends(current_user)):
+    p = await db.community_posts.find_one({"id": post_id}, {"_id": 0})
+    if not p:
+        raise HTTPException(status_code=404, detail="Post not found")
+    # Author or admin can delete
+    if p["author"]["id"] != user["id"] and not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Only the author or admin can delete this post")
+    await db.community_posts.delete_one({"id": post_id})
+    await db.community_comments.delete_many({"post_id": post_id})
+    await db.community_likes.delete_many({"post_id": post_id})
+    return {"deleted": True}
+
+
+@api_router.get("/community/hashtags")
+async def list_hashtags(user: dict = Depends(current_user)):
+    # Aggregate top hashtags
+    pipeline = [
+        {"$unwind": "$hashtags"},
+        {"$group": {"_id": "$hashtags", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 20},
+    ]
+    items = await db.community_posts.aggregate(pipeline).to_list(20)
+    return {"items": [{"tag": i["_id"], "count": i["count"]} for i in items]}
+
 
 @api_router.get("/")
 async def root():

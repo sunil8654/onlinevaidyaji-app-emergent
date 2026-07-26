@@ -10,7 +10,7 @@ import { Feather } from "@expo/vector-icons";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { api } from "@/src/api";
 
-type Tab = "overview" | "vaccinations" | "growth";
+type Tab = "overview" | "vaccinations" | "growth" | "milestones";
 
 const RECOMMENDED_VACCINES = [
   { name: "BCG", age: "At birth" },
@@ -96,10 +96,10 @@ export default function FamilyMember() {
 
       {/* Tabs */}
       <View style={styles.tabs}>
-        {(["overview", "vaccinations", "growth"] as Tab[]).map((t) => (
+        {(["overview", "vaccinations", "growth", "milestones"] as Tab[]).map((t) => (
           <TouchableOpacity key={t} style={[styles.tab, tab === t && styles.tabActive]} onPress={() => setTab(t)}>
             <Text style={[styles.tabText, tab === t && styles.tabTextActive]}>
-              {t === "overview" ? "Overview" : t === "vaccinations" ? "Vaccines" : "Growth"}
+              {t === "overview" ? "Info" : t === "vaccinations" ? "Vaccines" : t === "growth" ? "Growth" : "Milestones"}
             </Text>
           </TouchableOpacity>
         ))}
@@ -204,6 +204,8 @@ export default function FamilyMember() {
             ))}
           </View>
         )}
+
+        {tab === "milestones" && <MilestonesPanel memberId={id as string} />}
       </ScrollView>
 
       {vaccineModal && (
@@ -213,6 +215,61 @@ export default function FamilyMember() {
         <GrowthModal onClose={() => setGrowthModal(false)} memberId={id as string} onSaved={async () => { setGrowthModal(false); await load(); }} />
       )}
     </SafeAreaView>
+  );
+}
+
+// ---------------- Milestones Tab ----------------
+function MilestonesPanel({ memberId }: { memberId: string }) {
+  const [data, setData] = useState<any>(null);
+  const load = useCallback(async () => {
+    try { const d = await api.getMilestones(memberId); setData(d); } catch {}
+  }, [memberId]);
+  useEffect(() => { load(); }, [load]);
+
+  const toggle = async (text: string, done: boolean) => {
+    // Optimistic
+    setData((prev: any) => ({
+      ...prev,
+      groups: prev.groups.map((g: any) => ({
+        ...g,
+        items: g.items.map((it: any) => it.text === text ? { ...it, done: !done } : it),
+      })),
+    }));
+    try { await api.toggleMilestone(memberId, text, !done); }
+    catch { await load(); }
+  };
+
+  if (!data) return <Text style={{ padding: SPACING.lg, color: COLORS.textSecondary }}>Loading milestones…</Text>;
+
+  return (
+    <View style={{ padding: SPACING.lg }}>
+      {data.age_months == null && (
+        <Text style={{ color: COLORS.textMuted, fontSize: 13, marginBottom: SPACING.md, fontStyle: "italic" }}>
+          Add a date of birth to see age-appropriate milestones highlighted.
+        </Text>
+      )}
+      {data.age_months != null && (
+        <Text style={{ color: COLORS.textSecondary, marginBottom: SPACING.md, fontSize: 13 }}>
+          Current age: {data.age_months < 24 ? `${data.age_months} months` : `${(data.age_months/12).toFixed(1)} years`}
+        </Text>
+      )}
+      {(data.groups || []).map((g: any) => (
+        <View key={g.age_months} style={[styles.recCard, !g.applicable && { opacity: 0.5 }]}>
+          <Text style={styles.entryTitle}>By {g.age_label}</Text>
+          {g.items.map((it: any) => (
+            <TouchableOpacity key={it.text} style={styles.mileItem} onPress={() => toggle(it.text, it.done)}>
+              <Feather name={it.done ? "check-circle" : "circle"} size={18} color={it.done ? COLORS.success : COLORS.textMuted} />
+              <Text style={[styles.mileText, it.done && { textDecorationLine: "line-through", color: COLORS.textMuted }]}>
+                {it.text}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      ))}
+      <Text style={{ marginTop: SPACING.md, color: COLORS.textSecondary, fontStyle: "italic", fontSize: 12 }}>
+        🌿 Milestones vary — consult your pediatrician if you have concerns.
+      </Text>
+    </View>
   );
 }
 
@@ -405,6 +462,8 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.md,
     marginBottom: 6,
   },
+  mileItem: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 8 },
+  mileText: { flex: 1, color: COLORS.textPrimary, fontSize: 14 },
   entryTitle: { color: COLORS.textPrimary, fontWeight: "700", fontSize: 15 },
   entryMeta: { color: COLORS.textSecondary, fontSize: 12, marginTop: 2 },
   entryNote: { color: COLORS.textMuted, fontSize: 12, marginTop: 4, fontStyle: "italic" },

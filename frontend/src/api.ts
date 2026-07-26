@@ -282,6 +282,46 @@ export const api = {
     request(`/family/members/${id}/vaccination/${entry_id}`, "DELETE"),
   deleteGrowth: (id: string, entry_id: string) =>
     request(`/family/members/${id}/growth/${entry_id}`, "DELETE"),
+  getMilestones: (id: string) => request<{ age_months: number | null; groups: any[] }>(`/family/members/${id}/milestones`),
+  toggleMilestone: (id: string, text: string, done: boolean) =>
+    request(`/family/members/${id}/milestones/toggle`, "POST", { text, done }),
+
+  // Women's Health
+  logPeriod: (body: {
+    start_date: string; end_date?: string; cycle_length?: number;
+    flow?: "light" | "normal" | "heavy"; symptoms?: string[];
+    mood?: "happy" | "calm" | "anxious" | "sad" | "irritable"; notes?: string;
+  }) => request("/women/period-log", "POST", body),
+  listCycles: (limit = 12) =>
+    request<{ cycles: any[]; next_period_predicted: string | null; fertile_window: any }>(`/women/cycles?limit=${limit}`),
+  deletePeriod: (log_id: string) => request(`/women/period-log/${log_id}`, "DELETE"),
+  setPregnancy: (body: { is_active: boolean; lmp_date?: string; notes?: string }) =>
+    request("/women/pregnancy", "PUT", body),
+  getPregnancy: () => request<any>("/women/pregnancy"),
+  upsertGynae: (body: {
+    pcos?: boolean; pcod?: boolean; conditions?: string[];
+    surgeries?: string[]; medications?: string[]; notes?: string;
+  }) => request("/women/gynae-profile", "PUT", body),
+  getGynae: () => request<any>("/women/gynae-profile"),
+  wellnessTips: (phase: string) => request<{ phase: string; tips: string[] }>(`/women/wellness-tips?phase=${phase}`),
+
+  // Community
+  createPost: (body: { content: string; hashtags?: string[]; image_base64?: string; is_question?: boolean }) =>
+    request("/community/posts", "POST", body),
+  listPosts: (params?: { hashtag?: string; is_question?: boolean; limit?: number; before?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.hashtag) q.set("hashtag", params.hashtag);
+    if (params?.is_question !== undefined) q.set("is_question", String(params.is_question));
+    if (params?.limit) q.set("limit", String(params.limit));
+    if (params?.before) q.set("before", params.before);
+    return request<{ items: any[] }>(`/community/posts?${q.toString()}`);
+  },
+  getPost: (id: string) => request<any>(`/community/posts/${id}`),
+  togglePostLike: (id: string) => request<{ liked: boolean }>(`/community/posts/${id}/like`, "POST"),
+  addComment: (id: string, text: string) => request(`/community/posts/${id}/comments`, "POST", { text }),
+  listComments: (id: string) => request<{ items: any[] }>(`/community/posts/${id}/comments`),
+  deletePost: (id: string) => request(`/community/posts/${id}`, "DELETE"),
+  listHashtags: () => request<{ items: { tag: string; count: number }[] }>("/community/hashtags"),
 
   track: (event: string, props?: any) => request("/analytics", "POST", { event, props }),
 };

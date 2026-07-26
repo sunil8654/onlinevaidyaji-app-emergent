@@ -1,0 +1,47 @@
+{
+  "summary": "Iter 20 BACKEND-ONLY testing of Women's Health + Community Feed + Child Milestones. Result: 42/42 pytest cases PASS (100%). Coverage: (1) Women's Health — POST /api/women/period-log creates cycle with id, cycle_length=30, no _id. GET /api/women/cycles returns next_period_predicted=start_date+cycle_length ('2026-01-05'+30='2026-02-04') and fertile_window (ovulation=start+length-14 = '2026-01-21', window=['2026-01-18','2026-01-22']). DELETE + repeat -> 200, 404. PUT /api/women/pregnancy {is_active:true, lmp_date:'2026-04-01'} + GET returns weeks (int), due_date='2027-01-06' (LMP+280d), current_milestone, milestones (10 entries). Not-active user returns exactly {is_active:false}. PUT/GET /api/women/gynae-profile round-trips pcos/pcod/conditions/surgeries/medications/notes. GET /api/women/wellness-tips returns 3 tips for all 6 phases (menstrual/follicular/ovulation/luteal/pregnancy/pcos). Auth guard: no token -> 403. User scoping: user B cannot see user A's cycles/pregnancy/gynae, cross-user DELETE -> 404. (2) Community — POST /api/community/posts lowercases hashtags + strips '#' (['#Ayurveda','PCOS','#Wellness','yoga']->['ayurveda','pcos','wellness','yoga']) and caps to 8. Author snapshot has name/role/verified. Rate limit: 11 posts in a burst -> 11th returns 429. GET /api/community/posts returns items with liked_by_me and NO image_base64 field. ?hashtag=ayurveda and ?is_question=true filters verified. GET /api/community/posts/{id} single post with liked_by_me. POST /api/community/posts/{id}/like toggles state and inc/dec like_count; user_A sees liked_by_me=false while user_B sees true after liking. POST /api/community/posts/{id}/comments increments parent comment_count; GET returns items sorted ascending by created_at. DELETE cascades: comments empty after post delete + author 200, other user 403, admin 200 (with admin token from /app/memory/test_credentials.md loaded via ADMIN_PASSWORD env). Admin author snapshot: role='admin', verified=true. Fresh doctor author snapshot: role='doctor', verified=false (matches doctors.verified DB field). GET /api/community/hashtags returns top-20 with lowercase tags + int counts. (3) Child milestones — GET /api/family/members/{id}/milestones returns {age_months, groups[{age_months, age_label, applicable, items[{text, done}]}]} for member with dob (~10mo old) and returns age_months=null + all applicable=true when dob absent. POST /toggle {text, done} adds to milestones_done then removes on done:false. Cross-user access (user B on user A's member) -> 404. (4) Regression — GET /api/doctors 200, POST /api/wellness/log + GET /dashboard OK, /api/family/members returns {items:[...]}, admin login OK.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/women/pregnancy", "issue": "When is_active is false the server correctly returns exactly {is_active:false} (good) but when is_active=true and lmp_date is missing it also silently returns {is_active:false} (server.py:3426). Client cannot distinguish 'never set' from 'set but invalid lmp'. Consider 400 when is_active=true but lmp_date is missing."},
+      {"endpoint": "GET /api/women/cycles fertile_window", "issue": "Fertile window is computed as ov-3d .. ov+1d (server.py:3391-3394). Spec says 'roughly ovulation ±3d'. Range asymmetry (-3d..+1d) may be intentional (sperm live longer than egg) but comment/spec mismatch — worth documenting to prevent 'bug' reports."},
+      {"endpoint": "POST /api/community/posts", "issue": "hashtags are only [:8] sliced; no duplicate dedup. ['ayurveda','Ayurveda','#AYURVEDA'] all normalise to 'ayurveda' and 3 identical tags will be stored. Consider dedupe-preserving-order before slicing (server.py:3536)."},
+      {"endpoint": "GET /api/community/posts", "issue": "liked_by_me lookup fetches up to 500 like docs for the caller and filters in-memory (server.py:3568). For power users with >500 likes the flag will silently be wrong. Consider $lookup or a scoped $in query keyed on the returned post ids."},
+      {"endpoint": "POST /api/community/posts/{id}/like", "issue": "Like/unlike does not check that the post exists first — a like inserted against a non-existent post_id would still succeed and inc like_count on a non-existent doc (no-op) but leave orphan community_likes rows. Consider find_one on the post first (server.py:3585-3594)."},
+      {"endpoint": "GET /api/family/members/{id}/milestones", "issue": "age_months is int only; children between 0 and 3 months read as 0, and negative ages (dob in the future) also read 0. Consider clamping and/or returning fractional months for infants (server.py:3276)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter20_women_community_milestones.py",
+    "/app/test_reports/pytest/pytest_iter20.xml"
+  ],
+  "action_items": [
+    "OPTIONAL: In POST /api/community/posts dedupe hashtags after normalisation (server.py:3536) so ['#Ayurveda','ayurveda','AYURVEDA'] becomes just ['ayurveda'].",
+    "OPTIONAL: In POST /api/community/posts/{id}/like verify post exists (find_one) before inserting/updating; return 404 for unknown post_id (server.py:3585-3594).",
+    "OPTIONAL: In GET /api/women/pregnancy, distinguish 'never set' vs 'is_active=true but lmp_date missing' — return 400/422 for the latter instead of silently coercing to {is_active:false} (server.py:3426).",
+    "OPTIONAL: Refactor liked_by_me lookup in GET /api/community/posts to a bounded $in query against the current page's post ids instead of fetching first 500 likes for the caller (server.py:3568).",
+    "OPTIONAL: Split server.py (3679 lines) into domain modules — /women, /community, /family/milestones are natural boundaries. This is legacy debt beyond iter-20 scope."
+  ],
+  "critical_code_review_comments": [
+    "server.py:3350 _weeks_from uses datetime.utcnow() (deprecated in Py 3.12+). Same deprecation flag as prior iterations. Use datetime.now(timezone.utc).date().",
+    "server.py:3276 age_months computation ignores day-of-month, so a child dob=2025-01-31 evaluated on 2026-02-01 shows age=13 (~1 day short of 13 months). Fine for milestone bucketing (±3mo tolerance at line 3282), but worth a comment.",
+    "server.py:3512-3529 _author_snapshot performs an extra DB call per post/comment write. For high-volume endpoints (create_post, add_comment) this is 1 doctors lookup per write. Consider caching the doctor.verified flag on the user document at login/verify time.",
+    "server.py:3536 hashtag normalisation does .lstrip('#') only once — user input '##ayurveda' becomes 'ayurveda' correctly (lstrip strips all leading #), OK. But '#ayur#veda' becomes 'ayur#veda' — hash inside tag is not stripped. Consider validating tag chars.",
+    "server.py:3532-3551 create_post does not validate hashtag element length; a single 'a'*1000 hashtag would be stored uncapped (Pydantic model has no per-item length cap). Add Field(max_length=40) on the list element."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter20_women_community_milestones.py (new, 42 tests)"
+  ],
+  "success_rate": {"backend": "100% (42/42)", "frontend": "N/A - skipped as instructed"},
+  "seed_data_creation": "Registered ~7 ephemeral TEST_ users (email prefix test_iter20_*@vaidhyaji.example.com) — 2 module-scoped patients (user_a, user_b), 1 doctor, plus 4 short-lived users for the rate-limit burst test and admin-delete test. Inserted ~15 community_posts (all with content prefixed 'TEST_iter20 ...'; those exercising delete-cascade have been removed by the tests themselves). Inserted 2 community_comments, ~3 community_likes rows. Created 3 family_members docs (TEST_iter20_Kid, TEST_iter20_Grandpa, TEST_iter20_regr). Created 1 women_cycles doc (later deleted), 1 women_pregnancy doc for user_a (is_active=true, lmp_date=2026-04-01), 1 women_gynae doc for user_a. Admin credentials unchanged.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iter 20 backend surfaces (women/community/milestones) are stable. Endpoints: POST/DELETE /api/women/period-log, GET /api/women/cycles (predicts next_period + fertile_window from latest cycle), PUT/GET /api/women/pregnancy (280d gestation, 10 milestone weeks), PUT/GET /api/women/gynae-profile (upsert per user), GET /api/women/wellness-tips?phase= (menstrual/follicular/ovulation/luteal/pregnancy/pcos — 3 tips each). Community: POST/GET/DELETE /api/community/posts (hashtags lowercased+#-stripped, max 8, image_base64 excluded from list; rate limit 10/hour/user), single GET /api/community/posts/{id}, POST /like (toggle), POST/GET /comments (sorted asc), DELETE cascades comments+likes, admin can delete any, GET /api/community/hashtags top-20 aggregate. Milestones: GET /api/family/members/{id}/milestones returns age_months + groups[{items[{text,done}]}], POST /toggle adds/removes from milestones_done array. Auth: HTTPBearer(auto_error=false) yields 403 when Authorization header missing. Regression tests for /api/auth/login (admin), /api/doctors, /api/wellness, /api/family/members embedded in same file. Reuse /app/backend/tests/test_iter20_women_community_milestones.py as regression harness. No mocks.",
+  "rca_of_issue": "N/A - all acceptance criteria met on first run after correcting one regression-test assumption (GET /api/family/members returns {items:[...]}, not a raw list)."
+}
