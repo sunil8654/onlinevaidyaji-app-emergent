@@ -188,6 +188,20 @@ export const api = {
     languages?: string[]; consultation_fee?: number; bio?: string;
     clinic_name?: string; clinic_address?: string; avatar_base64?: string;
   }) => request<any>("/doctor/profile", "PUT", body),
+  doctorGetAvailability: () => request<{
+    is_available: boolean;
+    consultation_mode: "online" | "offline" | "both";
+    weekly_schedule: Record<string, string[]>;
+    slot_duration_min: number;
+    notes: string;
+  }>("/doctor/availability"),
+  doctorSetAvailability: (body: {
+    is_available?: boolean;
+    consultation_mode?: "online" | "offline" | "both";
+    weekly_schedule?: Record<string, string[]>;
+    slot_duration_min?: number;
+    notes?: string;
+  }) => request<any>("/doctor/availability", "PUT", body),
   doctorMyAppointments: () => request("/doctor/my-appointments"),
   doctorMyPatients: () => request("/doctor/my-patients"),
   doctorEarnings: () => request<{

@@ -412,6 +412,7 @@ _PUBLIC_DOCTOR_PROJECTION = {
     "id": 1, "name": 1, "specialty": 1, "qualification": 1,
     "experience_years": 1, "languages": 1, "consultation_fee": 1,
     "bio": 1, "avatar_url": 1, "rating": 1, "reviews": 1, "verified": 1,
+    "is_available": 1, "consultation_mode": 1,
     # Deliberately NOT included: phone, email, registration_number, user_id.
 }
 
@@ -2285,6 +2286,18 @@ class DoctorProfileUpdate(BaseModel):
     avatar_base64: Optional[str] = Field(None, max_length=4_000_000)
 
 
+# ── Doctor Availability (calendar / schedule) ────────────────────────────
+# `weekly_schedule` maps ISO weekday (0=Mon, 6=Sun) to a list of HH:MM slots.
+# `is_available` is a hard toggle: when False, the doctor is "offline" and
+# hidden from instant consult routing, even if their schedule says otherwise.
+class DoctorAvailabilityInput(BaseModel):
+    is_available: Optional[bool] = None
+    consultation_mode: Optional[str] = Field(None, pattern="^(online|offline|both)$")
+    weekly_schedule: Optional[Dict[str, List[str]]] = None  # e.g. {"0": ["09:00", "09:30", "17:00"]}
+    slot_duration_min: Optional[int] = Field(None, ge=5, le=120)
+    notes: Optional[str] = Field(None, max_length=300)
+
+
 @api_router.get("/doctor/me")
 async def doctor_me(user: dict = Depends(current_user)):
     if user["role"] != "doctor":
@@ -2328,6 +2341,70 @@ async def doctor_update_profile(body: DoctorProfileUpdate, user: dict = Depends(
     await db.doctors.update_one({"user_id": user["id"]}, {"$set": upd})
     d = await db.doctors.find_one({"user_id": user["id"]}, {"_id": 0})
     return d
+
+
+@api_router.get("/doctor/availability")
+async def doctor_get_availability(user: dict = Depends(current_user)):
+    """Return the currently signed-in doctor's calendar/availability."""
+    if user["role"] != "doctor":
+        raise HTTPException(status_code=403, detail="Doctors only")
+    d = await db.doctors.find_one({"user_id": user["id"]}, {"_id": 0}) or {}
+    return {
+        "is_available": bool(d.get("is_available", True)),
+        "consultation_mode": d.get("consultation_mode", "both"),
+        "weekly_schedule": d.get("weekly_schedule") or {},
+        "slot_duration_min": d.get("slot_duration_min", 30),
+        "notes": d.get("availability_notes", ""),
+    }
+
+
+@api_router.put("/doctor/availability")
+async def doctor_set_availability(body: DoctorAvailabilityInput, user: dict = Depends(current_user)):
+    """Doctor updates their calendar / availability toggle."""
+    if user["role"] != "doctor":
+        raise HTTPException(status_code=403, detail="Doctors only")
+    upd: Dict[str, Any] = {}
+    if body.is_available is not None:
+        upd["is_available"] = bool(body.is_available)
+    if body.consultation_mode is not None:
+        upd["consultation_mode"] = body.consultation_mode
+    if body.weekly_schedule is not None:
+        # Sanitise: only accept keys "0".."6" and unique sorted HH:MM entries (capped to 24 slots/day)
+        clean: Dict[str, List[str]] = {}
+        for day in [str(i) for i in range(7)]:
+            slots = body.weekly_schedule.get(day) or []
+            valid: List[str] = []
+            for s in slots:
+                if not isinstance(s, str) or len(s) != 5 or s[2] != ":":
+                    continue
+                try:
+                    hh, mm = int(s[:2]), int(s[3:])
+                except Exception:
+                    continue
+                if 0 <= hh <= 23 and 0 <= mm <= 59 and s not in valid:
+                    valid.append(s)
+            valid.sort()
+            clean[day] = valid[:24]
+        upd["weekly_schedule"] = clean
+    if body.slot_duration_min is not None:
+        upd["slot_duration_min"] = int(body.slot_duration_min)
+    if body.notes is not None:
+        upd["availability_notes"] = body.notes
+    if not upd:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    upd["updated_at"] = now_iso()
+    d = await db.doctors.find_one({"user_id": user["id"]})
+    if not d or not d.get("onboarded_at"):
+        raise HTTPException(status_code=404, detail="Complete onboarding first")
+    await db.doctors.update_one({"user_id": user["id"]}, {"$set": upd})
+    d = await db.doctors.find_one({"user_id": user["id"]}, {"_id": 0})
+    return {
+        "is_available": bool(d.get("is_available", True)),
+        "consultation_mode": d.get("consultation_mode", "both"),
+        "weekly_schedule": d.get("weekly_schedule") or {},
+        "slot_duration_min": d.get("slot_duration_min", 30),
+        "notes": d.get("availability_notes", ""),
+    }
 
 
 @api_router.get("/doctor/my-appointments")

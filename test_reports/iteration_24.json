@@ -1,0 +1,31 @@
+{
+  "summary": "Backend-only validation of Doctor Clinic Management enhancements (Iteration 24 — availability calendar / online-offline toggle). Created /app/backend/tests/test_iter24_doctor_availability.py with 27 pytest cases covering GET+PUT /api/doctor/availability, authz (patient 403, no-token 401/403), pydantic validation (consultation_mode enum, slot_duration_min 5..120, notes <=300), weekly_schedule sanitisation (invalid keys/values dropped, dedup, sort, cap 24), onboarding gate (404 'Complete onboarding first'), public projection (/api/doctors and /api/doctors/{id} now surface is_available + consultation_mode after doctor toggle + admin approve), plus regression on /doctor/me, /doctor/my-appointments, /doctor/my-patients, /doctor/earnings, PUT /doctor/profile, phone-mandatory /auth/register, /wellness/history, /family/members, /community/posts. All 27 tests PASSED (100%). No backend issues found. Note: sanitiser fills all 7 day keys as empty lists when weekly_schedule is provided — this is expected/documented in the test.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter24_doctor_availability.py",
+    "/app/test_reports/pytest/pytest_iter24.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py PUT /doctor/availability sanitiser always writes all 7 day keys (empty lists for days not supplied). If the intended behaviour is a partial merge (only update supplied days), the current implementation will silently wipe existing days that weren't in the request payload. Not a bug per spec, but worth confirming with product intent.",
+    "GET /doctor/availability defaults is_available to True when the field is absent in Mongo — a doctor who has never toggled availability is treated as 'online'. Verify this is the intended default in the UI (esp. immediately after onboarding, before any explicit toggle)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter24_doctor_availability.py (new)"
+  ],
+  "success_rate": {"backend": "100% (27/27)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "Fresh doctor + patient + onboarded doctor accounts created per test module via /api/auth/register (emails prefixed iter24_*, disposable). One doctor is admin-approved via /api/admin/doctors/{id}/approve to validate the public /api/doctors projection.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "test_iter24_doctor_availability.py exercises the full availability lifecycle including admin-approve → verified doctor → public list projection. It requires ADMIN_PASSWORD env (loaded from backend/.env) to run the public-projection class; tests will pytest.skip that class if admin creds are missing. Weekly-schedule sanitiser normalises to all 7 day keys.",
+  "rca_of_issue": "N/A — no bugs identified. Two initial test assertions were mis-shaped (assumed list responses for /wellness/history, /family/members, /community/posts but they return {items: [...]} envelopes). Fixed in the test file; endpoints behave correctly."
+}

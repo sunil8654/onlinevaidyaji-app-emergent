@@ -59,6 +59,26 @@ export default function DoctorHome() {
           </View>
         </ImageBackground>
 
+        {/* Availability toggle */}
+        <TouchableOpacity
+          style={styles.availCard}
+          onPress={() => router.push("/doctor/availability")}
+          testID="dh-availability"
+        >
+          <View style={[styles.availDot, { backgroundColor: doc?.is_available === false ? COLORS.error : COLORS.success }]} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.availTitle}>
+              {doc?.is_available === false ? "You’re Offline" : "You’re Live"}
+            </Text>
+            <Text style={styles.availSub}>
+              {doc?.is_available === false
+                ? "Tap to go online and open your calendar"
+                : `Mode: ${doc?.consultation_mode === "online" ? "Video only" : doc?.consultation_mode === "offline" ? "Clinic only" : "Video + Clinic"} · Manage slots`}
+            </Text>
+          </View>
+          <Feather name="chevron-right" size={18} color={COLORS.textMuted} />
+        </TouchableOpacity>
+
         {/* Stats row */}
         <View style={styles.stats}>
           <Stat label="Today" value={today} />
@@ -195,7 +215,17 @@ const styles = StyleSheet.create({
   role: { color: COLORS.accentSoft, marginTop: 2, fontSize: 13 },
   status: { flexDirection: "row", alignItems: "center", gap: 4, alignSelf: "flex-start", paddingHorizontal: 8, paddingVertical: 4, borderRadius: RADIUS.pill, marginTop: 8 },
   statusText: { color: COLORS.surface, fontSize: 10, fontWeight: "700", letterSpacing: 1 },
-  stats: { flexDirection: "row", gap: SPACING.md, padding: SPACING.lg, marginTop: -30 },
+  stats: { flexDirection: "row", gap: SPACING.md, paddingHorizontal: SPACING.lg, marginTop: SPACING.md },
+  availCard: {
+    flexDirection: "row", alignItems: "center", gap: SPACING.md,
+    marginHorizontal: SPACING.lg, marginTop: -30,
+    padding: SPACING.md,
+    backgroundColor: COLORS.surface, borderRadius: RADIUS.lg,
+    borderWidth: 1, borderColor: COLORS.border,
+  },
+  availDot: { width: 10, height: 10, borderRadius: 5 },
+  availTitle: { fontFamily: FONTS.heading, fontSize: 16, color: COLORS.textPrimary },
+  availSub: { color: COLORS.textSecondary, fontSize: 12, marginTop: 2 },
   stat: { flex: 1, backgroundColor: COLORS.surface, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: COLORS.border, padding: SPACING.md, alignItems: "center" },
   statVal: { fontFamily: FONTS.heading, fontSize: 26, color: COLORS.brand },
   statLbl: { color: COLORS.textSecondary, textTransform: "uppercase", fontSize: 10, letterSpacing: 2, fontWeight: "700", marginTop: 4 },
