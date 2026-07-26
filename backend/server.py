@@ -1325,7 +1325,360 @@ async def join_challenge(body: ChallengeJoinInput, user: dict = Depends(current_
         {"$set": doc},
         upsert=True,
     )
+    await _award_points(user["id"], 25, reason="challenge_joined", meta={"challenge_id": body.challenge_id})
     return {"ok": True, "streak": 1}
+
+
+# ----------------- Engagement (points, streaks, badges) -----------------
+BADGE_LIBRARY = [
+    {"key": "first_step",       "title": "First Step",       "desc": "Signed up for Vaidhyaji",           "icon": "star",          "points": 20},
+    {"key": "wellness_starter", "title": "Wellness Starter", "desc": "Logged your first wellness metric", "icon": "activity",      "points": 30},
+    {"key": "check_in_7",       "title": "7-Day Streak",     "desc": "Checked in 7 days in a row",        "icon": "zap",           "points": 100},
+    {"key": "check_in_30",      "title": "30-Day Streak",    "desc": "Checked in 30 days in a row",       "icon": "award",         "points": 500},
+    {"key": "quiz_master",      "title": "Quiz Master",      "desc": "Scored 100% on a health quiz",      "icon": "book-open",     "points": 75},
+    {"key": "yogi",             "title": "Yogi",             "desc": "Completed 10 yoga sessions",        "icon": "wind",          "points": 150},
+    {"key": "community_voice",  "title": "Community Voice",  "desc": "Posted 5 times in the community",   "icon": "message-square", "points": 60},
+    {"key": "consulted",        "title": "Health Seeker",    "desc": "Booked your first consultation",    "icon": "video",         "points": 80},
+    {"key": "challenger",       "title": "Challenger",       "desc": "Joined a wellness challenge",       "icon": "target",        "points": 50},
+]
+
+_LEVELS = [
+    (0, "Seeker"), (100, "Explorer"), (300, "Practitioner"),
+    (700, "Sadhak"),  (1500, "Adhikari"), (3000, "Vaidhya Ratna"),
+]
+
+
+def _level_for(points: int) -> Dict[str, Any]:
+    """Return {level, title, next_at, progress_pct} for a given total-points value."""
+    cur = _LEVELS[0]
+    nxt: Optional[tuple] = None
+    for i, lv in enumerate(_LEVELS):
+        if points >= lv[0]:
+            cur = lv
+            nxt = _LEVELS[i + 1] if i + 1 < len(_LEVELS) else None
+    span = (nxt[0] - cur[0]) if nxt else 1
+    progress = int(((points - cur[0]) / span) * 100) if span > 0 else 100
+    return {
+        "level": _LEVELS.index(cur) + 1,
+        "title": cur[1],
+        "next_at": nxt[0] if nxt else None,
+        "next_title": nxt[1] if nxt else None,
+        "progress_pct": max(0, min(100, progress)),
+    }
+
+
+async def _get_engagement(user_id: str) -> Dict[str, Any]:
+    e = await db.user_engagement.find_one({"user_id": user_id}, {"_id": 0})
+    if not e:
+        e = {
+            "user_id": user_id, "points": 0,
+            "streak_current": 0, "streak_max": 0, "streak_last_date": None,
+            "badges": [], "history": [], "created_at": now_iso(),
+        }
+        await db.user_engagement.insert_one(e.copy())
+    return e
+
+
+async def _award_points(user_id: str, points: int, reason: str, meta: Optional[dict] = None) -> None:
+    """Fire-and-forget: increments points, appends history entry. Never throws."""
+    try:
+        await db.user_engagement.update_one(
+            {"user_id": user_id},
+            {
+                "$setOnInsert": {"created_at": now_iso()},
+                "$inc": {"points": int(points)},
+                "$push": {"history": {"$each": [{
+                    "reason": reason, "points": int(points),
+                    "meta": meta or {}, "at": now_iso(),
+                }], "$slice": -50}},
+            },
+            upsert=True,
+        )
+    except Exception as exc:
+        logger.debug("award_points failed for %s: %s", user_id, exc)
+
+
+async def _grant_badge(user_id: str, key: str) -> bool:
+    """Grant a badge if not already earned. Returns True if newly granted."""
+    badge = next((b for b in BADGE_LIBRARY if b["key"] == key), None)
+    if not badge:
+        return False
+    e = await db.user_engagement.find_one({"user_id": user_id}, {"_id": 0, "badges": 1}) or {}
+    owned = {b["key"] for b in (e.get("badges") or [])}
+    if key in owned:
+        return False
+    await db.user_engagement.update_one(
+        {"user_id": user_id},
+        {"$push": {"badges": {"key": key, "earned_at": now_iso()}}, "$setOnInsert": {"created_at": now_iso()}},
+        upsert=True,
+    )
+    await _award_points(user_id, badge["points"], reason=f"badge:{key}")
+    return True
+
+
+@api_router.get("/engagement/me")
+async def engagement_me(user: dict = Depends(current_user)):
+    e = await _get_engagement(user["id"])
+    owned = {b["key"] for b in (e.get("badges") or [])}
+    lvl = _level_for(e.get("points", 0))
+    # Compose full badge list with earned flag + earned_at
+    badge_map = {b["key"]: b for b in (e.get("badges") or [])}
+    all_badges = [{
+        **b,
+        "earned": b["key"] in owned,
+        "earned_at": badge_map.get(b["key"], {}).get("earned_at"),
+    } for b in BADGE_LIBRARY]
+    return {
+        "points": e.get("points", 0),
+        "streak_current": e.get("streak_current", 0),
+        "streak_max": e.get("streak_max", 0),
+        "streak_last_date": e.get("streak_last_date"),
+        "level": lvl,
+        "badges": all_badges,
+        "badges_earned": len([b for b in all_badges if b["earned"]]),
+        "badges_total": len(BADGE_LIBRARY),
+        "history": (e.get("history") or [])[-20:][::-1],
+    }
+
+
+@api_router.post("/engagement/checkin")
+async def engagement_checkin(user: dict = Depends(current_user)):
+    """Daily check-in. Increments streak, awards +10 points, may grant streak badges."""
+    e = await _get_engagement(user["id"])
+    today = datetime.utcnow().date().isoformat()
+    last = e.get("streak_last_date")
+    if last == today:
+        return {
+            "already_checked_in": True,
+            "streak_current": e.get("streak_current", 0),
+            "points_awarded": 0,
+            "streak_max": e.get("streak_max", 0),
+        }
+    # If last check-in was yesterday, continue streak; else restart at 1.
+    if last:
+        try:
+            last_d = datetime.fromisoformat(last).date()
+            if (datetime.utcnow().date() - last_d).days == 1:
+                new_streak = int(e.get("streak_current", 0)) + 1
+            else:
+                new_streak = 1
+        except Exception:
+            new_streak = 1
+    else:
+        new_streak = 1
+    new_max = max(int(e.get("streak_max", 0)), new_streak)
+    await db.user_engagement.update_one(
+        {"user_id": user["id"]},
+        {"$set": {"streak_current": new_streak, "streak_max": new_max, "streak_last_date": today}},
+        upsert=True,
+    )
+    await _award_points(user["id"], 10, reason="daily_checkin")
+    newly = []
+    if new_streak >= 7 and await _grant_badge(user["id"], "check_in_7"):
+        newly.append("check_in_7")
+    if new_streak >= 30 and await _grant_badge(user["id"], "check_in_30"):
+        newly.append("check_in_30")
+    # Grant first_step badge on very first check-in
+    await _grant_badge(user["id"], "first_step")
+    return {
+        "already_checked_in": False,
+        "streak_current": new_streak,
+        "streak_max": new_max,
+        "points_awarded": 10,
+        "new_badges": newly,
+    }
+
+
+# ----------------- Quizzes -----------------
+class QuizSubmitInput(BaseModel):
+    answers: List[int] = Field(..., max_length=50)
+
+
+def _seeded_quizzes() -> List[Dict[str, Any]]:
+    """Statically-defined quizzes so tests + prod stay in sync."""
+    return [
+        {
+            "id": "quiz-dosha-basics",
+            "title": "What's Your Dominant Dosha?",
+            "category": "ayurveda",
+            "description": "5-question quick self-assessment to hint at your Ayurvedic constitution.",
+            "image_url": "https://images.pexels.com/photos/6663565/pexels-photo-6663565.jpeg",
+            "duration_min": 3,
+            "points": 30,
+            "questions": [
+                {"q": "How is your body frame?",
+                 "options": ["Thin, light", "Medium, athletic", "Heavier, sturdy"],
+                 "correct": 0, "explain": "All body types are valid — this is just a self-check."},
+                {"q": "What is your typical appetite?",
+                 "options": ["Variable, irregular", "Strong, gets hungry fast", "Steady, low"],
+                 "correct": 1, "explain": "Strong appetite is a Pitta trait; variable is Vata; low is Kapha."},
+                {"q": "How is your sleep?",
+                 "options": ["Light, disturbed", "Sound but short", "Deep and long"],
+                 "correct": 2, "explain": "Deep, long sleep is a classic Kapha trait."},
+                {"q": "How do you handle stress?",
+                 "options": ["Get anxious", "Get irritated", "Withdraw"],
+                 "correct": 0, "explain": "Anxiety under stress is a Vata response."},
+                {"q": "How does your skin feel?",
+                 "options": ["Dry", "Warm, prone to rash", "Oily, smooth"],
+                 "correct": 1, "explain": "Warm, red-prone skin often indicates elevated Pitta."},
+            ],
+        },
+        {
+            "id": "quiz-sleep-hygiene",
+            "title": "How Good Is Your Sleep Hygiene?",
+            "category": "sleep",
+            "description": "5 questions on your bedtime habits — AYUSH-aligned.",
+            "image_url": "https://images.pexels.com/photos/1640775/pexels-photo-1640775.jpeg",
+            "duration_min": 3,
+            "points": 30,
+            "questions": [
+                {"q": "How many hours before bed do you eat dinner?",
+                 "options": ["<1 hr", "1–2 hrs", "3+ hrs"], "correct": 2,
+                 "explain": "Ayurveda recommends dinner 3 hours before bed for full digestion."},
+                {"q": "Do you use screens in bed?",
+                 "options": ["Yes, often", "Sometimes", "Rarely / never"], "correct": 2,
+                 "explain": "Blue light disturbs Vata and delays melatonin."},
+                {"q": "Bedtime consistency?",
+                 "options": ["Random", "Within 1 hour", "Same time daily"], "correct": 2,
+                 "explain": "Consistent sleep-wake time balances circadian rhythm."},
+                {"q": "Room temperature?",
+                 "options": ["Warm & stuffy", "Neutral", "Cool & dark"], "correct": 2,
+                 "explain": "Cool, dark rooms deepen sleep."},
+                {"q": "Wind-down ritual (tea, journal, oil massage)?",
+                 "options": ["None", "Occasionally", "Every night"], "correct": 2,
+                 "explain": "Abhyanga (self-massage) or warm milk pacifies Vata before sleep."},
+            ],
+        },
+        {
+            "id": "quiz-gut-health",
+            "title": "Is Your Digestion Balanced?",
+            "category": "digestion",
+            "description": "Quick check on Agni (digestive fire) health.",
+            "image_url": "https://images.pexels.com/photos/17859378/pexels-photo-17859378.jpeg",
+            "duration_min": 3,
+            "points": 30,
+            "questions": [
+                {"q": "Water with meals?",
+                 "options": ["Cold water", "Room-temp water", "Warm/no water"], "correct": 2,
+                 "explain": "Warm water (or sips only) protects Agni."},
+                {"q": "Bloating frequency?",
+                 "options": ["Daily", "Weekly", "Rarely"], "correct": 2,
+                 "explain": "Frequent bloating indicates weak Agni."},
+                {"q": "Do you skip breakfast?",
+                 "options": ["Yes", "Sometimes", "No"], "correct": 2,
+                 "explain": "Skipping breakfast weakens Agni; Ayurveda recommends warm, cooked breakfast."},
+                {"q": "How is your bowel movement?",
+                 "options": ["Irregular", "Every 1–2 days", "Daily & complete"], "correct": 2,
+                 "explain": "Daily, complete elimination is a sign of healthy digestion."},
+                {"q": "Spices in daily food?",
+                 "options": ["None", "A few", "Ginger, cumin, coriander regularly"], "correct": 2,
+                 "explain": "Warming spices kindle Agni."},
+            ],
+        },
+        {
+            "id": "quiz-stress-check",
+            "title": "Stress & Nervous System Check",
+            "category": "mind",
+            "description": "5 questions to gauge your Vata mind-load.",
+            "image_url": "https://images.pexels.com/photos/8436587/pexels-photo-8436587.jpeg",
+            "duration_min": 3,
+            "points": 30,
+            "questions": [
+                {"q": "How often do you feel overwhelmed weekly?",
+                 "options": ["4+ times", "1–3 times", "Rarely"], "correct": 2,
+                 "explain": "Elevated stress imbalances Vata."},
+                {"q": "Do you practise pranayama?",
+                 "options": ["Never", "Sometimes", "Daily"], "correct": 2,
+                 "explain": "Anulom-Vilom balances the nervous system."},
+                {"q": "Time spent in nature/week?",
+                 "options": ["<1 hr", "1–3 hrs", "3+ hrs"], "correct": 2,
+                 "explain": "Nature time reduces cortisol."},
+                {"q": "Meditation frequency?",
+                 "options": ["Never", "Weekly", "Daily"], "correct": 2,
+                 "explain": "Daily meditation lowers Vata aggravation."},
+                {"q": "Caffeine intake?",
+                 "options": ["3+ cups", "1–2 cups", "None / herbal only"], "correct": 2,
+                 "explain": "Excess caffeine aggravates Vata & Pitta."},
+            ],
+        },
+    ]
+
+
+@api_router.get("/quizzes")
+async def list_quizzes(user: dict = Depends(current_user)):
+    """Public quiz catalogue with user's previous attempts."""
+    attempts = await db.quiz_attempts.find({"user_id": user["id"]}, {"_id": 0}).to_list(200)
+    best_by_quiz: Dict[str, int] = {}
+    for a in attempts:
+        qid = a["quiz_id"]
+        best_by_quiz[qid] = max(best_by_quiz.get(qid, 0), int(a.get("score", 0)))
+    out = []
+    for q in _seeded_quizzes():
+        item = {
+            "id": q["id"], "title": q["title"], "category": q["category"],
+            "description": q["description"], "image_url": q["image_url"],
+            "duration_min": q["duration_min"], "points": q["points"],
+            "questions_count": len(q["questions"]),
+            "best_score": best_by_quiz.get(q["id"], 0),
+            "attempted": q["id"] in best_by_quiz,
+        }
+        out.append(item)
+    return out
+
+
+@api_router.get("/quizzes/{quiz_id}")
+async def get_quiz(quiz_id: str, user: dict = Depends(current_user)):
+    q = next((x for x in _seeded_quizzes() if x["id"] == quiz_id), None)
+    if not q:
+        raise HTTPException(status_code=404, detail="Quiz not found")
+    # Do NOT leak `correct` before submission
+    return {
+        **{k: v for k, v in q.items() if k != "questions"},
+        "questions": [{"q": qq["q"], "options": qq["options"]} for qq in q["questions"]],
+    }
+
+
+@api_router.post("/quizzes/{quiz_id}/submit")
+async def submit_quiz(quiz_id: str, body: QuizSubmitInput, user: dict = Depends(current_user)):
+    q = next((x for x in _seeded_quizzes() if x["id"] == quiz_id), None)
+    if not q:
+        raise HTTPException(status_code=404, detail="Quiz not found")
+    if len(body.answers) != len(q["questions"]):
+        raise HTTPException(status_code=400, detail="Answer count mismatch")
+    score = 0
+    details = []
+    for i, qq in enumerate(q["questions"]):
+        picked = body.answers[i]
+        correct = int(qq["correct"])
+        ok = picked == correct
+        if ok:
+            score += 1
+        details.append({
+            "q": qq["q"], "picked": picked, "correct": correct,
+            "ok": ok, "explain": qq.get("explain", ""),
+        })
+    pct = int((score / len(q["questions"])) * 100)
+    # Award points: 5 per correct + full-quiz bonus if perfect
+    earned = 5 * score
+    if pct == 100:
+        earned += int(q.get("points", 30))
+    attempt = {
+        "id": str(uuid.uuid4()), "user_id": user["id"], "quiz_id": quiz_id,
+        "score": score, "total": len(q["questions"]), "pct": pct,
+        "answers": body.answers, "at": now_iso(),
+    }
+    await db.quiz_attempts.insert_one(attempt)
+    attempt.pop("_id", None)
+    await _award_points(user["id"], earned, reason="quiz_submitted",
+                        meta={"quiz_id": quiz_id, "score": score, "total": len(q["questions"])})
+    newly_earned = []
+    if pct == 100 and await _grant_badge(user["id"], "quiz_master"):
+        newly_earned.append("quiz_master")
+    return {
+        "score": score, "total": len(q["questions"]), "pct": pct,
+        "points_awarded": earned, "details": details,
+        "new_badges": newly_earned,
+    }
 
 
 # ----------------- AI Chatbot -----------------

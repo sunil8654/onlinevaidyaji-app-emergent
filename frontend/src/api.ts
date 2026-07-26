@@ -342,5 +342,36 @@ export const api = {
   deletePost: (id: string) => request(`/community/posts/${id}`, "DELETE"),
   listHashtags: () => request<{ items: { tag: string; count: number }[] }>("/community/hashtags"),
 
+  // Engagement
+  engagementMe: () => request<{
+    points: number; streak_current: number; streak_max: number;
+    streak_last_date: string | null;
+    level: { level: number; title: string; next_at: number | null; next_title: string | null; progress_pct: number };
+    badges: { key: string; title: string; desc: string; icon: string; points: number; earned: boolean; earned_at: string | null }[];
+    badges_earned: number; badges_total: number;
+    history: { reason: string; points: number; meta?: any; at: string }[];
+  }>("/engagement/me"),
+  engagementCheckin: () => request<{
+    already_checked_in: boolean; streak_current: number; streak_max: number;
+    points_awarded: number; new_badges?: string[];
+  }>("/engagement/checkin", "POST"),
+
+  // Quizzes
+  listQuizzes: () => request<{
+    id: string; title: string; category: string; description: string;
+    image_url: string; duration_min: number; points: number;
+    questions_count: number; best_score: number; attempted: boolean;
+  }[]>("/quizzes"),
+  getQuiz: (id: string) => request<{
+    id: string; title: string; category: string; description: string;
+    image_url: string; duration_min: number; points: number;
+    questions: { q: string; options: string[] }[];
+  }>(`/quizzes/${id}`),
+  submitQuiz: (id: string, answers: number[]) => request<{
+    score: number; total: number; pct: number; points_awarded: number;
+    details: { q: string; picked: number; correct: number; ok: boolean; explain: string }[];
+    new_badges?: string[];
+  }>(`/quizzes/${id}/submit`, "POST", { answers }),
+
   track: (event: string, props?: any) => request("/analytics", "POST", { event, props }),
 };

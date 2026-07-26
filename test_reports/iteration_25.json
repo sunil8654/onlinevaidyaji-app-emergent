@@ -1,0 +1,44 @@
+{
+  "summary": "Iteration 25 backend testing for Phase 3 (Engagement: points, streaks, badges) + Phase 4 (Quizzes). Wrote /app/backend/tests/test_iter25_engagement_quizzes.py with 29 tests covering /api/engagement/me shape, /api/engagement/checkin (award, idempotency, streak progression via mongo mutation, broken-chain reset), full points-to-level mapping (0/99/100/299/300/700/1500/3000), quiz catalogue (4 seeded quizzes with required fields), quiz detail (no `correct` leak, 404 unknown), quiz submit (400 on answer-count mismatch, 5pt/correct + 30pt bonus @ 100%, quiz_master badge grant, partial-score no bonus, best_score updates listing, 404 unknown, auth guard), plus regression on /api/doctors and /api/doctor/availability. 28/29 passed (96.5%). One regression bug found: /api/doctors public listing does NOT include is_available/consultation_mode for pre-existing seeded doctors (those two projected fields are simply absent from the returned docs because they were never persisted on the seed rows). The single-doctor GET applies .get(..., default) but the list endpoint returns raw mongo docs.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "GET /api/doctors",
+        "issue": "Seeded doctor documents (12 records) do not have `is_available` or `consultation_mode` fields, and the list endpoint returns raw mongo projection results without applying defaults. Frontend receives docs without those keys and cannot render availability chips/filters for seeded doctors. Fix: either backfill seeded docs with is_available=True, consultation_mode='both' on startup seeding, OR post-process the list to apply defaults like the /doctors/{id} handler already does (server.py:420-426 vs 429-434). Only new doctors created via onboarding get these fields."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter25_engagement_quizzes.py",
+    "/app/test_reports/pytest/pytest_iter25.xml"
+  ],
+  "action_items": [
+    "Fix /api/doctors listing so pre-existing seeded doctor rows also expose is_available (default True) and consultation_mode (default 'both'). Simplest patch: after `docs = await db.doctors.find(...)` in list_doctors, do `for d in docs: d.setdefault('is_available', True); d.setdefault('consultation_mode', 'both')`. Alternatively backfill on startup via `db.doctors.update_many({'is_available': {'$exists': False}}, {'$set': {'is_available': True, 'consultation_mode': 'both'}})`."
+  ],
+  "critical_code_review_comments": [
+    "Engagement + quiz code (server.py 1332-1682) is clean, DRY, uses _award_points/_grant_badge helpers, excludes `_id`, wraps in try/except where appropriate.",
+    "GET /api/quizzes/{id} correctly strips the `correct` field from questions — verified programmatically.",
+    "Points math confirmed: perfect quiz gives 5*N + quiz.points bonus; on quiz-dosha-basics (5 questions, points=30) => 55 pts. Plus quiz_master badge grants +75 → total 130 pts on /engagement/me. All verified.",
+    "First-check-in flow correctly awards 10 pts for daily_checkin + 20 pts from first_step badge = 30 pts. Verified.",
+    "Streak reset math correct: (today - last).days == 1 continues, otherwise resets to 1. Verified via mongo-mutated date."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter25_engagement_quizzes.py (new)"
+  ],
+  "success_rate": {
+    "backend": "96.5% (28/29)",
+    "frontend": "N/A (frontend testing skipped per review request)"
+  },
+  "seed_data_creation": "Created 4 fresh registered patients + 1 doctor via /api/auth/register (emails: test_iter25_*@vaidhyaji.example.com). Directly mutated user_engagement docs for streak-day and level-mapping tests. quiz_attempts rows created via submit are left in place (isolated per fresh user).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "The single failing test (test_public_doctors_listing_shape) is a real backend bug NOT introduced by iter25. After fix, re-run: pytest /app/backend/tests/test_iter25_engagement_quizzes.py -v. All engagement + quiz behaviour is verified by 28 passing tests. Emergent LLM key remains unused by these endpoints (no LLM calls). If /api/doctors is patched with setdefault(), no other regression suites should break — the projection already includes both keys.",
+  "rca_of_issue": "RCA for /api/doctors missing fields: Seeded doctors in db.doctors were inserted before the is_available/consultation_mode columns existed. The projection {is_available:1, consultation_mode:1} in _PUBLIC_DOCTOR_PROJECTION only includes fields that exist on the document — mongo doesn't fabricate absent fields to `null`. The single-doctor GET (/doctors/{id}) side-steps this by not returning the raw doc — it constructs the response with .get('is_available', True) defaults (see similar logic in /doctor/availability at server.py:2705-2711). The list endpoint at server.py:420-426 does not apply the same defaults. Reproduction: curl the public /api/doctors — confirm 12 docs are returned and none contain is_available or consultation_mode keys. Fix: apply defaults after the find() call (2-line patch) or run a one-time backfill."
+}

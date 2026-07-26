@@ -182,6 +182,34 @@ function PatientHome() {
           </TouchableOpacity>
         </View>
 
+        {/* Row 4: rewards, knowledge, quizzes, challenges */}
+        <View style={styles.engagementRow}>
+          <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/engagement")} testID="home-rewards" activeOpacity={0.85}>
+            <View style={[styles.engIcon, { backgroundColor: "#FFE082" }]}>
+              <Feather name="award" size={16} color={COLORS.accent} />
+            </View>
+            <Text style={styles.engLabel}>Rewards</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/knowledge")} testID="home-knowledge" activeOpacity={0.85}>
+            <View style={[styles.engIcon, { backgroundColor: COLORS.surfaceAlt }]}>
+              <Feather name="book" size={16} color={COLORS.brand} />
+            </View>
+            <Text style={styles.engLabel}>Knowledge</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/quiz")} testID="home-quiz" activeOpacity={0.85}>
+            <View style={[styles.engIcon, { backgroundColor: "#FFE082" }]}>
+              <Feather name="check-square" size={16} color={COLORS.accent} />
+            </View>
+            <Text style={styles.engLabel}>Quizzes</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/challenges")} testID="home-challenges" activeOpacity={0.85}>
+            <View style={[styles.engIcon, { backgroundColor: COLORS.surfaceAlt }]}>
+              <Feather name="target" size={16} color={COLORS.brand} />
+            </View>
+            <Text style={styles.engLabel}>Challenges</Text>
+          </TouchableOpacity>
+        </View>
+
         {/* Bento grid */}
         <View style={styles.bento}>
           <TouchableOpacity
