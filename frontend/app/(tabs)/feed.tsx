@@ -4,11 +4,16 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { api } from "@/src/api";
 import { Feather } from "@expo/vector-icons";
+import { useAuth } from "@/src/auth";
+import DoctorAppointments from "@/app/doctor/appointments-list";
 
 const CATS = ["all", "tip", "remedy", "yoga"];
 const CAT_LABELS: Record<string, string> = { all: "All", tip: "Daily Tips", remedy: "Home Remedies", yoga: "Yoga" };
 
 export default function Feed() {
+  const { user } = useAuth();
+  // Role-aware content: doctors see their Appointments queue in this slot.
+  if (user?.role === "doctor") return <DoctorAppointments />;
   const [items, setItems] = useState<any[]>([]);
   const [cat, setCat] = useState<string>("all");
   const [refreshing, setRefreshing] = useState(false);

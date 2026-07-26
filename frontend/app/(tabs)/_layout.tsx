@@ -4,10 +4,11 @@ import { Feather } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { COLORS, RADIUS } from "@/src/theme";
 import { useI18n } from "@/src/i18n";
+import { useAuth } from "@/src/auth";
 
-type TabDef = { key: string; icon: keyof typeof Feather.glyphMap; label_key: string };
+type TabDef = { key: string; icon: keyof typeof Feather.glyphMap; label_key: string; label_override?: string };
 
-const TABS: Record<string, TabDef> = {
+const PATIENT_TABS: Record<string, TabDef> = {
   home: { key: "home", icon: "home", label_key: "tabs_home" },
   feed: { key: "feed", icon: "book-open", label_key: "tabs_feed" },
   consult: { key: "consult", icon: "activity", label_key: "tabs_consult" },
@@ -15,9 +16,21 @@ const TABS: Record<string, TabDef> = {
   profile: { key: "profile", icon: "user", label_key: "tabs_profile" },
 };
 
+// For doctors: repurpose the same slots with clinic-management labels & icons.
+// The underlying tab-screen files also render role-aware content.
+const DOCTOR_TABS: Record<string, TabDef> = {
+  home: { key: "home", icon: "grid", label_key: "tabs_home", label_override: "Dashboard" },
+  feed: { key: "feed", icon: "calendar", label_key: "tabs_feed", label_override: "Appointments" },
+  consult: { key: "consult", icon: "users", label_key: "tabs_consult", label_override: "Patients" },
+  reminders: { key: "reminders", icon: "trending-up", label_key: "tabs_reminders", label_override: "Earnings" },
+  profile: { key: "profile", icon: "user", label_key: "tabs_profile" },
+};
+
 function CustomTabBar({ state, navigation }: any) {
   const insets = useSafeAreaInsets();
   const { t } = useI18n();
+  const { user } = useAuth();
+  const TABS = user?.role === "doctor" ? DOCTOR_TABS : PATIENT_TABS;
   return (
     <View style={[styles.wrap, { paddingBottom: insets.bottom + 10 }]}>
       <View style={styles.bar}>
@@ -40,7 +53,7 @@ function CustomTabBar({ state, navigation }: any) {
                 <Feather name={def.icon} size={18} color={focused ? COLORS.surface : COLORS.textSecondary} />
               </View>
               <Text style={[styles.label, focused && { color: COLORS.brand, fontWeight: "700" }]}>
-                {t(def.label_key)}
+                {def.label_override || t(def.label_key)}
               </Text>
             </TouchableOpacity>
           );

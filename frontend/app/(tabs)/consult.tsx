@@ -5,10 +5,15 @@ import { useRouter } from "expo-router";
 import { COLORS, FONTS, RADIUS, SPACING, SPECIALTIES } from "@/src/theme";
 import { api } from "@/src/api";
 import { Feather } from "@expo/vector-icons";
+import { useAuth } from "@/src/auth";
+import DoctorPatients from "@/app/doctor/patients-list";
 
 const CITIES = ["All Cities", "Delhi", "Delhi NCR", "Noida", "Mumbai", "Bangalore", "Hyderabad", "Chennai", "Pune", "Ahmedabad", "Kolkata", "Jaipur", "Lucknow"];
 
 export default function Consult() {
+  const { user } = useAuth();
+  // Role-aware: doctors see their Patients list in this slot.
+  if (user?.role === "doctor") return <DoctorPatients />;
   const router = useRouter();
   const [specialty, setSpecialty] = useState<string>("All");
   const [city, setCity] = useState<string>("All Cities");

@@ -1,0 +1,23 @@
+{
+  "summary": "Frontend-only Playwright verification of role-based tab bar fix. Doctor login (drtest@vaidhyaji.example.com) shows tab labels 'Dashboard, Appointments, Patients, Earnings, Profile' and each tab renders the correct doctor screen (DoctorHome with Namaste + stats, appointments-list with 'Clinic Queue' + 'Appointments' title, patients-list with 'My Patients' + search input, earnings screen with 'Total earnings' hero). Freshly-registered patient (pat_bug_88053@vaidhyaji.example.com) shows the ORIGINAL patient tab labels 'Home, Feed, Consult, Reminders, Profile' with correct screens (patient dashboard tiles, AYUSH Wisdom feed, 'Find your Vaidya' doctor discovery, 'Medicine reminders'). No cross-contamination between roles.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/tmp/dashboard.png", "/tmp/appointments.png", "/tmp/patients.png", "/tmp/earnings.png", "/tmp/patient_home.png", "/tmp/patient_feed.png", "/tmp/patient_consult.png", "/tmp/patient_reminders.png"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Doctor onboarding step 3 language chips (do-lang-*) do not toggle via headless mouse click on web preview — RN Pressable/TouchableOpacity render on web isn't receiving the synthetic click reliably. Not blocking the reported bug fix (worked around by calling /api/doctor/onboard directly), but worth verifying manually in Expo Go / native. testID is set on outer wrapper; the actual onPress handler may be on an inner Pressable child.",
+    "Frontend text 'Vaidya workspace', 'Clinic Queue', 'Patient Records', 'Total earnings' are rendered via CSS text-transform: uppercase — case-sensitive tests should compare uppercased text. Screenshots confirm labels render correctly."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (frontend-only)", "frontend": "100%"},
+  "seed_data_creation": "Registered patient pat_bug_88053@vaidhyaji.example.com / Patient@123 / phone 9876588053. Doctor drtest@vaidhyaji.example.com onboarding was completed via direct backend PUT /api/doctor/onboard (Ayurveda / BAMS / reg AYUSH/BAMS/2020/00099 / 5 yrs / ₹500) because Playwright headless clicks weren't triggering the RN language chips.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Bug fix from iteration 22 verified end-to-end. Custom tab bar in /app/frontend/app/(tabs)/_layout.tsx correctly switches between PATIENT_TABS and DOCTOR_TABS based on useAuth().user.role, and the tab-screen files (feed.tsx, consult.tsx, reminders.tsx) early-return the doctor-specific screens when role === 'doctor'. Screenshots at /tmp/*.png. Note: onboarding language chip clicks are flaky in Playwright web-preview — for future onboarding tests either seed doctor via backend PUT /api/doctor/onboard, or use manual native testing.",
+  "rca_of_issue": "Original bug: doctor role saw only home tab replaced with DoctorHome but other tabs still rendered patient content because the tab bar was a fixed PATIENT_TABS map and (feed|consult|reminders).tsx had no role check. Fix (already applied by main agent) reads user.role in CustomTabBar to pick DOCTOR_TABS, and each tab-screen file returns the corresponding doctor screen when role === 'doctor'. Verified working."
+}

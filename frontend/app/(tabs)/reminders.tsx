@@ -4,10 +4,15 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { api } from "@/src/api";
 import { Feather } from "@expo/vector-icons";
+import { useAuth } from "@/src/auth";
+import DoctorEarnings from "@/app/doctor/earnings";
 
 const TIME_PRESETS = ["07:00", "08:00", "13:00", "20:00", "22:00"];
 
 export default function Reminders() {
+  const { user } = useAuth();
+  // Role-aware: doctors see their Earnings dashboard in this slot.
+  if (user?.role === "doctor") return <DoctorEarnings />;
   const [items, setItems] = useState<any[]>([]);
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
