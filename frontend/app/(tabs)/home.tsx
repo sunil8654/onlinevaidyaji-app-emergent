@@ -99,7 +99,7 @@ function PatientHome() {
         {/* Engagement quick actions row — revenue drivers */}
         <View style={styles.engagementRow}>
           <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/shop")} testID="home-shop" activeOpacity={0.85}>
-            <View style={[styles.engIcon, { backgroundColor: "#F3D9CD" }]}>
+            <View style={[styles.engIcon, { backgroundColor: "#FFE082" }]}>
               <Feather name="shopping-bag" size={16} color={COLORS.accent} />
             </View>
             <Text style={styles.engLabel}>Pharmacy</Text>
@@ -119,7 +119,7 @@ function PatientHome() {
             <Text style={styles.engLabel}>Diet Plan</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/ai-yoga")} testID="home-yoga" activeOpacity={0.85}>
-            <View style={[styles.engIcon, { backgroundColor: "#F3D9CD" }]}>
+            <View style={[styles.engIcon, { backgroundColor: "#FFE082" }]}>
               <Feather name="wind" size={16} color={COLORS.accent} />
             </View>
             <Text style={styles.engLabel}>AI Yoga</Text>
@@ -135,7 +135,7 @@ function PatientHome() {
             <Text style={styles.engLabel}>Wellness</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/family")} testID="home-family" activeOpacity={0.85}>
-            <View style={[styles.engIcon, { backgroundColor: "#F3D9CD" }]}>
+            <View style={[styles.engIcon, { backgroundColor: "#FFE082" }]}>
               <Feather name="users" size={16} color={COLORS.accent} />
             </View>
             <Text style={styles.engLabel}>Family</Text>
@@ -147,7 +147,7 @@ function PatientHome() {
             <Text style={styles.engLabel}>Water</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/prakriti-quiz")} testID="home-prakriti" activeOpacity={0.85}>
-            <View style={[styles.engIcon, { backgroundColor: "#F3D9CD" }]}>
+            <View style={[styles.engIcon, { backgroundColor: "#FFE082" }]}>
               <Feather name="feather" size={16} color={COLORS.accent} />
             </View>
             <Text style={styles.engLabel}>Prakriti</Text>
@@ -163,13 +163,13 @@ function PatientHome() {
             <Text style={styles.engLabel}>Community</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/womens-health")} testID="home-womens" activeOpacity={0.85}>
-            <View style={[styles.engIcon, { backgroundColor: "#F3D9CD" }]}>
+            <View style={[styles.engIcon, { backgroundColor: "#FFE082" }]}>
               <Feather name="heart" size={16} color={COLORS.accent} />
             </View>
             <Text style={styles.engLabel}>Women</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/blogs")} testID="home-blogs" activeOpacity={0.85}>
-            <View style={[styles.engIcon, { backgroundColor: "#F3D9CD" }]}>
+            <View style={[styles.engIcon, { backgroundColor: "#FFE082" }]}>
               <Feather name="book-open" size={16} color={COLORS.accent} />
             </View>
             <Text style={styles.engLabel}>Journal</Text>
@@ -290,7 +290,7 @@ const styles = StyleSheet.create({
   tipOverlay: { flex: 1, padding: SPACING.md, justifyContent: "flex-end", backgroundColor: "rgba(15,76,54,0.55)" },
   tipKicker: { color: COLORS.accentSoft, textTransform: "uppercase", letterSpacing: 3, fontSize: 11, fontWeight: "700" },
   tipTitle: { fontFamily: FONTS.heading, color: COLORS.surface, fontSize: 26, lineHeight: 30, marginTop: 4 },
-  tipBody: { color: "#F7F5F0", marginTop: 4, fontSize: 13, lineHeight: 18 },
+  tipBody: { color: "#FFFDF3", marginTop: 4, fontSize: 13, lineHeight: 18 },
   bento: { flexDirection: "row", gap: SPACING.md, marginBottom: SPACING.md },
   bentoCard: {
     borderRadius: RADIUS.lg,

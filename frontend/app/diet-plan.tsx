@@ -422,7 +422,7 @@ const styles = StyleSheet.create({
   upgradeCard: { marginTop: SPACING.md, padding: SPACING.md, backgroundColor: COLORS.brand, borderRadius: RADIUS.md, flexDirection: "row", gap: 12, alignItems: "center" },
   upKicker: { color: COLORS.accentSoft, fontSize: 10, letterSpacing: 2, fontWeight: "700" },
   upTitle: { fontFamily: FONTS.heading, fontSize: 18, color: COLORS.surface, marginTop: 4, lineHeight: 22, letterSpacing: -0.3 },
-  upBody: { color: "#F7F5F0", fontSize: 11, marginTop: 6, lineHeight: 16 },
+  upBody: { color: "#FFFDF3", fontSize: 11, marginTop: 6, lineHeight: 16 },
   upBtn: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: COLORS.accent, paddingHorizontal: 12, paddingVertical: 10, borderRadius: RADIUS.pill },
   upBtnText: { color: COLORS.surface, fontWeight: "700", fontSize: 13 },
 

@@ -2322,9 +2322,10 @@ async def doctor_update_profile(body: DoctorProfileUpdate, user: dict = Depends(
     if not upd:
         raise HTTPException(status_code=400, detail="No fields to update")
     upd["updated_at"] = now_iso()
-    res = await db.doctors.update_one({"user_id": user["id"]}, {"$set": upd})
-    if res.matched_count == 0:
+    d = await db.doctors.find_one({"user_id": user["id"]})
+    if not d or not d.get("onboarded_at"):
         raise HTTPException(status_code=404, detail="Complete onboarding first")
+    await db.doctors.update_one({"user_id": user["id"]}, {"$set": upd})
     d = await db.doctors.find_one({"user_id": user["id"]}, {"_id": 0})
     return d
 

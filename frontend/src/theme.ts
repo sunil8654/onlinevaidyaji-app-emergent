@@ -1,21 +1,21 @@
-// Online Vaidhyaji — Organic & Earthy AYUSH theme tokens.
+// Online Vaidhyaji — Fresh & Warm AYUSH theme tokens (Light Yellow / White with Green + Amber).
 
 export const COLORS = {
-  bg: "#F7F5F0",
-  surface: "#FFFFFF",
-  surfaceAlt: "#EBF0EC",
-  border: "#E2DDD3",
+  bg: "#FFFDF3",           // Cream white — main background
+  surface: "#FFFFFF",       // Cards
+  surfaceAlt: "#FFF6D9",   // Light yellow — soft chips / secondary cards
+  border: "#EFE8C8",       // Soft tan border
   textPrimary: "#1A2421",
   textSecondary: "#5C6B64",
   textMuted: "#8A968F",
-  brand: "#0F4C36", // Deep Forest Green
-  brandDark: "#093626",
-  accent: "#D9663D", // Terracotta
-  accentSoft: "#F3D9CD",
+  brand: "#0F5C2A",        // Fresh green — primary
+  brandDark: "#08401B",
+  accent: "#E07B00",       // Amber orange — CTA / highlights
+  accentSoft: "#FFE082",   // Light amber — soft badges
   success: "#2E7D32",
   warning: "#F57C00",
   error: "#D32F2F",
-  overlay: "rgba(15,76,54,0.75)",
+  overlay: "rgba(15,92,42,0.75)",
 } as const;
 
 export const FONTS = {

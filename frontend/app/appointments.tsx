@@ -182,7 +182,7 @@ const styles = StyleSheet.create({
   paidText: { color: COLORS.success, fontWeight: "700", fontSize: 10, letterSpacing: 1 },
   actionRow: { flexDirection: "row", gap: 8, marginTop: SPACING.md },
   joinBtn: { flex: 1, flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 6, backgroundColor: COLORS.brand, paddingVertical: 10, borderRadius: RADIUS.pill },
-  payBtn: { flex: 1, flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 6, backgroundColor: "#D9663D", paddingVertical: 10, borderRadius: RADIUS.pill },
+  payBtn: { flex: 1, flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 6, backgroundColor: "#E07B00", paddingVertical: 10, borderRadius: RADIUS.pill },
   rxBtn: { paddingHorizontal: 14, flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 6, backgroundColor: COLORS.accent, paddingVertical: 10, borderRadius: RADIUS.pill },
   joinText: { color: COLORS.surface, fontWeight: "700", fontSize: 12 },
   empty: { color: COLORS.textSecondary, textAlign: "center", marginTop: 40 },

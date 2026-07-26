@@ -26,7 +26,7 @@ export default function Index() {
     >
       <View style={styles.overlay}>
         <LogoBlock size={180} tagline={t("tagline")} light />
-        <ActivityIndicator size="small" color="#F7F5F0" style={{ marginTop: 32 }} />
+        <ActivityIndicator size="small" color="#FFFDF3" style={{ marginTop: 32 }} />
       </View>
     </ImageBackground>
   );

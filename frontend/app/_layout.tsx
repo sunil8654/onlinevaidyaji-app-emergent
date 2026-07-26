@@ -87,7 +87,7 @@ export default function RootLayout() {
         <AuthProvider>
           <StatusBar style="dark" />
           <PushRegistrar />
-          <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#F7F5F0" } }} />
+          <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#FFFDF3" } }} />
         </AuthProvider>
       </I18nProvider>
     </SafeAreaProvider>

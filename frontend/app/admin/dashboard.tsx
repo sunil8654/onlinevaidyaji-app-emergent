@@ -37,7 +37,7 @@ export default function AdminDashboard() {
               <Text style={styles.name}>{user?.name}</Text>
             </View>
             <TouchableOpacity onPress={() => setLang(lang === "en" ? "hi" : "en")} style={styles.langBtn} testID="admin-lang">
-              <Feather name="globe" size={12} color="#F7F5F0" />
+              <Feather name="globe" size={12} color="#FFFDF3" />
               <Text style={styles.langText}>{lang === "en" ? "हि" : "EN"}</Text>
             </TouchableOpacity>
           </View>

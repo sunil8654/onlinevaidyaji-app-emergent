@@ -27,7 +27,7 @@ export default function Onboarding() {
         <SafeAreaView style={{ flex: 1 }} edges={["top", "bottom"]}>
           <View style={styles.langRow}>
             <TouchableOpacity onPress={() => setLang(lang === "en" ? "hi" : "en")} style={styles.langBtn} testID="onboarding-lang-toggle">
-              <Feather name="globe" size={12} color="#F7F5F0" />
+              <Feather name="globe" size={12} color="#FFFDF3" />
               <Text style={styles.langText}>{lang === "en" ? "हिन्दी" : "English"}</Text>
             </TouchableOpacity>
           </View>
@@ -82,7 +82,7 @@ const styles = StyleSheet.create({
   content: { flexGrow: 1, paddingHorizontal: SPACING.lg, paddingVertical: SPACING.lg, justifyContent: "space-between" },
   langRow: { flexDirection: "row", justifyContent: "flex-end", paddingHorizontal: SPACING.lg, paddingTop: SPACING.sm },
   langBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: RADIUS.pill, backgroundColor: "rgba(255,255,255,0.15)" },
-  langText: { color: "#F7F5F0", fontSize: 11, fontWeight: "700", letterSpacing: 1 },
+  langText: { color: "#FFFDF3", fontSize: 11, fontWeight: "700", letterSpacing: 1 },
   top: { marginTop: SPACING.md, alignItems: "flex-start" },
   eyebrow: {
     color: COLORS.accentSoft,
@@ -93,14 +93,14 @@ const styles = StyleSheet.create({
   },
   title: {
     fontFamily: FONTS.heading,
-    color: "#F7F5F0",
+    color: "#FFFDF3",
     fontSize: 56,
     letterSpacing: -1.5,
     marginTop: SPACING.sm,
     lineHeight: 58,
   },
   sub: {
-    color: "#F3D9CD",
+    color: "#FFE082",
     marginTop: SPACING.md,
     fontSize: 16,
     lineHeight: 24,
@@ -135,5 +135,5 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   ctaText: { color: COLORS.surface, fontWeight: "700", fontSize: 16, letterSpacing: 0.3 },
-  linkText: { color: "#F7F5F0", fontSize: 14 },
+  linkText: { color: "#FFFDF3", fontSize: 14 },
 });

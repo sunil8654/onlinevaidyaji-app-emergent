@@ -16,19 +16,19 @@ const METRICS: {
   key: MetricKey; label: string; icon: any; unit: string; color: string;
   format: (l: any) => string;
 }[] = [
-  { key: "bmi", label: "BMI", icon: "activity", unit: "kg/m²", color: "#0F4C36",
+  { key: "bmi", label: "BMI", icon: "activity", unit: "kg/m²", color: "#0F5C2A",
     format: (l) => l ? `${l.value} · ${l.category ?? ""}` : "Log now" },
-  { key: "weight", label: "Weight", icon: "trending-down", unit: "kg", color: "#D9663D",
+  { key: "weight", label: "Weight", icon: "trending-down", unit: "kg", color: "#E07B00",
     format: (l) => l ? `${l.value} kg` : "Log now" },
   { key: "sleep", label: "Sleep", icon: "moon", unit: "hrs", color: "#5C4B7A",
     format: (l) => l ? `${l.value} hrs` : "Log now" },
-  { key: "steps", label: "Steps", icon: "activity", unit: "steps", color: "#0F4C36",
+  { key: "steps", label: "Steps", icon: "activity", unit: "steps", color: "#0F5C2A",
     format: (l) => l ? `${Math.round(l.value)}` : "Log now" },
   { key: "bp", label: "BP", icon: "heart", unit: "mmHg", color: "#D32F2F",
     format: (l) => l ? `${l.systolic}/${l.diastolic}` : "Log now" },
   { key: "sugar", label: "Blood Sugar", icon: "droplet", unit: "mg/dL", color: "#B8860B",
     format: (l) => l ? `${l.fasting ?? l.post_meal ?? l.value} mg/dL` : "Log now" },
-  { key: "mood", label: "Mood", icon: "smile", unit: "1-5", color: "#D9663D",
+  { key: "mood", label: "Mood", icon: "smile", unit: "1-5", color: "#E07B00",
     format: (l) => l ? ["😢","🙁","😐","🙂","😄"][Math.min(4, Math.max(0, Math.round((l.value || 3) - 1)))] : "Log now" },
   { key: "water", label: "Water", icon: "droplet", unit: "glasses", color: "#1E88E5",
     format: (l) => l ? `${l.value} glasses` : "Log now" },

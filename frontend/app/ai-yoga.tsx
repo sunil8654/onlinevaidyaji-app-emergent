@@ -197,7 +197,7 @@ const styles = StyleSheet.create({
   back: { width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(0,0,0,0.25)", alignItems: "center", justifyContent: "center", marginBottom: SPACING.md },
   eyebrow: { color: COLORS.accentSoft, textTransform: "uppercase", letterSpacing: 3, fontSize: 11, fontWeight: "700" },
   title: { fontFamily: FONTS.heading, color: COLORS.surface, fontSize: 36, marginTop: 6, letterSpacing: -1, lineHeight: 40 },
-  sub: { color: "#F7F5F0", marginTop: 8, fontSize: 13, lineHeight: 18 },
+  sub: { color: "#FFFDF3", marginTop: 8, fontSize: 13, lineHeight: 18 },
   statsRow: { flexDirection: "row", gap: 8, marginTop: SPACING.md },
   statPill: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(0,0,0,0.2)", paddingHorizontal: 10, paddingVertical: 6, borderRadius: RADIUS.pill },
   statValue: { color: COLORS.surface, fontFamily: FONTS.heading, fontSize: 14 },
@@ -232,7 +232,7 @@ const styles = StyleSheet.create({
   priceKicker: { color: COLORS.accentSoft, fontSize: 10, letterSpacing: 2, fontWeight: "700" },
   priceBig: { fontFamily: FONTS.heading, fontSize: 28, color: COLORS.surface, letterSpacing: -1 },
   pricePer: { color: COLORS.accentSoft, fontSize: 12 },
-  priceNote: { color: "#F7F5F0", fontSize: 11, marginTop: 4, lineHeight: 15 },
+  priceNote: { color: "#FFFDF3", fontSize: 11, marginTop: 4, lineHeight: 15 },
   subBtn: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: COLORS.accent, paddingHorizontal: 12, paddingVertical: 10, borderRadius: RADIUS.pill },
   subText: { color: COLORS.surface, fontWeight: "700", fontSize: 12 },
 });

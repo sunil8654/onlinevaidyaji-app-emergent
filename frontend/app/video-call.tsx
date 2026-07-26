@@ -151,14 +151,14 @@ export default function VideoCall() {
                 title="Vaidhyaji Consultation"
                 // @ts-ignore
                 allow="camera; microphone; autoplay; display-capture; fullscreen"
-                style={{ flex: 1, border: 0, backgroundColor: "#0F4C36", width: "100%", height: "100%" }}
+                style={{ flex: 1, border: 0, backgroundColor: "#0F5C2A", width: "100%", height: "100%" }}
                 onLoad={() => setJoined(true)}
               />
             ) : (
               <WebView
                 ref={webviewRef}
                 source={{ uri: embedUrl }}
-                style={{ flex: 1, backgroundColor: "#0F4C36" }}
+                style={{ flex: 1, backgroundColor: "#0F5C2A" }}
                 javaScriptEnabled
                 domStorageEnabled
                 originWhitelist={["*"]}

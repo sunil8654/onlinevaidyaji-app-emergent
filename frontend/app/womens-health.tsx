@@ -364,7 +364,7 @@ const styles = StyleSheet.create({
   tabActive: { backgroundColor: COLORS.brand },
   tabText: { color: COLORS.textSecondary, fontSize: 13, fontWeight: "600" },
   tabTextActive: { color: COLORS.surface, fontWeight: "700" },
-  heroCard: { backgroundColor: "#F3D9CD", padding: SPACING.lg, borderRadius: RADIUS.lg, marginBottom: SPACING.md },
+  heroCard: { backgroundColor: "#FFE082", padding: SPACING.lg, borderRadius: RADIUS.lg, marginBottom: SPACING.md },
   heroKicker: { color: COLORS.accent, fontSize: 11, textTransform: "uppercase", letterSpacing: 2, fontWeight: "700" },
   heroDate: { fontFamily: FONTS.heading, fontSize: 28, color: COLORS.textPrimary, marginTop: 4 },
   heroSub: { color: COLORS.textSecondary, marginTop: 6, fontSize: 13 },

@@ -93,7 +93,7 @@ const styles = StyleSheet.create({
   },
   cardKicker: { color: COLORS.accentSoft, fontSize: 12, letterSpacing: 2, textTransform: "uppercase", fontWeight: "700" },
   cardTitle: { fontFamily: FONTS.heading, color: COLORS.surface, fontSize: 30, marginTop: 6, letterSpacing: -0.5 },
-  cardBody: { color: "#F7F5F0", fontSize: 13, marginTop: 4, maxWidth: 260 },
+  cardBody: { color: "#FFFDF3", fontSize: 13, marginTop: 4, maxWidth: 260 },
   cardArrow: {
     width: 44,
     height: 44,

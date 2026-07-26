@@ -53,11 +53,11 @@ function buildHtml(opts: {
     .map(
       (m, i) => `
       <tr>
-        <td style="padding:8px;border-bottom:1px solid #E2DDD3;color:#5C6B64;">${i + 1}</td>
-        <td style="padding:8px;border-bottom:1px solid #E2DDD3;"><strong>${escapeHtml(m.name)}</strong>${m.instructions ? `<br/><span style='color:#8A968F;font-size:11px;'>${escapeHtml(m.instructions)}</span>` : ""}</td>
-        <td style="padding:8px;border-bottom:1px solid #E2DDD3;">${escapeHtml(m.dosage)}</td>
-        <td style="padding:8px;border-bottom:1px solid #E2DDD3;">${escapeHtml(m.frequency)}</td>
-        <td style="padding:8px;border-bottom:1px solid #E2DDD3;">${escapeHtml(m.duration)}</td>
+        <td style="padding:8px;border-bottom:1px solid #EFE8C8;color:#5C6B64;">${i + 1}</td>
+        <td style="padding:8px;border-bottom:1px solid #EFE8C8;"><strong>${escapeHtml(m.name)}</strong>${m.instructions ? `<br/><span style='color:#8A968F;font-size:11px;'>${escapeHtml(m.instructions)}</span>` : ""}</td>
+        <td style="padding:8px;border-bottom:1px solid #EFE8C8;">${escapeHtml(m.dosage)}</td>
+        <td style="padding:8px;border-bottom:1px solid #EFE8C8;">${escapeHtml(m.frequency)}</td>
+        <td style="padding:8px;border-bottom:1px solid #EFE8C8;">${escapeHtml(m.duration)}</td>
       </tr>`,
     )
     .join("");
@@ -71,8 +71,8 @@ function buildHtml(opts: {
 <title>Prescription — ${escapeHtml(opts.patientName)}</title>
 <style>
   body { font-family: -apple-system, Helvetica, Arial, sans-serif; color:#1A2421; padding:32px; }
-  .header { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #0F4C36; padding-bottom:16px; margin-bottom:24px; }
-  .brand { color:#0F4C36; font-size:24px; font-weight:800; letter-spacing:-0.5px; }
+  .header { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #0F5C2A; padding-bottom:16px; margin-bottom:24px; }
+  .brand { color:#0F5C2A; font-size:24px; font-weight:800; letter-spacing:-0.5px; }
   .brand small { display:block; color:#8A968F; font-size:11px; letter-spacing:2px; font-weight:600; text-transform:uppercase; margin-top:4px; }
   .doc { text-align:right; font-size:12px; color:#5C6B64; }
   .doc strong { color:#1A2421; font-size:15px; display:block; }
@@ -80,10 +80,10 @@ function buildHtml(opts: {
   .row div { flex:1; }
   .lbl { color:#8A968F; font-size:10px; letter-spacing:2px; text-transform:uppercase; font-weight:700; margin-bottom:4px; }
   .val { color:#1A2421; font-size:14px; line-height:20px; }
-  h3 { font-size:14px; color:#0F4C36; margin-top:20px; margin-bottom:8px; text-transform:uppercase; letter-spacing:1.5px; }
+  h3 { font-size:14px; color:#0F5C2A; margin-top:20px; margin-bottom:8px; text-transform:uppercase; letter-spacing:1.5px; }
   table { width:100%; border-collapse:collapse; font-size:13px; margin-bottom:16px; }
-  th { text-align:left; padding:8px; background:#EBF0EC; color:#0F4C36; font-size:10px; letter-spacing:1.5px; text-transform:uppercase; }
-  .box { border:1px solid #E2DDD3; border-radius:8px; padding:12px; background:#F7F5F0; font-size:13px; line-height:20px; }
+  th { text-align:left; padding:8px; background:#FFF6D9; color:#0F5C2A; font-size:10px; letter-spacing:1.5px; text-transform:uppercase; }
+  .box { border:1px solid #EFE8C8; border-radius:8px; padding:12px; background:#FFFDF3; font-size:13px; line-height:20px; }
   .foot { margin-top:48px; display:flex; justify-content:space-between; align-items:flex-end; }
   .sig { border-top:1px solid #1A2421; padding-top:6px; min-width:180px; text-align:center; font-size:11px; color:#5C6B64; }
 </style>

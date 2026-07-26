@@ -33,7 +33,7 @@ export function LogoBlock({ size = 160, tagline = "Swasth Raho Hamesha", light =
     <View style={styles.block}>
       <Image source={LOGO} style={{ width: size, height: size, borderRadius: 24 }} resizeMode="contain" />
       {tagline ? (
-        <Text style={[styles.blockTag, light && { color: "#F3D9CD" }]}>{tagline}</Text>
+        <Text style={[styles.blockTag, light && { color: "#FFE082" }]}>{tagline}</Text>
       ) : null}
     </View>
   );
