@@ -423,6 +423,9 @@ async def list_doctors(specialty: Optional[str] = None):
     if specialty and specialty.lower() != "all":
         q["specialty"] = specialty
     docs = await db.doctors.find(q, _PUBLIC_DOCTOR_PROJECTION).to_list(200)
+    for d in docs:
+        d.setdefault("is_available", True)
+        d.setdefault("consultation_mode", "both")
     return docs
 
 
