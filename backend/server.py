@@ -4317,6 +4317,653 @@ async def list_hashtags(user: dict = Depends(current_user)):
     return {"items": [{"tag": i["_id"], "count": i["count"]} for i in items]}
 
 
+# ============================================================================
+# Doctor Community (Instagram-style social layer — verified doctors only)
+# Collections used: doc_com_posts, doc_com_likes, doc_com_comments,
+# doc_com_saves, doc_com_follows, doc_com_notifications, doc_com_reports
+# ============================================================================
+
+MAX_CAROUSEL_IMAGES = 5
+MAX_POST_CAPTION = 2200
+MAX_COMMENT_LEN = 800
+MAX_HASHTAGS = 15
+DOCTOR_SPECIALTIES = {"Ayurveda", "Homoeopathy", "Yoga", "Naturopathy", "Unani", "Siddha", "General"}
+
+
+class DoctorPostIn(BaseModel):
+    images: List[str] = Field(default_factory=list, max_length=MAX_CAROUSEL_IMAGES)
+    caption: str = Field(default="", max_length=MAX_POST_CAPTION)
+    hashtags: List[str] = Field(default_factory=list, max_length=MAX_HASHTAGS)
+    specialty_tag: Optional[str] = Field(None, max_length=50)
+    clinical_flag: bool = False
+
+
+class DoctorCommentIn(BaseModel):
+    text: str = Field(..., min_length=1, max_length=MAX_COMMENT_LEN)
+
+
+class DoctorReportIn(BaseModel):
+    target_type: Literal["post", "comment"]
+    target_id: str = Field(..., max_length=100)
+    reason: str = Field(..., max_length=300)
+
+
+class AdminHideReasonIn(BaseModel):
+    reason: str = Field("Removed by admin", max_length=300)
+
+
+class AdminBanIn(BaseModel):
+    reason: str = Field(..., min_length=3, max_length=300)
+
+
+class BroadcastIn(BaseModel):
+    message: str = Field(..., min_length=3, max_length=500)
+
+
+async def require_doctor_community(user: dict = Depends(current_user)) -> dict:
+    """Access gate: only verified, non-banned doctors reach these endpoints."""
+    if user.get("community_banned"):
+        raise HTTPException(status_code=403, detail="Your community access has been suspended")
+    if user.get("role") != "doctor":
+        raise HTTPException(status_code=403, detail="Doctor Community is for verified doctors only")
+    d = await db.doctors.find_one({"user_id": user["id"]}, {"_id": 0, "verified": 1, "onboarded_at": 1})
+    if not d or not d.get("verified"):
+        raise HTTPException(status_code=403, detail="Your doctor account is not yet verified. Please contact the Vaidhyaji admin team.")
+    return user
+
+
+def _normalise_hashtags(tags: List[str]) -> List[str]:
+    out: List[str] = []
+    for t in tags[:MAX_HASHTAGS]:
+        if not isinstance(t, str):
+            continue
+        cleaned = t.strip().lstrip("#").lower()
+        cleaned = "".join(ch for ch in cleaned if ch.isalnum() or ch == "_")[:40]
+        if cleaned and cleaned not in out:
+            out.append(cleaned)
+    return out
+
+
+async def _doctor_snapshot(doctor_user_id: str) -> Dict[str, Any]:
+    """Small cached-friendly doctor card for post/comment surfacing."""
+    d = await db.doctors.find_one(
+        {"user_id": doctor_user_id},
+        {"_id": 0, "name": 1, "specialty": 1, "qualification": 1, "avatar_url": 1, "verified": 1, "clinic_name": 1},
+    )
+    if not d:
+        u = await db.users.find_one({"id": doctor_user_id}, {"_id": 0, "name": 1})
+        d = {"name": (u or {}).get("name", "Doctor"), "verified": False}
+    return {
+        "id": doctor_user_id,
+        "name": d.get("name") or "Doctor",
+        "specialty": d.get("specialty") or "",
+        "qualification": d.get("qualification") or "",
+        "avatar_url": d.get("avatar_url") or "",
+        "clinic_name": d.get("clinic_name") or "",
+        "verified": bool(d.get("verified", False)),
+    }
+
+
+async def _hydrate_posts(posts: List[Dict[str, Any]], me_id: str) -> List[Dict[str, Any]]:
+    """Attach author, liked/saved flags, comment/like counts to a list of posts."""
+    if not posts:
+        return []
+    doctor_ids = list({p["doctor_id"] for p in posts})
+    doctors: Dict[str, Dict[str, Any]] = {}
+    for did in doctor_ids:
+        doctors[did] = await _doctor_snapshot(did)
+    post_ids = [p["id"] for p in posts]
+    liked_rows = await db.doc_com_likes.find(
+        {"post_id": {"$in": post_ids}, "doctor_id": me_id}, {"_id": 0, "post_id": 1}
+    ).to_list(len(post_ids))
+    saved_rows = await db.doc_com_saves.find(
+        {"post_id": {"$in": post_ids}, "doctor_id": me_id}, {"_id": 0, "post_id": 1}
+    ).to_list(len(post_ids))
+    liked = {r["post_id"] for r in liked_rows}
+    saved = {r["post_id"] for r in saved_rows}
+    out = []
+    for p in posts:
+        p.pop("_id", None)
+        p["author"] = doctors.get(p["doctor_id"], {"id": p["doctor_id"], "name": "Doctor", "verified": False})
+        p["liked_by_me"] = p["id"] in liked
+        p["saved_by_me"] = p["id"] in saved
+        out.append(p)
+    return out
+
+
+async def _notify(doctor_id: str, kind: str, actor_id: str, post_id: Optional[str] = None,
+                  snippet: Optional[str] = None) -> None:
+    if doctor_id == actor_id:
+        return  # do not notify self-actions
+    try:
+        await db.doc_com_notifications.insert_one({
+            "id": str(uuid.uuid4()),
+            "doctor_id": doctor_id, "type": kind, "actor_id": actor_id,
+            "post_id": post_id, "snippet": snippet, "read": False, "at": now_iso(),
+        })
+    except Exception as exc:
+        logger.debug("doc-notify failed: %s", exc)
+
+
+# ── Access + profile ────────────────────────────────────────────────
+@api_router.get("/community/doctor/access")
+async def doc_com_access(user: dict = Depends(current_user)):
+    """Lightweight probe used by the frontend to route to the community or a gate screen."""
+    if user.get("role") != "doctor":
+        return {"has_access": False, "reason": "patient_role"}
+    if user.get("community_banned"):
+        return {"has_access": False, "reason": "banned"}
+    d = await db.doctors.find_one({"user_id": user["id"]}, {"_id": 0, "verified": 1})
+    if not d or not d.get("verified"):
+        return {"has_access": False, "reason": "not_verified"}
+    return {"has_access": True}
+
+
+@api_router.get("/community/doctor/profile/{doctor_id}")
+async def doc_com_profile(doctor_id: str, user: dict = Depends(require_doctor_community)):
+    snap = await _doctor_snapshot(doctor_id)
+    # bio from doctors collection
+    d = await db.doctors.find_one({"user_id": doctor_id}, {"_id": 0, "bio": 1, "experience_years": 1, "languages": 1})
+    snap["bio"] = (d or {}).get("bio", "")
+    snap["experience_years"] = (d or {}).get("experience_years", 0)
+    snap["languages"] = (d or {}).get("languages", [])
+    posts_count = await db.doc_com_posts.count_documents({"doctor_id": doctor_id, "hidden": {"$ne": True}})
+    followers = await db.doc_com_follows.count_documents({"following_id": doctor_id})
+    following = await db.doc_com_follows.count_documents({"follower_id": doctor_id})
+    is_following = False
+    if doctor_id != user["id"]:
+        is_following = bool(await db.doc_com_follows.find_one({"follower_id": user["id"], "following_id": doctor_id}))
+    return {
+        **snap,
+        "posts_count": posts_count,
+        "followers_count": followers,
+        "following_count": following,
+        "is_following": is_following,
+        "is_me": doctor_id == user["id"],
+    }
+
+
+@api_router.get("/community/doctor/profile/{doctor_id}/posts")
+async def doc_com_profile_posts(doctor_id: str, user: dict = Depends(require_doctor_community), limit: int = 30):
+    limit = min(max(limit, 1), 60)
+    posts = await db.doc_com_posts.find(
+        {"doctor_id": doctor_id, "hidden": {"$ne": True}}
+    ).sort("created_at", -1).limit(limit).to_list(limit)
+    return await _hydrate_posts(posts, user["id"])
+
+
+# ── Follow / unfollow ───────────────────────────────────────────────
+@api_router.post("/community/doctor/follow/{target_id}")
+async def doc_com_follow(target_id: str, user: dict = Depends(require_doctor_community)):
+    if target_id == user["id"]:
+        raise HTTPException(status_code=400, detail="Cannot follow yourself")
+    target = await db.doctors.find_one({"user_id": target_id}, {"_id": 0, "verified": 1})
+    if not target or not target.get("verified"):
+        raise HTTPException(status_code=404, detail="Doctor not found")
+    existing = await db.doc_com_follows.find_one({"follower_id": user["id"], "following_id": target_id})
+    if existing:
+        return {"ok": True, "already": True}
+    await db.doc_com_follows.insert_one({
+        "follower_id": user["id"], "following_id": target_id, "created_at": now_iso(),
+    })
+    await _notify(target_id, "follow", user["id"])
+    return {"ok": True, "already": False}
+
+
+@api_router.delete("/community/doctor/follow/{target_id}")
+async def doc_com_unfollow(target_id: str, user: dict = Depends(require_doctor_community)):
+    await db.doc_com_follows.delete_one({"follower_id": user["id"], "following_id": target_id})
+    return {"ok": True}
+
+
+@api_router.get("/community/doctor/me/followers")
+async def doc_com_my_followers(user: dict = Depends(require_doctor_community), limit: int = 100):
+    rows = await db.doc_com_follows.find({"following_id": user["id"]}, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
+    return [await _doctor_snapshot(r["follower_id"]) for r in rows]
+
+
+@api_router.get("/community/doctor/me/following")
+async def doc_com_my_following(user: dict = Depends(require_doctor_community), limit: int = 100):
+    rows = await db.doc_com_follows.find({"follower_id": user["id"]}, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
+    return [await _doctor_snapshot(r["following_id"]) for r in rows]
+
+
+# ── Posts (CRUD) ────────────────────────────────────────────────────
+@api_router.post("/community/doctor/posts")
+async def doc_com_create_post(body: DoctorPostIn, user: dict = Depends(require_doctor_community)):
+    if not body.images and not body.caption.strip():
+        raise HTTPException(status_code=400, detail="Post needs an image or caption")
+    if len(body.images) > MAX_CAROUSEL_IMAGES:
+        raise HTTPException(status_code=400, detail=f"Max {MAX_CAROUSEL_IMAGES} images per post")
+    # Cap total payload per image ~4 MB
+    for i, img in enumerate(body.images):
+        if not isinstance(img, str) or len(img) > 4_500_000:
+            raise HTTPException(status_code=400, detail=f"Image {i+1} too large (max 4 MB)")
+    if body.specialty_tag and body.specialty_tag not in DOCTOR_SPECIALTIES:
+        raise HTTPException(status_code=400, detail="Invalid specialty tag")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "doctor_id": user["id"],
+        "images": body.images,
+        "type": "carousel" if len(body.images) > 1 else ("image" if body.images else "text"),
+        "caption": body.caption.strip(),
+        "hashtags": _normalise_hashtags(body.hashtags),
+        "specialty_tag": body.specialty_tag,
+        "clinical_flag": bool(body.clinical_flag),
+        "pinned": False,
+        "hidden": False,
+        "hidden_reason": None,
+        "likes_count": 0,
+        "comments_count": 0,
+        "saves_count": 0,
+        "created_at": now_iso(),
+    }
+    await db.doc_com_posts.insert_one(doc.copy())
+    doc.pop("_id", None)
+    doc["author"] = await _doctor_snapshot(user["id"])
+    doc["liked_by_me"] = False
+    doc["saved_by_me"] = False
+    return doc
+
+
+@api_router.get("/community/doctor/posts/{post_id}")
+async def doc_com_get_post(post_id: str, user: dict = Depends(require_doctor_community)):
+    p = await db.doc_com_posts.find_one({"id": post_id, "hidden": {"$ne": True}}, {"_id": 0})
+    if not p:
+        raise HTTPException(status_code=404, detail="Post not found")
+    hydrated = await _hydrate_posts([p], user["id"])
+    return hydrated[0]
+
+
+@api_router.delete("/community/doctor/posts/{post_id}")
+async def doc_com_delete_post(post_id: str, user: dict = Depends(require_doctor_community)):
+    p = await db.doc_com_posts.find_one({"id": post_id}, {"_id": 0, "doctor_id": 1})
+    if not p:
+        raise HTTPException(status_code=404, detail="Post not found")
+    if p["doctor_id"] != user["id"] and not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Only author or admin can delete")
+    await db.doc_com_posts.delete_one({"id": post_id})
+    await db.doc_com_likes.delete_many({"post_id": post_id})
+    await db.doc_com_comments.delete_many({"post_id": post_id})
+    await db.doc_com_saves.delete_many({"post_id": post_id})
+    return {"deleted": True}
+
+
+# ── Feed ────────────────────────────────────────────────────────────
+@api_router.get("/community/doctor/feed")
+async def doc_com_feed(user: dict = Depends(require_doctor_community), limit: int = 20, before: Optional[str] = None):
+    limit = min(max(limit, 1), 40)
+    followed = await db.doc_com_follows.find({"follower_id": user["id"]}, {"_id": 0, "following_id": 1}).to_list(500)
+    ids = [r["following_id"] for r in followed] + [user["id"]]
+    q: Dict[str, Any] = {"hidden": {"$ne": True}}
+    if ids:
+        q["doctor_id"] = {"$in": ids}
+    if before:
+        q["created_at"] = {"$lt": before}
+    posts = await db.doc_com_posts.find(q).sort([("pinned", -1), ("created_at", -1)]).limit(limit).to_list(limit)
+    # If a doctor follows nobody yet, mix in a small set of recent global posts.
+    if not followed and len(posts) < limit:
+        extra = await db.doc_com_posts.find(
+            {"hidden": {"$ne": True}, "doctor_id": {"$ne": user["id"]}}
+        ).sort("created_at", -1).limit(limit - len(posts)).to_list(limit)
+        seen = {p["id"] for p in posts}
+        posts += [p for p in extra if p["id"] not in seen]
+    return await _hydrate_posts(posts, user["id"])
+
+
+# ── Like / Save ─────────────────────────────────────────────────────
+@api_router.post("/community/doctor/posts/{post_id}/like")
+async def doc_com_like(post_id: str, user: dict = Depends(require_doctor_community)):
+    p = await db.doc_com_posts.find_one({"id": post_id}, {"_id": 0, "id": 1, "doctor_id": 1})
+    if not p:
+        raise HTTPException(status_code=404, detail="Post not found")
+    existing = await db.doc_com_likes.find_one({"post_id": post_id, "doctor_id": user["id"]})
+    if existing:
+        return {"liked": True, "already": True}
+    await db.doc_com_likes.insert_one({
+        "post_id": post_id, "doctor_id": user["id"], "created_at": now_iso(),
+    })
+    await db.doc_com_posts.update_one({"id": post_id}, {"$inc": {"likes_count": 1}})
+    await _notify(p["doctor_id"], "like", user["id"], post_id)
+    return {"liked": True, "already": False}
+
+
+@api_router.delete("/community/doctor/posts/{post_id}/like")
+async def doc_com_unlike(post_id: str, user: dict = Depends(require_doctor_community)):
+    res = await db.doc_com_likes.delete_one({"post_id": post_id, "doctor_id": user["id"]})
+    if res.deleted_count:
+        await db.doc_com_posts.update_one({"id": post_id}, {"$inc": {"likes_count": -1}})
+    return {"liked": False}
+
+
+@api_router.post("/community/doctor/posts/{post_id}/save")
+async def doc_com_save(post_id: str, user: dict = Depends(require_doctor_community)):
+    p = await db.doc_com_posts.find_one({"id": post_id}, {"_id": 0, "id": 1})
+    if not p:
+        raise HTTPException(status_code=404, detail="Post not found")
+    existing = await db.doc_com_saves.find_one({"post_id": post_id, "doctor_id": user["id"]})
+    if existing:
+        return {"saved": True}
+    await db.doc_com_saves.insert_one({
+        "post_id": post_id, "doctor_id": user["id"], "created_at": now_iso(),
+    })
+    await db.doc_com_posts.update_one({"id": post_id}, {"$inc": {"saves_count": 1}})
+    return {"saved": True}
+
+
+@api_router.delete("/community/doctor/posts/{post_id}/save")
+async def doc_com_unsave(post_id: str, user: dict = Depends(require_doctor_community)):
+    res = await db.doc_com_saves.delete_one({"post_id": post_id, "doctor_id": user["id"]})
+    if res.deleted_count:
+        await db.doc_com_posts.update_one({"id": post_id}, {"$inc": {"saves_count": -1}})
+    return {"saved": False}
+
+
+@api_router.get("/community/doctor/me/saved")
+async def doc_com_saved_posts(user: dict = Depends(require_doctor_community), limit: int = 50):
+    saves = await db.doc_com_saves.find({"doctor_id": user["id"]}, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
+    if not saves:
+        return []
+    post_ids = [s["post_id"] for s in saves]
+    posts = await db.doc_com_posts.find({"id": {"$in": post_ids}, "hidden": {"$ne": True}}).to_list(len(post_ids))
+    # Preserve save order
+    by_id = {p["id"]: p for p in posts}
+    ordered = [by_id[pid] for pid in post_ids if pid in by_id]
+    return await _hydrate_posts(ordered, user["id"])
+
+
+# ── Comments ────────────────────────────────────────────────────────
+@api_router.get("/community/doctor/posts/{post_id}/comments")
+async def doc_com_list_comments(post_id: str, user: dict = Depends(require_doctor_community)):
+    p = await db.doc_com_posts.find_one({"id": post_id}, {"_id": 0, "id": 1})
+    if not p:
+        raise HTTPException(status_code=404, detail="Post not found")
+    rows = await db.doc_com_comments.find(
+        {"post_id": post_id, "hidden": {"$ne": True}}, {"_id": 0}
+    ).sort("created_at", 1).to_list(500)
+    for c in rows:
+        c["author"] = await _doctor_snapshot(c["doctor_id"])
+    return rows
+
+
+@api_router.post("/community/doctor/posts/{post_id}/comments")
+async def doc_com_add_comment(post_id: str, body: DoctorCommentIn, user: dict = Depends(require_doctor_community)):
+    p = await db.doc_com_posts.find_one({"id": post_id}, {"_id": 0, "id": 1, "doctor_id": 1})
+    if not p:
+        raise HTTPException(status_code=404, detail="Post not found")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "post_id": post_id, "doctor_id": user["id"],
+        "text": body.text.strip(), "created_at": now_iso(), "hidden": False,
+    }
+    await db.doc_com_comments.insert_one(doc.copy())
+    await db.doc_com_posts.update_one({"id": post_id}, {"$inc": {"comments_count": 1}})
+    await _notify(p["doctor_id"], "comment", user["id"], post_id, snippet=body.text[:80])
+    doc.pop("_id", None)
+    doc["author"] = await _doctor_snapshot(user["id"])
+    return doc
+
+
+@api_router.delete("/community/doctor/comments/{comment_id}")
+async def doc_com_delete_comment(comment_id: str, user: dict = Depends(require_doctor_community)):
+    c = await db.doc_com_comments.find_one({"id": comment_id}, {"_id": 0})
+    if not c:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    if c["doctor_id"] != user["id"] and not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Only author or admin can delete")
+    await db.doc_com_comments.delete_one({"id": comment_id})
+    await db.doc_com_posts.update_one({"id": c["post_id"]}, {"$inc": {"comments_count": -1}})
+    return {"deleted": True}
+
+
+# ── Explore / Search ────────────────────────────────────────────────
+@api_router.get("/community/doctor/explore")
+async def doc_com_explore(user: dict = Depends(require_doctor_community), specialty: Optional[str] = None, limit: int = 30):
+    limit = min(max(limit, 1), 60)
+    q: Dict[str, Any] = {"hidden": {"$ne": True}, "images.0": {"$exists": True}}
+    if specialty and specialty != "All":
+        q["specialty_tag"] = specialty
+    # Simple trend: engagement * recency
+    posts = await db.doc_com_posts.find(q).sort([
+        ("pinned", -1), ("likes_count", -1), ("created_at", -1),
+    ]).limit(limit).to_list(limit)
+    return await _hydrate_posts(posts, user["id"])
+
+
+@api_router.get("/community/doctor/search")
+async def doc_com_search(q: str, user: dict = Depends(require_doctor_community), limit: int = 20):
+    q = (q or "").strip()
+    if not q or len(q) < 2:
+        return {"doctors": [], "hashtags": [], "posts": []}
+    limit = min(max(limit, 1), 40)
+    # Doctors by name / specialty
+    doc_query = {
+        "verified": True,
+        "$or": [
+            {"name": {"$regex": q, "$options": "i"}},
+            {"specialty": {"$regex": q, "$options": "i"}},
+        ],
+    }
+    doc_rows = await db.doctors.find(
+        doc_query,
+        {"_id": 0, "user_id": 1, "name": 1, "specialty": 1, "avatar_url": 1, "verified": 1, "clinic_name": 1},
+    ).limit(limit).to_list(limit)
+    doctors = [{
+        "id": r["user_id"], "name": r["name"], "specialty": r.get("specialty", ""),
+        "avatar_url": r.get("avatar_url", ""), "verified": True, "clinic_name": r.get("clinic_name", ""),
+    } for r in doc_rows]
+    # Hashtag search
+    tag = q.lstrip("#").lower()
+    pipeline = [
+        {"$match": {"hidden": {"$ne": True}}},
+        {"$unwind": "$hashtags"},
+        {"$match": {"hashtags": {"$regex": f"^{tag}"}}},
+        {"$group": {"_id": "$hashtags", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": limit},
+    ]
+    tag_rows = await db.doc_com_posts.aggregate(pipeline).to_list(limit)
+    hashtags = [{"tag": r["_id"], "count": r["count"]} for r in tag_rows]
+    # Recent posts matching caption
+    post_rows = await db.doc_com_posts.find(
+        {"hidden": {"$ne": True}, "caption": {"$regex": q, "$options": "i"}}
+    ).sort("created_at", -1).limit(limit).to_list(limit)
+    posts = await _hydrate_posts(post_rows, user["id"])
+    return {"doctors": doctors, "hashtags": hashtags, "posts": posts}
+
+
+@api_router.get("/community/doctor/hashtag/{tag}")
+async def doc_com_by_hashtag(tag: str, user: dict = Depends(require_doctor_community), limit: int = 30):
+    tag = tag.lstrip("#").lower()
+    if not tag:
+        raise HTTPException(status_code=400, detail="Invalid tag")
+    posts = await db.doc_com_posts.find(
+        {"hashtags": tag, "hidden": {"$ne": True}}
+    ).sort("created_at", -1).limit(limit).to_list(limit)
+    return await _hydrate_posts(posts, user["id"])
+
+
+@api_router.get("/community/doctor/suggest")
+async def doc_com_suggest(user: dict = Depends(require_doctor_community), limit: int = 10):
+    """Suggest doctors to follow: verified, not-yet-followed, other than self."""
+    limit = min(max(limit, 1), 20)
+    following = await db.doc_com_follows.find({"follower_id": user["id"]}, {"_id": 0, "following_id": 1}).to_list(500)
+    excluded = {r["following_id"] for r in following}
+    excluded.add(user["id"])
+    docs = await db.doctors.find(
+        {"verified": True, "user_id": {"$nin": list(excluded)}},
+        {"_id": 0, "user_id": 1, "name": 1, "specialty": 1, "avatar_url": 1, "verified": 1},
+    ).limit(limit).to_list(limit)
+    return [{
+        "id": d["user_id"], "name": d.get("name", "Doctor"),
+        "specialty": d.get("specialty", ""), "avatar_url": d.get("avatar_url", ""), "verified": True,
+    } for d in docs]
+
+
+# ── Notifications ───────────────────────────────────────────────────
+@api_router.get("/community/doctor/notifications")
+async def doc_com_notifications(user: dict = Depends(require_doctor_community), limit: int = 40):
+    limit = min(max(limit, 1), 80)
+    rows = await db.doc_com_notifications.find(
+        {"doctor_id": user["id"]}, {"_id": 0},
+    ).sort("at", -1).limit(limit).to_list(limit)
+    for n in rows:
+        n["actor"] = await _doctor_snapshot(n["actor_id"])
+    unread = await db.doc_com_notifications.count_documents({"doctor_id": user["id"], "read": False})
+    return {"items": rows, "unread": unread}
+
+
+@api_router.post("/community/doctor/notifications/read")
+async def doc_com_read_notifications(user: dict = Depends(require_doctor_community)):
+    await db.doc_com_notifications.update_many(
+        {"doctor_id": user["id"], "read": False}, {"$set": {"read": True}}
+    )
+    return {"ok": True}
+
+
+# ── Reports ─────────────────────────────────────────────────────────
+@api_router.post("/community/doctor/report")
+async def doc_com_report(body: DoctorReportIn, user: dict = Depends(require_doctor_community)):
+    # De-duplicate: one report per (target, reporter)
+    existing = await db.doc_com_reports.find_one({
+        "target_type": body.target_type, "target_id": body.target_id, "reporter_id": user["id"],
+    })
+    if existing:
+        return {"ok": True, "already": True}
+    await db.doc_com_reports.insert_one({
+        "id": str(uuid.uuid4()),
+        "target_type": body.target_type, "target_id": body.target_id,
+        "reason": body.reason.strip(), "reporter_id": user["id"],
+        "resolved": False, "at": now_iso(),
+    })
+    return {"ok": True, "already": False}
+
+
+# ── Admin moderation ────────────────────────────────────────────────
+@api_router.post("/admin/doctor-community/pin/{post_id}")
+async def admin_pin_post(post_id: str, admin: dict = Depends(require_admin)):
+    r = await db.doc_com_posts.update_one({"id": post_id}, {"$set": {"pinned": True}})
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Post not found")
+    await log_activity("doc_community_pin", actor=admin, meta={"post_id": post_id})
+    return {"ok": True}
+
+
+@api_router.post("/admin/doctor-community/unpin/{post_id}")
+async def admin_unpin_post(post_id: str, admin: dict = Depends(require_admin)):
+    r = await db.doc_com_posts.update_one({"id": post_id}, {"$set": {"pinned": False}})
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Post not found")
+    return {"ok": True}
+
+
+@api_router.post("/admin/doctor-community/hide/{post_id}")
+async def admin_hide_post(post_id: str, body: AdminHideReasonIn, admin: dict = Depends(require_admin)):
+    r = await db.doc_com_posts.update_one(
+        {"id": post_id},
+        {"$set": {"hidden": True, "hidden_reason": body.reason, "hidden_at": now_iso(), "hidden_by": admin["id"]}},
+    )
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Post not found")
+    await log_activity("doc_community_hide_post", actor=admin, meta={"post_id": post_id, "reason": body.reason})
+    return {"ok": True}
+
+
+@api_router.post("/admin/doctor-community/unhide/{post_id}")
+async def admin_unhide_post(post_id: str, admin: dict = Depends(require_admin)):
+    r = await db.doc_com_posts.update_one(
+        {"id": post_id},
+        {"$set": {"hidden": False, "hidden_reason": None}},
+    )
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Post not found")
+    return {"ok": True}
+
+
+@api_router.post("/admin/doctor-community/ban/{doctor_id}")
+async def admin_ban_doctor(doctor_id: str, body: AdminBanIn, admin: dict = Depends(require_admin)):
+    u = await db.users.find_one({"id": doctor_id}, {"_id": 0, "role": 1})
+    if not u:
+        raise HTTPException(status_code=404, detail="User not found")
+    if u.get("role") != "doctor":
+        raise HTTPException(status_code=400, detail="Target is not a doctor")
+    await db.users.update_one(
+        {"id": doctor_id},
+        {"$set": {
+            "community_banned": True,
+            "community_ban_reason": body.reason,
+            "community_banned_at": now_iso(),
+            "community_banned_by": admin["id"],
+        }},
+    )
+    await log_activity("doc_community_ban", actor=admin, meta={"doctor_id": doctor_id, "reason": body.reason})
+    return {"ok": True}
+
+
+@api_router.post("/admin/doctor-community/unban/{doctor_id}")
+async def admin_unban_doctor(doctor_id: str, admin: dict = Depends(require_admin)):
+    await db.users.update_one(
+        {"id": doctor_id},
+        {"$unset": {"community_banned": "", "community_ban_reason": "", "community_banned_at": "", "community_banned_by": ""}},
+    )
+    await log_activity("doc_community_unban", actor=admin, meta={"doctor_id": doctor_id})
+    return {"ok": True}
+
+
+@api_router.get("/admin/doctor-community/reports")
+async def admin_list_reports(admin: dict = Depends(require_admin), resolved: bool = False, limit: int = 100):
+    rows = await db.doc_com_reports.find(
+        {"resolved": resolved}, {"_id": 0}
+    ).sort("at", -1).limit(limit).to_list(limit)
+    for r in rows:
+        r["reporter"] = await _doctor_snapshot(r["reporter_id"])
+        if r["target_type"] == "post":
+            p = await db.doc_com_posts.find_one({"id": r["target_id"]}, {"_id": 0, "id": 1, "doctor_id": 1, "caption": 1, "hidden": 1})
+            r["post"] = p
+        else:
+            c = await db.doc_com_comments.find_one({"id": r["target_id"]}, {"_id": 0})
+            r["comment"] = c
+    return {"items": rows}
+
+
+@api_router.post("/admin/doctor-community/reports/{report_id}/resolve")
+async def admin_resolve_report(report_id: str, admin: dict = Depends(require_admin)):
+    r = await db.doc_com_reports.update_one({"id": report_id}, {"$set": {"resolved": True, "resolved_at": now_iso(), "resolved_by": admin["id"]}})
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Report not found")
+    return {"ok": True}
+
+
+@api_router.post("/admin/doctor-community/broadcast")
+async def admin_doc_community_broadcast(body: BroadcastIn, admin: dict = Depends(require_admin)):
+    """Post an official announcement — appears in every doctor's feed as pinned + notifies all."""
+    doc = {
+        "id": str(uuid.uuid4()),
+        "doctor_id": admin["id"],
+        "images": [],
+        "type": "text",
+        "caption": body.message.strip(),
+        "hashtags": ["announcement"],
+        "specialty_tag": None,
+        "clinical_flag": False,
+        "pinned": True,
+        "hidden": False,
+        "hidden_reason": None,
+        "likes_count": 0,
+        "comments_count": 0,
+        "saves_count": 0,
+        "created_at": now_iso(),
+        "is_announcement": True,
+    }
+    await db.doc_com_posts.insert_one(doc.copy())
+    doctors = await db.users.find({"role": "doctor"}, {"_id": 0, "id": 1}).to_list(2000)
+    for d in doctors:
+        await _notify(d["id"], "announcement", admin["id"], doc["id"], snippet=body.message[:120])
+    await log_activity("doc_community_broadcast", actor=admin, meta={"post_id": doc["id"]})
+    doc.pop("_id", None)
+    return doc
+
+
 @api_router.get("/")
 async def root():
     return {"message": "Online Vaidhyaji API", "version": "1.0"}

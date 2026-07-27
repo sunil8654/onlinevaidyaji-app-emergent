@@ -1,0 +1,63 @@
+{
+  "summary": "Backend-only testing for iteration 27 (Doctor Community Instagram-style social layer). 47 tests written in /app/backend/tests/test_iter27_doctor_community.py covering the access gate, require_doctor_community 403 guard, post CRUD & validation (max 5 images / 4MB / caption 2200 / hashtag normalisation / specialty enum), like/save/comment idempotency + counts, follow (self/nonexistent/idempotent), profile stats + is_following, feed hydration with per-user liked_by_me/saved_by_me, explore filter, hashtag lookup, search, suggest, reports dedupe, notifications + mark-read, admin pin/hide/ban/broadcast/reports, ban 403 roundtrip, and regression on public /doctors, /auth, /engagement, /quizzes, patient /community. Result: 44 PASSED, 1 SKIPPED, 2 FAILED (both 500s on /community/doctor/search and /community/doctor/suggest caused by legacy doctor rows missing `user_id`).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "GET /api/community/doctor/search?q=<>=2chars>",
+        "issue": "Returns 500 KeyError: 'user_id' at server.py:4751-4754. The list-comprehension accesses r['user_id'] without a guard, and legacy/admin-seeded doctor rows in db.doctors can lack the field. Fix: filter the query with {'user_id': {'$exists': True}} OR skip rows where 'user_id' missing OR use r.get('user_id'). Same defensive treatment for r['name'].",
+        "priority": "HIGH"
+      },
+      {
+        "endpoint": "GET /api/community/doctor/suggest",
+        "issue": "Returns 500 KeyError: 'user_id' at server.py:4797-4800. Same root cause as /search — the projection returns doctor rows missing the user_id field. Fix: add {'user_id': {'$exists': True}} to the mongo query, or use d.get('user_id') and skip empties.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "POST /api/community/doctor/posts",
+        "issue": "Endpoint accepts an unverified doctor's post at model layer only through the guard; not an issue but note that DoctorPostIn allows caption up to 2200 while enforcing via Pydantic max_length — a caption of exactly 2200 chars is accepted, above returns 422 (Pydantic) not the custom 400. Acceptable but response codes differ from other validations that return 400."
+      },
+      {
+        "endpoint": "GET /api/community/doctor/feed",
+        "issue": "Sort is ('pinned', -1) then ('created_at', -1). When `pinned` is False vs unset, Mongo sort treats missing as null which sorts differently than False — currently OK because create_post always sets pinned:False, but broadcast+seeded rows may differ. Consider `{'$ifNull':['$pinned', false]}` in the future."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter27_doctor_community.py",
+    "/app/test_reports/pytest/iter27_results.xml"
+  ],
+  "action_items": [
+    "FIX /api/community/doctor/search (server.py:4747-4754): filter db.doctors query with `user_id` presence and/or use `.get('user_id')` — currently 500s whenever a matching doctor row lacks user_id.",
+    "FIX /api/community/doctor/suggest (server.py:4793-4800): same defensive fix; add {'user_id': {'$exists': True}} to the query or skip rows missing user_id in the projection.",
+    "Consider adding an index on doc_com_posts (doctor_id, created_at) and doc_com_follows (follower_id, following_id UNIQUE) for scale.",
+    "Consider adding a unique index on doc_com_likes (post_id, doctor_id) so double-inserts can never happen under a race condition (the code currently checks-then-inserts).",
+    "Consider a `doc_com_saves` unique index on (post_id, doctor_id) for the same reason."
+  ],
+  "critical_code_review_comments": [
+    "server.py > 4900 lines — nearing the split threshold; the doctor-community block (~640 lines) is a natural candidate to move to /app/backend/community_doctor.py as a sub-router.",
+    "doc_com_delete_post at line 4585 deletes the post but does NOT delete doc_com_notifications referencing that post_id nor doc_com_reports targeting it — orphan notifications/reports can accumulate.",
+    "admin_ban_doctor unconditionally sets community_banned but does not sign the user out — banned doctors still hold valid JWTs. This is acceptable (the guard blocks on every request) but note it.",
+    "admin_doc_community_broadcast fans out notifications to ALL users with role=doctor (including unverified/banned). Unverified doctors then see an announcement they can never open. Consider filtering to verified & !banned recipients.",
+    "_notify catches exceptions silently — good for fire-and-forget but hides bugs; consider structured logging with the failed doctor_id."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter27_doctor_community.py (new)"
+  ],
+  "success_rate": {
+    "backend": "93.6% (44/47 passing; 1 skipped by design)",
+    "frontend": "not tested (backend-only run)"
+  },
+  "seed_data_creation": "Created 2 TEST doctors (TEST_verB_* and TEST_unver_*) via /api/auth/register + admin approval. drtest@vaidhyaji.example.com was re-approved to guarantee verified state. Several TEST posts + comments + reports were created on drtest's account (prefixed with 'TEST'). All reside in doc_com_* collections and do not touch production data.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Two 500-bug fixes needed (search + suggest KeyError on user_id). After main agent patches those two endpoints, re-run: `pytest /app/backend/tests/test_iter27_doctor_community.py::TestDiscovery -v`. All other flows are green including: ban→403 roundtrip, broadcast fanout, hidden posts excluded from feed/hashtag/single-GET, per-user liked_by_me/saved_by_me, like/save/comment/follow idempotency, report dedupe, admin gating.",
+  "rca_of_issue": "ROOT CAUSE: db.doctors contains a mix of (a) doctors created via /api/auth/register (role=doctor) which populate user_id, and (b) legacy doctors created directly via admin POST /api/admin/doctors which do NOT populate user_id. The doctor-community search and suggest endpoints assume every doctor row has user_id and dereference it with `r['user_id']` / `d['user_id']`. Any matching doctor row without user_id crashes the whole request with KeyError. REPRO: `curl -H 'Authorization: Bearer <verified-doc-jwt>' <BASE>/api/community/doctor/suggest` → 500. MITIGATION: Add `'user_id': {'$exists': True}` to the mongo query in doc_com_search (line ~4740) and doc_com_suggest (line ~4794), or defensively skip rows lacking user_id in the list comprehension."
+}

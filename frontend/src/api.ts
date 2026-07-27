@@ -389,4 +389,51 @@ export const api = {
   }>(`/quizzes/${id}/submit`, "POST", { answers }),
 
   track: (event: string, props?: any) => request("/analytics", "POST", { event, props }),
+
+  // ── Doctor Community (verified doctors only) ────────────────────
+  docComAccess: () => request<{ has_access: boolean; reason?: string }>("/community/doctor/access"),
+  docComFeed: (before?: string) => request<any[]>(`/community/doctor/feed${before ? `?before=${encodeURIComponent(before)}` : ""}`),
+  docComExplore: (specialty?: string) => request<any[]>(`/community/doctor/explore${specialty && specialty !== "All" ? `?specialty=${encodeURIComponent(specialty)}` : ""}`),
+  docComSearch: (q: string) => request<{ doctors: any[]; hashtags: any[]; posts: any[] }>(`/community/doctor/search?q=${encodeURIComponent(q)}`),
+  docComSuggest: () => request<any[]>("/community/doctor/suggest"),
+  docComByHashtag: (tag: string) => request<any[]>(`/community/doctor/hashtag/${encodeURIComponent(tag)}`),
+
+  docComCreatePost: (body: {
+    images?: string[]; caption?: string; hashtags?: string[];
+    specialty_tag?: string; clinical_flag?: boolean;
+  }) => request<any>("/community/doctor/posts", "POST", body),
+  docComGetPost: (post_id: string) => request<any>(`/community/doctor/posts/${post_id}`),
+  docComDeletePost: (post_id: string) => request<{ deleted: boolean }>(`/community/doctor/posts/${post_id}`, "DELETE"),
+  docComLike: (post_id: string) => request<{ liked: boolean }>(`/community/doctor/posts/${post_id}/like`, "POST"),
+  docComUnlike: (post_id: string) => request<{ liked: boolean }>(`/community/doctor/posts/${post_id}/like`, "DELETE"),
+  docComSave: (post_id: string) => request<{ saved: boolean }>(`/community/doctor/posts/${post_id}/save`, "POST"),
+  docComUnsave: (post_id: string) => request<{ saved: boolean }>(`/community/doctor/posts/${post_id}/save`, "DELETE"),
+  docComListComments: (post_id: string) => request<any[]>(`/community/doctor/posts/${post_id}/comments`),
+  docComAddComment: (post_id: string, text: string) => request<any>(`/community/doctor/posts/${post_id}/comments`, "POST", { text }),
+  docComDeleteComment: (comment_id: string) => request<{ deleted: boolean }>(`/community/doctor/comments/${comment_id}`, "DELETE"),
+
+  docComProfile: (doctor_id: string) => request<any>(`/community/doctor/profile/${doctor_id}`),
+  docComProfilePosts: (doctor_id: string) => request<any[]>(`/community/doctor/profile/${doctor_id}/posts`),
+  docComFollow: (target_id: string) => request<{ ok: boolean; already: boolean }>(`/community/doctor/follow/${target_id}`, "POST"),
+  docComUnfollow: (target_id: string) => request<{ ok: boolean }>(`/community/doctor/follow/${target_id}`, "DELETE"),
+  docComMyFollowers: () => request<any[]>("/community/doctor/me/followers"),
+  docComMyFollowing: () => request<any[]>("/community/doctor/me/following"),
+  docComMySaved: () => request<any[]>("/community/doctor/me/saved"),
+
+  docComNotifications: () => request<{ items: any[]; unread: number }>("/community/doctor/notifications"),
+  docComReadNotifications: () => request<{ ok: boolean }>("/community/doctor/notifications/read", "POST"),
+
+  docComReport: (target_type: "post" | "comment", target_id: string, reason: string) =>
+    request<{ ok: boolean; already: boolean }>("/community/doctor/report", "POST", { target_type, target_id, reason }),
+
+  // Admin moderation
+  adminDocComPin: (post_id: string) => request(`/admin/doctor-community/pin/${post_id}`, "POST"),
+  adminDocComUnpin: (post_id: string) => request(`/admin/doctor-community/unpin/${post_id}`, "POST"),
+  adminDocComHide: (post_id: string, reason: string) => request(`/admin/doctor-community/hide/${post_id}`, "POST", { reason }),
+  adminDocComUnhide: (post_id: string) => request(`/admin/doctor-community/unhide/${post_id}`, "POST"),
+  adminDocComBan: (doctor_id: string, reason: string) => request(`/admin/doctor-community/ban/${doctor_id}`, "POST", { reason }),
+  adminDocComUnban: (doctor_id: string) => request(`/admin/doctor-community/unban/${doctor_id}`, "POST"),
+  adminDocComReports: (resolved: boolean = false) => request<{ items: any[] }>(`/admin/doctor-community/reports?resolved=${resolved}`),
+  adminDocComResolveReport: (id: string) => request(`/admin/doctor-community/reports/${id}/resolve`, "POST"),
+  adminDocComBroadcast: (message: string) => request<any>("/admin/doctor-community/broadcast", "POST", { message }),
 };

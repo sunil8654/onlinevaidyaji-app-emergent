@@ -86,6 +86,23 @@ export default function DoctorHome() {
           <Stat label="Patients" value={patients.length} />
         </View>
 
+        {/* Doctor Community entry — Vaidya Charcha */}
+        <TouchableOpacity
+          style={styles.charcha}
+          onPress={() => router.push("/doctor/community")}
+          testID="dh-community"
+          activeOpacity={0.9}
+        >
+          <View style={styles.charchaIcon}>
+            <Feather name="users" size={20} color={COLORS.surface} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.charchaTitle}>Vaidya Charcha</Text>
+            <Text style={styles.charchaSub}>Connect with fellow AYUSH doctors — share cases & insights</Text>
+          </View>
+          <Feather name="arrow-right" size={18} color={COLORS.surface} />
+        </TouchableOpacity>
+
         {/* Earnings + quick actions */}
         <View style={styles.quickRow}>
           <TouchableOpacity
@@ -216,6 +233,17 @@ const styles = StyleSheet.create({
   status: { flexDirection: "row", alignItems: "center", gap: 4, alignSelf: "flex-start", paddingHorizontal: 8, paddingVertical: 4, borderRadius: RADIUS.pill, marginTop: 8 },
   statusText: { color: COLORS.surface, fontSize: 10, fontWeight: "700", letterSpacing: 1 },
   stats: { flexDirection: "row", gap: SPACING.md, paddingHorizontal: SPACING.lg, marginTop: SPACING.md },
+  charcha: {
+    flexDirection: "row", alignItems: "center", gap: SPACING.md,
+    marginHorizontal: SPACING.lg, marginTop: SPACING.md,
+    padding: SPACING.md, backgroundColor: COLORS.brand, borderRadius: RADIUS.lg,
+  },
+  charchaIcon: {
+    width: 42, height: 42, borderRadius: 21, backgroundColor: COLORS.accent,
+    alignItems: "center", justifyContent: "center",
+  },
+  charchaTitle: { color: COLORS.surface, fontFamily: FONTS.heading, fontSize: 18 },
+  charchaSub: { color: COLORS.accentSoft, fontSize: 11, marginTop: 2 },
   availCard: {
     flexDirection: "row", alignItems: "center", gap: SPACING.md,
     marginHorizontal: SPACING.lg, marginTop: -30,
