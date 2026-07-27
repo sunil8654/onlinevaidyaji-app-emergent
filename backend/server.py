@@ -4586,6 +4586,9 @@ async def doc_com_delete_post(post_id: str, user: dict = Depends(require_doctor_
     await db.doc_com_likes.delete_many({"post_id": post_id})
     await db.doc_com_comments.delete_many({"post_id": post_id})
     await db.doc_com_saves.delete_many({"post_id": post_id})
+    # Cascade: remove orphaned notifications & reports tied to this post.
+    await db.doc_com_notifications.delete_many({"post_id": post_id})
+    await db.doc_com_reports.delete_many({"target_type": "post", "target_id": post_id})
     return {"deleted": True}
 
 
@@ -4739,6 +4742,7 @@ async def doc_com_search(q: str, user: dict = Depends(require_doctor_community),
     # Doctors by name / specialty
     doc_query = {
         "verified": True,
+        "user_id": {"$exists": True},
         "$or": [
             {"name": {"$regex": q, "$options": "i"}},
             {"specialty": {"$regex": q, "$options": "i"}},
@@ -4751,7 +4755,7 @@ async def doc_com_search(q: str, user: dict = Depends(require_doctor_community),
     doctors = [{
         "id": r["user_id"], "name": r["name"], "specialty": r.get("specialty", ""),
         "avatar_url": r.get("avatar_url", ""), "verified": True, "clinic_name": r.get("clinic_name", ""),
-    } for r in doc_rows]
+    } for r in doc_rows if r.get("user_id")]
     # Hashtag search
     tag = q.lstrip("#").lower()
     pipeline = [
@@ -4791,13 +4795,13 @@ async def doc_com_suggest(user: dict = Depends(require_doctor_community), limit:
     excluded = {r["following_id"] for r in following}
     excluded.add(user["id"])
     docs = await db.doctors.find(
-        {"verified": True, "user_id": {"$nin": list(excluded)}},
+        {"verified": True, "user_id": {"$exists": True, "$nin": list(excluded)}},
         {"_id": 0, "user_id": 1, "name": 1, "specialty": 1, "avatar_url": 1, "verified": 1},
     ).limit(limit).to_list(limit)
     return [{
         "id": d["user_id"], "name": d.get("name", "Doctor"),
         "specialty": d.get("specialty", ""), "avatar_url": d.get("avatar_url", ""), "verified": True,
-    } for d in docs]
+    } for d in docs if d.get("user_id")]
 
 
 # ── Notifications ───────────────────────────────────────────────────
@@ -4956,10 +4960,19 @@ async def admin_doc_community_broadcast(body: BroadcastIn, admin: dict = Depends
         "is_announcement": True,
     }
     await db.doc_com_posts.insert_one(doc.copy())
-    doctors = await db.users.find({"role": "doctor"}, {"_id": 0, "id": 1}).to_list(2000)
-    for d in doctors:
-        await _notify(d["id"], "announcement", admin["id"], doc["id"], snippet=body.message[:120])
-    await log_activity("doc_community_broadcast", actor=admin, meta={"post_id": doc["id"]})
+    # Fanout only to verified, non-banned doctors
+    verified_doctors = await db.doctors.find(
+        {"verified": True, "user_id": {"$exists": True}}, {"_id": 0, "user_id": 1}
+    ).to_list(2000)
+    verified_ids = {r["user_id"] for r in verified_doctors if r.get("user_id")}
+    banned_users = await db.users.find(
+        {"role": "doctor", "community_banned": True}, {"_id": 0, "id": 1}
+    ).to_list(2000)
+    banned_ids = {u["id"] for u in banned_users}
+    recipients = verified_ids - banned_ids
+    for uid in recipients:
+        await _notify(uid, "announcement", admin["id"], doc["id"], snippet=body.message[:120])
+    await log_activity("doc_community_broadcast", actor=admin, meta={"post_id": doc["id"], "recipients": len(recipients)})
     doc.pop("_id", None)
     return doc
 
