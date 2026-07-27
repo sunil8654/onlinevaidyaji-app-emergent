@@ -375,12 +375,166 @@ async def login(body: LoginInput, request: Request):
     token = make_token(user["id"], user["role"])
     user.pop("_id", None)
     user.pop("password", None)
-    return {"token": token, "user": user}
+    must_change = bool(user.get("must_change_password", False))
+    return {"token": token, "user": user, "must_change_password": must_change}
 
 
 @api_router.get("/auth/me")
 async def me(user: dict = Depends(current_user)):
     return user
+
+
+# ----------------- Password Reset (admin-mediated) -----------------
+class PasswordResetRequestIn(BaseModel):
+    email: EmailStr
+
+
+class ChangePasswordIn(BaseModel):
+    new_password: str = Field(..., min_length=8, max_length=128)
+    confirm_password: str = Field(..., min_length=8, max_length=128)
+
+
+class AdminApproveResetIn(BaseModel):
+    temp_password: Optional[str] = Field(None, min_length=12, max_length=128)
+
+
+def _generate_temp_password() -> str:
+    """Server-generated strong temporary password. Mix of upper/lower/digit."""
+    import secrets, string
+    alphabet = string.ascii_letters + string.digits
+    # 12 chars + always inject 1 upper, 1 lower, 1 digit
+    body = ''.join(secrets.choice(alphabet) for _ in range(9))
+    return f"V{secrets.choice(string.ascii_uppercase)}{body}{secrets.choice(string.digits)}"
+
+
+def _is_strong_password(pw: str) -> bool:
+    if len(pw) < 8 or len(pw) > 128:
+        return False
+    has_letter = any(c.isalpha() for c in pw)
+    has_digit = any(c.isdigit() for c in pw)
+    return has_letter and has_digit
+
+
+@api_router.post("/auth/request-password-reset")
+async def request_password_reset(body: PasswordResetRequestIn, request: Request):
+    """Non-enumerating password reset request. Always returns generic success.
+    Creates a pending ticket for admin to approve. TTL-cleaned after 7 days.
+    """
+    # Rate limit: 5 requests per IP per hour + 3 per email per hour
+    await rate_limit(request, "auth:reset-req:ip", max_calls=5, window_seconds=3600)
+    email = body.email.strip().lower()
+    await rate_limit(request, f"auth:reset-req:email:{email}", max_calls=3, window_seconds=3600)
+    user = await db.users.find_one({"email": email})
+    if user:
+        existing = await db.password_resets.find_one({
+            "user_id": user["id"], "status": "pending",
+        })
+        if not existing:
+            await db.password_resets.insert_one({
+                "id": str(uuid.uuid4()),
+                "user_id": user["id"],
+                "email": email,
+                "name": user.get("name") or "",
+                "role": user.get("role") or "patient",
+                "status": "pending",
+                "requested_at": now_iso(),
+                "requested_ip": _client_ip(request),
+                "expires_at": (datetime.utcnow() + timedelta(days=7)).isoformat(),
+                "approved_at": None,
+                "approved_by_admin_id": None,
+            })
+            await log_activity("password_reset_requested", actor=user, meta={"email": email})
+    # Always return generic success — do NOT reveal whether email exists
+    return {"message": "If an account with that email exists, our team will assist you within 24 hours."}
+
+
+@api_router.get("/admin/password-resets")
+async def admin_list_password_resets(status: str = "pending", admin: dict = Depends(require_admin)):
+    if status not in ("pending", "approved", "rejected"):
+        raise HTTPException(status_code=400, detail="Invalid status filter")
+    items = await db.password_resets.find({"status": status}, {"_id": 0}).sort("requested_at", -1).to_list(200)
+    return {"items": items}
+
+
+@api_router.post("/admin/password-resets/{reset_id}/approve")
+async def admin_approve_reset(reset_id: str, body: AdminApproveResetIn, admin: dict = Depends(require_admin)):
+    """Approve a pending reset. Server-generated temp password unless admin
+    supplies a strong one. Sets must_change_password=True on the user, so the
+    user is forced to change it on next login.
+    """
+    req = await db.password_resets.find_one({"id": reset_id, "status": "pending"})
+    if not req:
+        raise HTTPException(status_code=404, detail="Reset request not found or already handled")
+    temp = body.temp_password or _generate_temp_password()
+    if not _is_strong_password(temp):
+        raise HTTPException(status_code=400, detail="Temporary password is too weak (8+ chars, mix letters & digits)")
+    now = now_iso()
+    upd = await db.users.update_one(
+        {"id": req["user_id"]},
+        {"$set": {
+            "password": hash_password(temp),
+            "must_change_password": True,
+            "temp_password_set_at": now,
+            "updated_at": now,
+        }},
+    )
+    if upd.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    await db.password_resets.update_one(
+        {"id": reset_id, "status": "pending"},
+        {"$set": {
+            "status": "approved",
+            "approved_at": now,
+            "approved_by_admin_id": admin["id"],
+        }},
+    )
+    await log_activity("password_reset_approved", actor=admin, meta={
+        "target_user_id": req["user_id"], "target_email": req.get("email"), "reset_id": reset_id,
+    })
+    return {
+        "reset_id": reset_id,
+        "email": req.get("email"),
+        "name": req.get("name"),
+        "temp_password": temp,
+        "message": "Share this temporary password with the user. They will be forced to change it on next login.",
+    }
+
+
+@api_router.post("/admin/password-resets/{reset_id}/reject")
+async def admin_reject_reset(reset_id: str, admin: dict = Depends(require_admin)):
+    req = await db.password_resets.find_one({"id": reset_id, "status": "pending"})
+    if not req:
+        raise HTTPException(status_code=404, detail="Reset request not found or already handled")
+    await db.password_resets.update_one(
+        {"id": reset_id, "status": "pending"},
+        {"$set": {"status": "rejected", "approved_at": now_iso(), "approved_by_admin_id": admin["id"]}},
+    )
+    await log_activity("password_reset_rejected", actor=admin, meta={
+        "target_user_id": req["user_id"], "target_email": req.get("email"), "reset_id": reset_id,
+    })
+    return {"ok": True}
+
+
+@api_router.post("/auth/change-password")
+async def change_password(body: ChangePasswordIn, request: Request, user: dict = Depends(current_user)):
+    """User (authenticated) changes their own password. Clears must_change_password."""
+    await rate_limit(request, f"auth:change-pw:{user['id']}", max_calls=5, window_seconds=600)
+    if body.new_password != body.confirm_password:
+        raise HTTPException(status_code=400, detail="Passwords do not match")
+    if not _is_strong_password(body.new_password):
+        raise HTTPException(status_code=400, detail="Password must be 8+ characters and mix letters & digits")
+    now = now_iso()
+    await db.users.update_one(
+        {"id": user["id"]},
+        {"$set": {
+            "password": hash_password(body.new_password),
+            "must_change_password": False,
+            "password_changed_at": now,
+            "updated_at": now,
+        }, "$unset": {"temp_password_set_at": ""}},
+    )
+    await log_activity("password_changed", actor=user, meta={"user_id": user["id"]})
+    return {"ok": True, "message": "Password updated"}
 
 
 # ----------------- Patient Profile -----------------

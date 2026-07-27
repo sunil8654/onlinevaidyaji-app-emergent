@@ -41,8 +41,22 @@ export const api = {
     registration_number?: string;
   }) => request("/auth/register", "POST", payload, false),
   login: (payload: { email: string; password: string }) =>
-    request("/auth/login", "POST", payload, false),
+    request<{ token: string; user: any; must_change_password?: boolean }>("/auth/login", "POST", payload, false),
   me: () => request("/auth/me"),
+
+  requestPasswordReset: (email: string) =>
+    request<{ message: string }>("/auth/request-password-reset", "POST", { email }, false),
+  changePassword: (new_password: string, confirm_password: string) =>
+    request<{ ok: boolean; message: string }>("/auth/change-password", "POST", { new_password, confirm_password }),
+
+  // Admin — password reset moderation
+  adminListPasswordResets: (status: "pending" | "approved" | "rejected" = "pending") =>
+    request<{ items: any[] }>(`/admin/password-resets?status=${status}`),
+  adminApprovePasswordReset: (reset_id: string, temp_password?: string) =>
+    request<{ reset_id: string; email: string; name: string; temp_password: string; message: string }>(
+      `/admin/password-resets/${reset_id}/approve`, "POST", { temp_password: temp_password || null }),
+  adminRejectPasswordReset: (reset_id: string) =>
+    request<{ ok: boolean }>(`/admin/password-resets/${reset_id}/reject`, "POST"),
 
   getPatientProfile: () => request("/patient/profile"),
   savePatientProfile: (body: any) => request("/patient/profile", "PUT", body),

@@ -11,6 +11,7 @@ export default function Login() {
   const { login } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPw, setShowPw] = useState(false);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -22,9 +23,14 @@ export default function Login() {
     }
     setBusy(true);
     try {
-      const user = await login(email.trim().toLowerCase(), password);
-      if (user?.is_admin) router.replace("/admin/dashboard");
-      else router.replace("/(tabs)/home");
+      const { user, must_change_password } = await login(email.trim().toLowerCase(), password);
+      if (must_change_password) {
+        router.replace("/auth/change-password");
+      } else if (user?.is_admin) {
+        router.replace("/admin/dashboard");
+      } else {
+        router.replace("/(tabs)/home");
+      }
     } catch (e: any) {
       setErr(e.message || "Login failed");
     } finally {
@@ -45,10 +51,50 @@ export default function Login() {
 
           <View style={{ marginTop: SPACING.lg }}>
             <Text style={styles.label}>Email</Text>
-            <TextInput style={styles.input} value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" placeholder="you@example.com" placeholderTextColor={COLORS.textMuted} testID="login-email" />
+            <TextInput
+              style={styles.input}
+              value={email}
+              onChangeText={setEmail}
+              autoCapitalize="none"
+              keyboardType="email-address"
+              autoComplete="email"
+              placeholder="you@example.com"
+              placeholderTextColor={COLORS.textMuted}
+              testID="login-email"
+            />
 
             <Text style={styles.label}>Password</Text>
-            <TextInput style={styles.input} value={password} onChangeText={setPassword} secureTextEntry placeholder="••••••••" placeholderTextColor={COLORS.textMuted} testID="login-password" />
+            <View style={styles.pwWrap}>
+              <TextInput
+                style={styles.pwInput}
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry={!showPw}
+                autoCapitalize="none"
+                autoComplete="password"
+                placeholder="••••••••"
+                placeholderTextColor={COLORS.textMuted}
+                testID="login-password"
+              />
+              <TouchableOpacity
+                onPress={() => setShowPw((s) => !s)}
+                style={styles.eyeBtn}
+                testID="login-show-pw"
+                accessibilityLabel={showPw ? "Hide password" : "Show password"}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              >
+                <Feather name={showPw ? "eye-off" : "eye"} size={18} color={COLORS.textMuted} />
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              onPress={() => router.push("/auth/forgot-password")}
+              style={{ alignSelf: "flex-end", marginTop: 8 }}
+              testID="login-forgot"
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Text style={styles.forgotText}>Forgot password?</Text>
+            </TouchableOpacity>
 
             {err ? <Text style={styles.err} testID="login-error">{err}</Text> : null}
 
@@ -85,6 +131,25 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: COLORS.textPrimary,
   },
+  pwWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: RADIUS.md,
+    paddingHorizontal: SPACING.md,
+  },
+  pwInput: {
+    flex: 1,
+    paddingVertical: 14,
+    fontSize: 15,
+    color: COLORS.textPrimary,
+  },
+  eyeBtn: {
+    padding: 6,
+  },
+  forgotText: { color: COLORS.brand, fontWeight: "700", fontSize: 13 },
   err: { color: COLORS.error, marginTop: SPACING.md, fontSize: 13 },
   cta: {
     marginTop: SPACING.lg,

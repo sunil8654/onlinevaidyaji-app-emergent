@@ -17,7 +17,7 @@ export type AuthUser = {
 type AuthContextValue = {
   user: AuthUser | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<{ user: AuthUser; must_change_password: boolean }>;
   register: (data: { name: string; email: string; password: string; role: Role; phone?: string; registration_number?: string }) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -53,7 +53,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await storage.secureSet(TOKEN_KEY, res.token);
     setUser(res.user);
     registerForPush(res.user.id).catch(() => {});
-    return res.user as AuthUser;
+    return { user: res.user as AuthUser, must_change_password: !!res.must_change_password };
   }, []);
 
   const register = useCallback(

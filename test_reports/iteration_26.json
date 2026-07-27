@@ -1,0 +1,45 @@
+{
+  "summary": "Iteration 26 — Backend-only validation of admin-mediated Forgot Password + Change Password flow. Wrote /app/backend/tests/test_iter26_password_reset.py with 29 tests across 6 classes: TestRequestPasswordReset (enumeration, duplicate pending guard), TestZZRateLimit (per-email 3/hr AND per-IP 5/hr both verified via clean-restart), TestAdminListPasswordResets (auth guard for no-token/patient, shape validation, status filter incl. 400 on unknown), TestApproveReject (auto temp-pw generation + admin-supplied strong pw, weak pw rejection at 422/400, unknown/already-handled → 404, reject preserves user pw), TestChangePassword (mismatch → 400, weak/short → 400/422, success clears must_change_password + old temp pw stops working), and TestRegression (register still requires 10-digit Indian mobile, login works for normal users, engagement/quizzes/doctors/doctor-availability all 200). 29/29 passed (100%).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter26_password_reset.py",
+    "/app/test_reports/pytest/pytest_iter26.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py:388-537 forgot-password code is clean, uses uuid ids, no _id leak (find_one/{ _id:0 }), timestamps via now_iso(), and correctly excludes _id from list.",
+    "Non-enumeration is properly implemented: request-password-reset ALWAYS returns 200 with identical generic message regardless of whether the email is registered (server.py:448). Verified programmatically against a fresh registered patient and a random non-existent email — identical status code AND identical message body.",
+    "Duplicate-pending guard works: 2nd request while status='pending' is a no-op (server.py:429-432) — only 1 pending record exists.",
+    "Rate-limit: per-IP=5/hr AND per-email=3/hr both enforced (server.py:424-426). IP-check happens BEFORE email-check, so if IP bucket fills first you get 429 by IP; if per-email fills first (same email 4x) you get 429 by email. Both paths verified in tests.",
+    "Admin approve: strong temp-pw generation via secrets module (server.py:401-407) produces 12-char passwords with guaranteed upper+lower+digit. Pydantic min_length=12 on temp_password field (server.py:398) makes short custom pws fail at 422. Non-digit passes pydantic length but fails _is_strong_password → 400.",
+    "must_change_password is a top-level field in login response (server.py:378-379), not nested in user object. Tests verify it toggles false → true → false through the full lifecycle.",
+    "Approve endpoint correctly sets users.must_change_password=true AND users.temp_password_set_at=now, AND updates the reset record to status=approved with approved_at + approved_by_admin_id (server.py:472-490).",
+    "Change-password endpoint correctly clears must_change_password + $unsets temp_password_set_at + sets password_changed_at (server.py:527-535). Old temp pw stops working immediately (bcrypt verify against new hash).",
+    "log_activity is called on every state transition (request/approve/reject/change) for audit trail (server.py:446, 491, 512, 536).",
+    "Only nitpick: TestApproveReject test_approve_already_approved_404 relies on find_one({id, status: 'pending'}) — approving an already-approved id correctly 404s because the query filter excludes non-pending records. This is a subtle but CORRECT design — it also protects against race conditions.",
+    "The endpoint returns temp_password in the response body (server.py:498). Admin must securely relay this to the user out-of-band (verbal/manual). This is intentional per the option-C design; frontend copies to clipboard.",
+    "One code-review nit: the reject endpoint reuses the 'approved_at' and 'approved_by_admin_id' fields to record the rejection timestamp + admin (server.py:510). Might be clearer as 'handled_at' / 'handled_by_admin_id' or dedicated 'rejected_at'/'rejected_by_admin_id' — not a bug, cosmetic only.",
+    "Rate-limit buckets are process-local in-memory (server.py:_rate_buckets). Multi-worker deployments would allow bypass by hitting different workers. For single-worker deployments (current) this is fine. Consider Redis-backed rate limiter if scaling out."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter26_password_reset.py (new — 29 tests, 6 classes)"
+  ],
+  "success_rate": {
+    "backend": "100% (29/29)",
+    "frontend": "N/A — backend-only per review request"
+  },
+  "seed_data_creation": "Registered ~12 fresh patients via /api/auth/register with unique test_iter26_*@vaidhyaji.example.com emails. Each got 1 pending → approved/rejected/change-pw lifecycle. All state persisted (pending_password_resets docs remain in mongo with correct final statuses; users retain the last hashed pw). Backend was restarted 3 times during the run (at TestZZRateLimit, TestApproveReject, TestChangePassword class-scoped autouse fixtures) to flush in-memory rate-limit buckets so each class had a fresh 5/IP/hour budget.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "All 29 tests in test_iter26_password_reset.py pass 100%. IMPORTANT operational note: the test file class-restarts the backend 3 times via `sudo supervisorctl restart backend` (in autouse class-scope fixtures) to bypass the process-local rate-limit constraint (5 request-password-reset calls per IP per hour). Each restart adds ~4s of wait time; the whole suite runs in ~27s. If you re-run this file, other tests hitting the backend in parallel will observe brief 502s during restarts — run this suite in isolation. To combine with other backend tests, put this file LAST in the pytest invocation or skip the rate-limit class with -k 'not TestZZRateLimit'.",
+  "rca_of_issue": "No bugs found. All feature requirements in the review request were verified end-to-end:  (1) Non-enumeration — identical 200 + message for existing and non-existing emails ✓  (2) Duplicate pending guard — only 1 record when status=pending ✓  (3) Rate limit per-IP 5/hr AND per-email 3/hr — both enforced and returned 429 ✓  (4) Admin list auth guard: no-token & patient-token both 401/403 ✓  (5) Admin list includes {id, user_id, email, name, role, status, requested_at, requested_ip, expires_at, approved_at, approved_by_admin_id} ✓  (6) Status filter accepts pending/approved/rejected, rejects unknown with 400 ✓  (7) Approve generates strong temp_password OR accepts admin-supplied; sets users.must_change_password=true, temp_password_set_at=now; updates reset record ✓  (8) Weak temp pw <12 chars → 422 (pydantic), 12+ chars no digit → 400 ✓  (9) Approve non-pending/unknown → 404 ✓  (10) Reject marks rejected, does not touch user password ✓  (11) Login includes must_change_password (false default, true after approve, false after change) ✓  (12) change-password mismatch → 400, weak (no digit) → 400, too short → 422; success clears flag and old temp pw fails 401 ✓  (13) Regression: register requires 10-digit Indian mobile (5-digit and leading-1 both rejected with 422); login for normal users still works; engagement/me, quizzes, doctors, doctor availability all 200 ✓  (14) pending_password_resets record shows status='approved' after approve, 'rejected' after reject ✓"
+}

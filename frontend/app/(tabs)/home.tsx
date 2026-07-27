@@ -154,14 +154,8 @@ function PatientHome() {
           </TouchableOpacity>
         </View>
 
-        {/* Row 3: journal, diseases */}
+        {/* Row 3: women, journal, diseases */}
         <View style={styles.engagementRow}>
-          <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/community")} testID="home-community" activeOpacity={0.85}>
-            <View style={[styles.engIcon, { backgroundColor: COLORS.surfaceAlt }]}>
-              <Feather name="message-circle" size={16} color={COLORS.brand} />
-            </View>
-            <Text style={styles.engLabel}>Community</Text>
-          </TouchableOpacity>
           <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/womens-health")} testID="home-womens" activeOpacity={0.85}>
             <View style={[styles.engIcon, { backgroundColor: "#FFE082" }]}>
               <Feather name="heart" size={16} color={COLORS.accent} />
@@ -179,6 +173,12 @@ function PatientHome() {
               <Feather name="activity" size={16} color={COLORS.brand} />
             </View>
             <Text style={styles.engLabel}>Diseases</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.engBtn} onPress={() => router.push("/knowledge")} testID="home-knowledge-r3" activeOpacity={0.85}>
+            <View style={[styles.engIcon, { backgroundColor: COLORS.surfaceAlt }]}>
+              <Feather name="book" size={16} color={COLORS.brand} />
+            </View>
+            <Text style={styles.engLabel}>Knowledge</Text>
           </TouchableOpacity>
         </View>
 
