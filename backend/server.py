@@ -4535,10 +4535,14 @@ async def doc_com_create_post(body: DoctorPostIn, user: dict = Depends(require_d
         raise HTTPException(status_code=400, detail="Post needs an image or caption")
     if len(body.images) > MAX_CAROUSEL_IMAGES:
         raise HTTPException(status_code=400, detail=f"Max {MAX_CAROUSEL_IMAGES} images per post")
-    # Cap total payload per image ~4 MB
+    # Cap total payload per image ~4 MB + aggregate cap to prevent 22 MB posts
+    total_bytes = 0
     for i, img in enumerate(body.images):
         if not isinstance(img, str) or len(img) > 4_500_000:
             raise HTTPException(status_code=400, detail=f"Image {i+1} too large (max 4 MB)")
+        total_bytes += len(img)
+    if total_bytes > 12_000_000:
+        raise HTTPException(status_code=400, detail="Total image payload exceeds 12 MB — please compress")
     if body.specialty_tag and body.specialty_tag not in DOCTOR_SPECIALTIES:
         raise HTTPException(status_code=400, detail="Invalid specialty tag")
     doc = {
@@ -4617,7 +4621,7 @@ async def doc_com_feed(user: dict = Depends(require_doctor_community), limit: in
 # ── Like / Save ─────────────────────────────────────────────────────
 @api_router.post("/community/doctor/posts/{post_id}/like")
 async def doc_com_like(post_id: str, user: dict = Depends(require_doctor_community)):
-    p = await db.doc_com_posts.find_one({"id": post_id}, {"_id": 0, "id": 1, "doctor_id": 1})
+    p = await db.doc_com_posts.find_one({"id": post_id, "hidden": {"$ne": True}}, {"_id": 0, "id": 1, "doctor_id": 1})
     if not p:
         raise HTTPException(status_code=404, detail="Post not found")
     existing = await db.doc_com_likes.find_one({"post_id": post_id, "doctor_id": user["id"]})
@@ -4641,7 +4645,7 @@ async def doc_com_unlike(post_id: str, user: dict = Depends(require_doctor_commu
 
 @api_router.post("/community/doctor/posts/{post_id}/save")
 async def doc_com_save(post_id: str, user: dict = Depends(require_doctor_community)):
-    p = await db.doc_com_posts.find_one({"id": post_id}, {"_id": 0, "id": 1})
+    p = await db.doc_com_posts.find_one({"id": post_id, "hidden": {"$ne": True}}, {"_id": 0, "id": 1})
     if not p:
         raise HTTPException(status_code=404, detail="Post not found")
     existing = await db.doc_com_saves.find_one({"post_id": post_id, "doctor_id": user["id"]})
@@ -4678,7 +4682,7 @@ async def doc_com_saved_posts(user: dict = Depends(require_doctor_community), li
 # ── Comments ────────────────────────────────────────────────────────
 @api_router.get("/community/doctor/posts/{post_id}/comments")
 async def doc_com_list_comments(post_id: str, user: dict = Depends(require_doctor_community)):
-    p = await db.doc_com_posts.find_one({"id": post_id}, {"_id": 0, "id": 1})
+    p = await db.doc_com_posts.find_one({"id": post_id, "hidden": {"$ne": True}}, {"_id": 0, "id": 1})
     if not p:
         raise HTTPException(status_code=404, detail="Post not found")
     rows = await db.doc_com_comments.find(
@@ -4691,7 +4695,7 @@ async def doc_com_list_comments(post_id: str, user: dict = Depends(require_docto
 
 @api_router.post("/community/doctor/posts/{post_id}/comments")
 async def doc_com_add_comment(post_id: str, body: DoctorCommentIn, user: dict = Depends(require_doctor_community)):
-    p = await db.doc_com_posts.find_one({"id": post_id}, {"_id": 0, "id": 1, "doctor_id": 1})
+    p = await db.doc_com_posts.find_one({"id": post_id, "hidden": {"$ne": True}}, {"_id": 0, "id": 1, "doctor_id": 1})
     if not p:
         raise HTTPException(status_code=404, detail="Post not found")
     doc = {
@@ -4735,17 +4739,19 @@ async def doc_com_explore(user: dict = Depends(require_doctor_community), specia
 
 @api_router.get("/community/doctor/search")
 async def doc_com_search(q: str, user: dict = Depends(require_doctor_community), limit: int = 20):
-    q = (q or "").strip()
+    q = (q or "").strip()[:80]  # cap to prevent pathological patterns
     if not q or len(q) < 2:
         return {"doctors": [], "hashtags": [], "posts": []}
     limit = min(max(limit, 1), 40)
+    import re as _re
+    safe = _re.escape(q)  # SEC-001: treat user input as literal text, not regex
     # Doctors by name / specialty
     doc_query = {
         "verified": True,
         "user_id": {"$exists": True},
         "$or": [
-            {"name": {"$regex": q, "$options": "i"}},
-            {"specialty": {"$regex": q, "$options": "i"}},
+            {"name": {"$regex": safe, "$options": "i"}},
+            {"specialty": {"$regex": safe, "$options": "i"}},
         ],
     }
     doc_rows = await db.doctors.find(
@@ -4758,10 +4764,11 @@ async def doc_com_search(q: str, user: dict = Depends(require_doctor_community),
     } for r in doc_rows if r.get("user_id")]
     # Hashtag search
     tag = q.lstrip("#").lower()
+    safe_tag = _re.escape(tag)
     pipeline = [
         {"$match": {"hidden": {"$ne": True}}},
         {"$unwind": "$hashtags"},
-        {"$match": {"hashtags": {"$regex": f"^{tag}"}}},
+        {"$match": {"hashtags": {"$regex": f"^{safe_tag}"}}},
         {"$group": {"_id": "$hashtags", "count": {"$sum": 1}}},
         {"$sort": {"count": -1}},
         {"$limit": limit},
@@ -4770,7 +4777,7 @@ async def doc_com_search(q: str, user: dict = Depends(require_doctor_community),
     hashtags = [{"tag": r["_id"], "count": r["count"]} for r in tag_rows]
     # Recent posts matching caption
     post_rows = await db.doc_com_posts.find(
-        {"hidden": {"$ne": True}, "caption": {"$regex": q, "$options": "i"}}
+        {"hidden": {"$ne": True}, "caption": {"$regex": safe, "$options": "i"}}
     ).sort("created_at", -1).limit(limit).to_list(limit)
     posts = await _hydrate_posts(post_rows, user["id"])
     return {"doctors": doctors, "hashtags": hashtags, "posts": posts}
@@ -4778,7 +4785,9 @@ async def doc_com_search(q: str, user: dict = Depends(require_doctor_community),
 
 @api_router.get("/community/doctor/hashtag/{tag}")
 async def doc_com_by_hashtag(tag: str, user: dict = Depends(require_doctor_community), limit: int = 30):
-    tag = tag.lstrip("#").lower()
+    tag = tag.lstrip("#").lower()[:80]
+    # Sanitise: only allow alnum + underscore (matches _normalise_hashtags), so no regex metacharacters ever reach mongo.
+    tag = "".join(ch for ch in tag if ch.isalnum() or ch == "_")
     if not tag:
         raise HTTPException(status_code=400, detail="Invalid tag")
     posts = await db.doc_com_posts.find(
@@ -4827,7 +4836,16 @@ async def doc_com_read_notifications(user: dict = Depends(require_doctor_communi
 
 # ── Reports ─────────────────────────────────────────────────────────
 @api_router.post("/community/doctor/report")
-async def doc_com_report(body: DoctorReportIn, user: dict = Depends(require_doctor_community)):
+async def doc_com_report(body: DoctorReportIn, request: Request, user: dict = Depends(require_doctor_community)):
+    # SEC-002: rate limit per doctor to prevent moderation queue spam
+    await rate_limit(request, f"doc-com-report:{user['id']}", max_calls=20, window_seconds=3600)
+    # Verify the target actually exists before persisting
+    if body.target_type == "post":
+        target = await db.doc_com_posts.find_one({"id": body.target_id}, {"_id": 0, "id": 1})
+    else:
+        target = await db.doc_com_comments.find_one({"id": body.target_id}, {"_id": 0, "id": 1})
+    if not target:
+        raise HTTPException(status_code=404, detail="Reported item not found")
     # De-duplicate: one report per (target, reporter)
     existing = await db.doc_com_reports.find_one({
         "target_type": body.target_type, "target_id": body.target_id, "reporter_id": user["id"],
