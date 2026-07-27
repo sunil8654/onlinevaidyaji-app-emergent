@@ -288,6 +288,15 @@ async def require_admin(user: dict = Depends(current_user)) -> dict:
     return user
 
 
+async def require_super_admin(user: dict = Depends(current_user)) -> dict:
+    """Super-admin (env-seeded) only — for staff/team management."""
+    if not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin only")
+    if user.get("admin_role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super Admin only — this action manages the admin team")
+    return user
+
+
 async def _appt_actor_ids(user: dict) -> tuple[str, Optional[str]]:
     """Return (user_id, doctor_row_id_or_none) for appointment ACL checks.
 
@@ -2162,7 +2171,7 @@ async def on_startup():
         )
     except Exception as e:
         logger.warning(f"Could not create community_likes unique index: {e}")
-    # Seed / upsert single admin
+    # Seed / upsert single admin — this account becomes the SUPER ADMIN.
     existing = await db.users.find_one({"email": ADMIN_EMAIL.lower()})
     if not existing:
         await db.users.insert_one({
@@ -2172,6 +2181,7 @@ async def on_startup():
             "password": hash_password(ADMIN_PASSWORD),
             "role": "admin",
             "is_admin": True,
+            "admin_role": "super_admin",
             "phone": None,
             "created_at": now_iso(),
         })
@@ -2179,7 +2189,7 @@ async def on_startup():
         # ALWAYS sync stored password with current env ADMIN_PASSWORD at startup so
         # rotating the env value invalidates any previously-known credential (SEC-001).
         # Skip only if the current env password already matches (avoids needless writes).
-        set_doc = {"is_admin": True, "role": "admin"}
+        set_doc = {"is_admin": True, "role": "admin", "admin_role": "super_admin"}
         if not verify_password(ADMIN_PASSWORD, existing.get("password", "")):
             set_doc["password"] = hash_password(ADMIN_PASSWORD)
             logger.info("Admin password synced with env ADMIN_PASSWORD.")
@@ -2315,7 +2325,7 @@ async def admin_delete_doctor(doctor_id: str, admin: dict = Depends(require_admi
 @api_router.get("/admin/patients")
 async def admin_list_patients(admin: dict = Depends(require_admin)):
     pipeline = [
-        {"$match": {"role": "patient"}},
+        {"$match": {"role": "patient", "deleted": {"$ne": True}}},
         {"$lookup": {
             "from": "appointments",
             "localField": "id",
@@ -2329,6 +2339,228 @@ async def admin_list_patients(admin: dict = Depends(require_admin)):
     ]
     users = await db.users.aggregate(pipeline).to_list(1000)
     return users
+
+
+@api_router.get("/admin/patients/{patient_id}")
+async def admin_get_patient(patient_id: str, admin: dict = Depends(require_admin)):
+    """Full patient profile for admin viewing/editing."""
+    u = await db.users.find_one({"id": patient_id, "role": "patient"}, {"_id": 0, "password": 0})
+    if not u:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    # Enrich with counts
+    appt_count = await db.appointments.count_documents({"patient_id": patient_id})
+    rx_count = await db.prescriptions.count_documents({"patient_id": patient_id})
+    fam = await db.family_members.count_documents({"user_id": patient_id})
+    u["appointments_count"] = appt_count
+    u["prescriptions_count"] = rx_count
+    u["family_members_count"] = fam
+    return u
+
+
+class AdminPatientUpdate(BaseModel):
+    name: Optional[str] = Field(None, max_length=100)
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = Field(None, max_length=20)
+    dob: Optional[str] = Field(None, max_length=20)
+    gender: Optional[str] = Field(None, max_length=20)
+    blood_group: Optional[str] = Field(None, max_length=10)
+    address: Optional[str] = Field(None, max_length=300)
+    city: Optional[str] = Field(None, max_length=100)
+    notes: Optional[str] = Field(None, max_length=1000)
+
+
+@api_router.put("/admin/patients/{patient_id}")
+async def admin_update_patient(patient_id: str, body: AdminPatientUpdate, admin: dict = Depends(require_admin)):
+    u = await db.users.find_one({"id": patient_id, "role": "patient"})
+    if not u:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    upd = {k: v for k, v in body.dict(exclude_unset=True).items() if v is not None}
+    if not upd:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    if "email" in upd:
+        upd["email"] = upd["email"].lower()
+        # Guard against duplicate emails
+        existing = await db.users.find_one({"email": upd["email"], "id": {"$ne": patient_id}})
+        if existing:
+            raise HTTPException(status_code=409, detail="Another user already has this email")
+    upd["updated_at"] = now_iso()
+    await db.users.update_one({"id": patient_id}, {"$set": upd})
+    await log_activity("admin_patient_update", actor=admin, meta={"patient_id": patient_id, "fields": list(upd.keys())})
+    fresh = await db.users.find_one({"id": patient_id}, {"_id": 0, "password": 0})
+    return fresh
+
+
+@api_router.delete("/admin/patients/{patient_id}")
+async def admin_delete_patient(patient_id: str, admin: dict = Depends(require_admin)):
+    """Soft delete: marks user as deleted, hides from listings, preserves data."""
+    u = await db.users.find_one({"id": patient_id, "role": "patient"})
+    if not u:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    await db.users.update_one({"id": patient_id}, {"$set": {
+        "deleted": True, "deleted_at": now_iso(), "deleted_by": admin["id"],
+    }})
+    await log_activity("admin_patient_delete", actor=admin, meta={"patient_id": patient_id, "email": u.get("email")})
+    return {"ok": True, "soft_deleted": True}
+
+
+@api_router.post("/admin/patients/{patient_id}/restore")
+async def admin_restore_patient(patient_id: str, admin: dict = Depends(require_admin)):
+    r = await db.users.update_one(
+        {"id": patient_id, "role": "patient", "deleted": True},
+        {"$unset": {"deleted": "", "deleted_at": "", "deleted_by": ""}},
+    )
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Deleted patient not found")
+    await log_activity("admin_patient_restore", actor=admin, meta={"patient_id": patient_id})
+    return {"ok": True}
+
+
+# ── Doctor detail + extended CRUD (verification viewer) ─────────────
+@api_router.get("/admin/doctors/{doctor_id}")
+async def admin_get_doctor(doctor_id: str, admin: dict = Depends(require_admin)):
+    """Full doctor profile for verification review — includes registration number,
+    degree, uploaded documents, avatar, and everything admin needs to approve.
+    """
+    d = await db.doctors.find_one({"id": doctor_id}, {"_id": 0})
+    if not d:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+    # Enrich with linked user + counts
+    if d.get("user_id"):
+        u = await db.users.find_one({"id": d["user_id"]}, {"_id": 0, "password": 0})
+        if u:
+            d["user_account"] = u
+        d["appointments_count"] = await db.appointments.count_documents({"doctor_id": doctor_id})
+        d["prescriptions_count"] = await db.prescriptions.count_documents({"doctor_id": doctor_id})
+        d["community_posts_count"] = await db.doc_com_posts.count_documents({"doctor_id": d["user_id"]})
+    return d
+
+
+class AdminDoctorUpdate(BaseModel):
+    name: Optional[str] = Field(None, max_length=100)
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = Field(None, max_length=20)
+    specialty: Optional[str] = Field(None, max_length=100)
+    qualification: Optional[str] = Field(None, max_length=200)
+    experience_years: Optional[int] = Field(None, ge=0, le=80)
+    languages: Optional[List[str]] = None
+    consultation_fee: Optional[int] = Field(None, ge=0, le=100000)
+    bio: Optional[str] = Field(None, max_length=1000)
+    clinic_name: Optional[str] = Field(None, max_length=200)
+    clinic_address: Optional[str] = Field(None, max_length=500)
+    registration_number: Optional[str] = Field(None, max_length=100)
+    verified: Optional[bool] = None
+    avatar_url: Optional[str] = Field(None, max_length=4_500_000)  # base64 avatar
+    admin_notes: Optional[str] = Field(None, max_length=1000)
+
+
+@api_router.put("/admin/doctors/{doctor_id}/full")
+async def admin_update_doctor_full(doctor_id: str, body: AdminDoctorUpdate, admin: dict = Depends(require_admin)):
+    """Admin edits any doctor field (name, fees, bio, verified status, etc.)."""
+    d = await db.doctors.find_one({"id": doctor_id})
+    if not d:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+    upd = {k: v for k, v in body.dict(exclude_unset=True).items() if v is not None}
+    if not upd:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    if "email" in upd:
+        upd["email"] = upd["email"].lower()
+    upd["updated_at"] = now_iso()
+    await db.doctors.update_one({"id": doctor_id}, {"$set": upd})
+    # Also mirror name/email/phone on the linked user account (login goes through users)
+    if d.get("user_id"):
+        user_mirror = {}
+        for f in ("name", "email", "phone"):
+            if f in upd:
+                user_mirror[f] = upd[f]
+        if user_mirror:
+            await db.users.update_one({"id": d["user_id"]}, {"$set": user_mirror})
+    await log_activity("admin_doctor_update_full", actor=admin, meta={"doctor_id": doctor_id, "fields": list(upd.keys())})
+    fresh = await db.doctors.find_one({"id": doctor_id}, {"_id": 0})
+    return fresh
+
+
+# ── Admin staff / team management (super admin only) ────────────────
+class AdminStaffCreate(BaseModel):
+    name: str = Field(..., min_length=2, max_length=100)
+    email: EmailStr
+    password: str = Field(..., min_length=8, max_length=128)
+
+
+class AdminStaffResetPassword(BaseModel):
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+
+def _is_strong_admin_password(pw: str) -> bool:
+    if len(pw) < 8:
+        return False
+    return any(c.isalpha() for c in pw) and any(c.isdigit() for c in pw)
+
+
+@api_router.get("/admin/staff")
+async def admin_list_staff(admin: dict = Depends(require_admin)):
+    """Any admin can see the team roster. Only super_admin can modify."""
+    rows = await db.users.find(
+        {"is_admin": True}, {"_id": 0, "password": 0}
+    ).sort("created_at", 1).to_list(200)
+    return rows
+
+
+@api_router.post("/admin/staff")
+async def admin_create_staff(body: AdminStaffCreate, admin: dict = Depends(require_super_admin)):
+    email = body.email.lower()
+    if not _is_strong_admin_password(body.password):
+        raise HTTPException(status_code=400, detail="Password must be 8+ chars with letters & digits")
+    existing = await db.users.find_one({"email": email})
+    if existing:
+        raise HTTPException(status_code=409, detail="A user with this email already exists")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "name": body.name.strip(),
+        "email": email,
+        "password": hash_password(body.password),
+        "role": "admin",
+        "is_admin": True,
+        "admin_role": "admin",  # regular admin — cannot manage staff
+        "phone": None,
+        "must_change_password": True,  # force change on first login
+        "created_at": now_iso(),
+        "created_by": admin["id"],
+    }
+    await db.users.insert_one(doc.copy())
+    await log_activity("admin_staff_create", actor=admin, meta={"target_email": email})
+    doc.pop("_id", None)
+    doc.pop("password", None)
+    return doc
+
+
+@api_router.delete("/admin/staff/{user_id}")
+async def admin_delete_staff(user_id: str, admin: dict = Depends(require_super_admin)):
+    if user_id == admin["id"]:
+        raise HTTPException(status_code=400, detail="You cannot remove yourself")
+    target = await db.users.find_one({"id": user_id, "is_admin": True})
+    if not target:
+        raise HTTPException(status_code=404, detail="Admin not found")
+    if target.get("admin_role") == "super_admin":
+        raise HTTPException(status_code=400, detail="Super Admin account cannot be removed. Rotate ADMIN_EMAIL/ADMIN_PASSWORD in .env to change it.")
+    await db.users.delete_one({"id": user_id})
+    await log_activity("admin_staff_delete", actor=admin, meta={"target_user_id": user_id, "target_email": target.get("email")})
+    return {"ok": True}
+
+
+@api_router.post("/admin/staff/{user_id}/reset-password")
+async def admin_reset_staff_password(user_id: str, body: AdminStaffResetPassword, admin: dict = Depends(require_super_admin)):
+    target = await db.users.find_one({"id": user_id, "is_admin": True})
+    if not target:
+        raise HTTPException(status_code=404, detail="Admin not found")
+    if not _is_strong_admin_password(body.new_password):
+        raise HTTPException(status_code=400, detail="Password must be 8+ chars with letters & digits")
+    await db.users.update_one({"id": user_id}, {"$set": {
+        "password": hash_password(body.new_password),
+        "must_change_password": True,
+        "temp_password_set_at": now_iso(),
+    }})
+    await log_activity("admin_staff_reset_pw", actor=admin, meta={"target_user_id": user_id, "target_email": target.get("email")})
+    return {"ok": True, "temp_password": body.new_password, "message": "Password reset. Share with the admin — they must change it on their next login."}
 
 
 @api_router.get("/admin/patients/{patient_id}/appointments")

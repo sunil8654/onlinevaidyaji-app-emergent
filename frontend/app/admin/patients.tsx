@@ -43,7 +43,7 @@ export default function AdminPatients() {
         ItemSeparatorComponent={() => <View style={{ height: SPACING.md }} />}
         ListEmptyComponent={<Text style={styles.empty}>No patients yet.</Text>}
         renderItem={({ item }) => (
-          <TouchableOpacity style={styles.card} onPress={() => openHistory(item)} testID={`ap-${item.id}`}>
+          <TouchableOpacity style={styles.card} onPress={() => router.push({ pathname: "/admin/patient/[id]", params: { id: item.id } })} onLongPress={() => openHistory(item)} testID={`ap-${item.id}`}>
             <View style={styles.avatar}>
               <Text style={styles.avatarText}>{item.name?.[0]?.toUpperCase() || "?"}</Text>
             </View>

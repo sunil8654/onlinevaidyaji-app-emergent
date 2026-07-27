@@ -82,7 +82,11 @@ export default function AdminDoctors() {
         ItemSeparatorComponent={() => <View style={{ height: SPACING.md }} />}
         ListEmptyComponent={<Text style={styles.empty}>No entries.</Text>}
         renderItem={({ item }) => (
-          <View style={styles.card} testID={`ad-doc-${item.id}`}>
+          <TouchableOpacity
+            style={styles.card}
+            onPress={() => router.push({ pathname: "/admin/doctor/[id]", params: { id: item.id } })}
+            testID={`ad-doc-${item.id}`}
+          >
             <View style={{ flexDirection: "row", gap: SPACING.md }}>
               <Image source={{ uri: item.avatar_url }} style={styles.avatar} />
               <View style={{ flex: 1 }}>
@@ -128,7 +132,7 @@ export default function AdminDoctors() {
                 <Text style={styles.actText}>{t("remove")}</Text>
               </TouchableOpacity>
             </View>
-          </View>
+          </TouchableOpacity>
         )}
       />
 

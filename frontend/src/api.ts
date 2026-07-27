@@ -436,4 +436,22 @@ export const api = {
   adminDocComReports: (resolved: boolean = false) => request<{ items: any[] }>(`/admin/doctor-community/reports?resolved=${resolved}`),
   adminDocComResolveReport: (id: string) => request(`/admin/doctor-community/reports/${id}/resolve`, "POST"),
   adminDocComBroadcast: (message: string) => request<any>("/admin/doctor-community/broadcast", "POST", { message }),
+
+  // Admin — Staff / team management
+  adminListStaff: () => request<any[]>("/admin/staff"),
+  adminCreateStaff: (name: string, email: string, password: string) =>
+    request<any>("/admin/staff", "POST", { name, email, password }),
+  adminDeleteStaff: (user_id: string) => request<{ ok: boolean }>(`/admin/staff/${user_id}`, "DELETE"),
+  adminResetStaffPassword: (user_id: string, new_password: string) =>
+    request<{ ok: boolean; temp_password: string; message: string }>(`/admin/staff/${user_id}/reset-password`, "POST", { new_password }),
+
+  // Admin — Patient CRUD
+  adminGetPatient: (id: string) => request<any>(`/admin/patients/${id}`),
+  adminUpdatePatient: (id: string, body: any) => request<any>(`/admin/patients/${id}`, "PUT", body),
+  adminDeletePatient: (id: string) => request<{ ok: boolean }>(`/admin/patients/${id}`, "DELETE"),
+  adminRestorePatient: (id: string) => request<{ ok: boolean }>(`/admin/patients/${id}/restore`, "POST"),
+
+  // Admin — Doctor detail + full update
+  adminGetDoctor: (id: string) => request<any>(`/admin/doctors/${id}`),
+  adminUpdateDoctorFull: (id: string, body: any) => request<any>(`/admin/doctors/${id}/full`, "PUT", body),
 };

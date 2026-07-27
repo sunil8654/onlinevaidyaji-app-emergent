@@ -62,6 +62,7 @@ export default function AdminDashboard() {
         <View style={styles.actions}>
           <ActionBtn icon="award" label={t("doctors")} onPress={() => router.push("/admin/doctors")} testID="admin-nav-doctors" />
           <ActionBtn icon="users" label={t("patients")} onPress={() => router.push("/admin/patients")} testID="admin-nav-patients" />
+          <ActionBtn icon="user-check" label="Team & Staff" onPress={() => router.push("/admin/staff")} testID="admin-nav-staff" />
           <ActionBtn icon="key" label="Password resets" onPress={() => router.push("/admin/password-resets")} testID="admin-nav-resets" />
           <ActionBtn icon="message-square" label="Doctor Community" onPress={() => router.push("/admin/doctor-community")} testID="admin-nav-doc-community" />
           <ActionBtn icon="list" label={t("activity_log")} onPress={() => router.push("/admin/activity")} testID="admin-nav-activity" />
