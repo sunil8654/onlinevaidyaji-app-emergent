@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   View, Text, StyleSheet, FlatList, Dimensions, TouchableOpacity, ActivityIndicator,
-  Image,
+  Image, Alert,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
@@ -13,7 +13,7 @@ import { api } from "@/src/api";
 const { width, height } = Dimensions.get("window");
 const REEL_H = height - 60;  // leave room for top bar
 
-function ReelItem({ item, active, onLikeToggle }: any) {
+function ReelItem({ item, active, onLikeToggle, onReport }: any) {
   const player = useVideoPlayer(item.video_url, (p) => {
     p.loop = true;
     p.muted = false;
@@ -86,6 +86,10 @@ function ReelItem({ item, active, onLikeToggle }: any) {
           <Feather name="eye" size={22} color={COLORS.surface} />
           <Text style={styles.actionText}>{item.views_count || 0}</Text>
         </View>
+        <TouchableOpacity onPress={() => onReport?.(item)} style={styles.actionBtn} testID={`reel-report-${item.id}`}>
+          <Feather name="flag" size={22} color={COLORS.surface} />
+          <Text style={styles.actionText}>Report</Text>
+        </TouchableOpacity>
       </View>
     </View>
   );
@@ -117,6 +121,24 @@ export default function ReelsFeed() {
   }, [start]);
 
   useEffect(() => { load(); }, [load]);
+
+  const onReport = useCallback((reel: any) => {
+    Alert.alert(
+      "Report this reel?",
+      "This reel will be flagged for admin moderator review. Please only report content that violates community guidelines.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Report", style: "destructive", onPress: async () => {
+          try {
+            await api.docComReport("reel", reel.id, "Inappropriate content");
+            Alert.alert("Reported", "Thanks — a moderator will review this reel shortly.");
+          } catch (e: any) {
+            Alert.alert("Could not report", e?.message || "Please try again");
+          }
+        } },
+      ],
+    );
+  }, []);
 
   if (loading) {
     return <View style={styles.center}><ActivityIndicator size="large" color={COLORS.surface} /></View>;
@@ -161,7 +183,7 @@ export default function ReelsFeed() {
             if (i !== activeIdx) setActiveIdx(i);
           }}
           renderItem={({ item, index }) => (
-            <ReelItem item={item} active={index === activeIdx} />
+            <ReelItem item={item} active={index === activeIdx} onReport={onReport} />
           )}
         />
       )}

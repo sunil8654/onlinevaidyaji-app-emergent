@@ -31,6 +31,13 @@ PATIENT_EMAIL = "patient1@vaidhyaji.example.com"
 PATIENT_PASSWORD = "Vaidhyaji@123"
 
 
+# --- SEC-001 patch: raw http(s) URLs are now rejected everywhere. Regression
+# tests updated to use RFC-compliant data URIs with allowlisted MIME types. ---
+IMG_DATA_URI = "data:image/png;base64," + base64.b64encode(b"tiny png bytes").decode()
+IMG_JPG_DATA_URI = "data:image/jpeg;base64," + base64.b64encode(b"tiny jpg bytes").decode()
+VIDEO_DATA_URI = "data:video/mp4;base64," + base64.b64encode(b"tiny mp4 bytes").decode()
+
+
 # ─────────── helpers ───────────
 
 def _h(tok: str) -> dict:
@@ -202,7 +209,7 @@ class TestGuardPhaseB:
 class TestStories:
     def test_create_story_url(self, doctor_a):
         body = {
-            "media_url": "https://example.com/story.jpg",
+            "media_url": IMG_JPG_DATA_URI,
             "media_type": "image",
             "caption": "TEST story A",
         }
@@ -225,7 +232,7 @@ class TestStories:
     def test_stories_feed_own_bucket_first(self, doctor_a, doctor_b):
         # doctor_a already has stories; doctor_b creates one too and doctor_a follows B
         rb = requests.post(f"{API}/community/doctor/stories", headers=_h(doctor_b["token"]),
-                           json={"media_url": "https://example.com/b.jpg"}, timeout=15)
+                           json={"media_url": IMG_JPG_DATA_URI}, timeout=15)
         assert rb.status_code == 200
 
         # A follows B so B's stories appear in A's feed
@@ -256,7 +263,7 @@ class TestStories:
     def test_view_story_idempotent(self, doctor_a, doctor_b):
         # doctor_b creates a fresh story; doctor_a views it twice
         rb = requests.post(f"{API}/community/doctor/stories", headers=_h(doctor_b["token"]),
-                           json={"media_url": "https://example.com/v.jpg"}, timeout=15)
+                           json={"media_url": IMG_JPG_DATA_URI}, timeout=15)
         sid = rb.json()["id"]
 
         r1 = requests.post(f"{API}/community/doctor/stories/{sid}/view",
@@ -279,7 +286,7 @@ class TestStories:
 
     def test_delete_story_author_only(self, doctor_a, doctor_b):
         rb = requests.post(f"{API}/community/doctor/stories", headers=_h(doctor_a["token"]),
-                           json={"media_url": "https://example.com/del.jpg"}, timeout=15)
+                           json={"media_url": IMG_JPG_DATA_URI}, timeout=15)
         sid = rb.json()["id"]
         # non-author cannot delete
         r_forbid = requests.delete(f"{API}/community/doctor/stories/{sid}",
@@ -385,8 +392,8 @@ class TestDMs:
     def test_send_image_only_ok(self, doctor_a, dm_thread):
         r = requests.post(f"{API}/community/doctor/dm/threads/{dm_thread['id']}/messages",
                           headers=_h(doctor_a["token"]),
-                          json={"image_url": "https://example.com/photo.jpg"}, timeout=15)
-        assert r.status_code == 200 and r.json()["image_url"].startswith("http")
+                          json={"image_url": IMG_JPG_DATA_URI}, timeout=15)
+        assert r.status_code == 200 and r.json()["image_url"].startswith("data:image/")
 
     def test_non_participant_403(self, doctor_a, doctor_b, dm_thread, admin_token):
         # Create a third verified doctor
@@ -419,8 +426,8 @@ class TestDMs:
 @pytest.fixture(scope="session")
 def sample_reel(doctor_a):
     body = {
-        "video_url": "https://example.com/reel.mp4",
-        "thumbnail_url": "https://example.com/thumb.jpg",
+        "video_url": VIDEO_DATA_URI,
+        "thumbnail_url": IMG_JPG_DATA_URI,
         "caption": "TEST reel #ayurveda",
         "hashtags": ["#Ayurveda", "wellness"],
         "duration_sec": 15,
@@ -496,7 +503,7 @@ class TestReels:
     def test_delete_reel_author_only(self, doctor_a, doctor_b):
         # Create a fresh reel to delete
         r = requests.post(f"{API}/community/doctor/reels", headers=_h(doctor_a["token"]),
-                          json={"video_url": "https://example.com/del.mp4", "caption": "x"},
+                          json={"video_url": VIDEO_DATA_URI, "caption": "x"},
                           timeout=15)
         assert r.status_code == 200
         rid = r.json()["id"]

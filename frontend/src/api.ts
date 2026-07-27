@@ -423,8 +423,20 @@ export const api = {
   docComNotifications: () => request<{ items: any[]; unread: number }>("/community/doctor/notifications"),
   docComReadNotifications: () => request<{ ok: boolean }>("/community/doctor/notifications/read", "POST"),
 
-  docComReport: (target_type: "post" | "comment", target_id: string, reason: string) =>
+  docComReport: (target_type: "post" | "comment" | "reel" | "story" | "dm_message", target_id: string, reason: string) =>
     request<{ ok: boolean; already: boolean }>("/community/doctor/report", "POST", { target_type, target_id, reason }),
+
+  // Admin moderation for Phase B media
+  adminHideReel: (reel_id: string, reason?: string) =>
+    request<{ ok: boolean }>(`/admin/doctor-community/reels/${reel_id}/hide`, "POST", { reason: reason || "Removed by admin" }),
+  adminUnhideReel: (reel_id: string) =>
+    request<{ ok: boolean }>(`/admin/doctor-community/reels/${reel_id}/unhide`, "POST"),
+  adminDeleteReel: (reel_id: string) =>
+    request<{ deleted: boolean }>(`/admin/doctor-community/reels/${reel_id}`, "DELETE"),
+  adminDeleteStory: (story_id: string) =>
+    request<{ deleted: boolean }>(`/admin/doctor-community/stories/${story_id}`, "DELETE"),
+  adminRedactDM: (message_id: string) =>
+    request<{ ok: boolean; redacted: boolean }>(`/admin/doctor-community/dm/messages/${message_id}`, "DELETE"),
 
   // ── Vaidya Charcha Phase B — Stories / DMs / Reels ─────────────
   // Stories (24h)

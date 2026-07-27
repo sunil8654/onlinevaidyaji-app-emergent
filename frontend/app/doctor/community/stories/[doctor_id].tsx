@@ -159,6 +159,32 @@ export default function StoryViewer() {
             <Feather name="trash-2" size={18} color={COLORS.surface} />
           </TouchableOpacity>
         )}
+        {!isMe && (
+          <TouchableOpacity
+            onPress={() => {
+              setPaused(true);
+              Alert.alert(
+                "Report this story?",
+                "Only report content that violates community guidelines. Admins will review shortly.",
+                [
+                  { text: "Cancel", style: "cancel", onPress: () => setPaused(false) },
+                  { text: "Report", style: "destructive", onPress: async () => {
+                    try {
+                      await api.docComReport("story", currentStory.id, "Inappropriate content");
+                      Alert.alert("Reported", "A moderator will review this story shortly.");
+                    } catch (e: any) {
+                      Alert.alert("Could not report", e?.message || "Try again");
+                    } finally { setPaused(false); }
+                  } },
+                ],
+              );
+            }}
+            style={styles.iconBtn}
+            testID="story-report"
+          >
+            <Feather name="flag" size={18} color={COLORS.surface} />
+          </TouchableOpacity>
+        )}
         <TouchableOpacity onPress={() => router.back()} style={styles.iconBtn} testID="story-close">
           <Feather name="x" size={22} color={COLORS.surface} />
         </TouchableOpacity>

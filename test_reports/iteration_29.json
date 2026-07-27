@@ -1,0 +1,44 @@
+{
+  "summary": "Security-fix verification for Vaidya Charcha Phase B (SEC-001 / SEC-002 / SEC-003). Added /app/backend/tests/test_iter29_security_fixes.py — 34 targeted tests covering media allowlist enforcement, moderation for reels/stories/DMs, admin hide/unhide/delete/redact flows, admin reports hydration, reel view dedup, and DM thread creation rate-limit. Result: 34/34 PASSED (34.20s cold, 20s warm). Also updated /app/backend/tests/test_iter28_vaidya_charcha_phase_b.py to swap raw https://example.com/* URLs to base64 data URIs (required after SEC-001; every other assertion untouched). Iter28 continues to pass when run cold. All three SEC fixes verified end-to-end: (1) raw http(s) media URLs are rejected 400 across stories/reels/DMs; SVG / octet-stream / malformed data URIs are rejected 400; allowlisted MIMEs (image/jpeg,png,webp; video/mp4,quicktime) are accepted. (2) reports accept reel/story/dm_message; unknown target → 404; non-participant DM report → 403; duplicate → {ok:true,already:true}. Admin can hide/unhide/delete reels (feed hides + individual GET 404); delete stories; redact DM messages (text='[Removed by moderator]', image_url='', both participants still see the message). DELETE cascades: reel_likes + reel_views + related reports auto-resolved. Admin reports listing now hydrates story/reel/dm_message target details (dm_message includes sender snapshot). (3) reel/{id}/view is idempotent per doctor (second call returns already:true, count unchanged); DM /threads POST rate-limits at 30/hour, 32-call burst reliably hits 429 or ingress connection-drop.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/auth/login (global limiter)", "issue": "Login rate limit is aggressive enough that running iter29 + iter28 back-to-back cascades into 429s on session-fixture logins in the second suite. Wait ≥3 min between full-suite runs. Same finding as iter28."},
+      {"endpoint": "POST /api/community/doctor/reels (per-user quota 10/hour)", "issue": "iter29 creates ~6 reels on drtest to exercise SEC-002 hide/unhide/delete/hydrate flows. Re-running iter28 immediately after iter29 exhausts drtest's 10/hour reel quota → sample_reel fixture 429s. Consider raising the ceiling in test mode, or scoping the reel limiter with an env-controlled bypass."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter29_security_fixes.py",
+    "/app/backend/tests/test_iter28_vaidya_charcha_phase_b.py",
+    "/app/test_reports/pytest/pytest_iter29.xml",
+    "/app/test_reports/pytest/pytest_iter28_rerun.xml"
+  ],
+  "action_items": [
+    "No code fixes required — all three security findings are correctly addressed by /app/backend/server.py (helper _validate_media_uri + extended DoctorReportIn + admin reel/story/dm endpoints + doc_com_reel_views dedupe + dcom:dm-start:{uid} rate_limit(30/hour)).",
+    "OPTIONAL: expose an ENV-controlled bypass or higher ceilings for /api/auth/login and community rate-limits during automated test runs so full regressions can be re-run without a cool-off delay.",
+    "OPTIONAL: consistency polish — StoryIn.media_url still has Pydantic max_length=6_000_000 while _validate_media_uri raises its own 400 for oversize; the current 422-vs-400 asymmetry documented in iter28 also applies here. Consider dropping Pydantic length caps so the handler's 400 always wins."
+  ],
+  "critical_code_review_comments": [
+    "SEC-001 correctly rejects raw http(s) unless ALLOWED_MEDIA_HOSTS is populated — good default-deny stance. Consider validating base64 payload actually decodes (right now any data:image/png;base64,junk is accepted).",
+    "SEC-002 admin_delete_reel/story cascade cleans reel_likes+reel_views+resolves reports — good. admin_delete_dm_message keeps the row and redacts — chat continuity preserved.",
+    "SEC-003 dedupe uses doc_com_reel_views collection with (reel_id, doctor_id); consider adding a unique compound index at startup to prevent race-condition double increments under concurrency.",
+    "DM rate_limit key is per-user only — a malicious user with multiple tokens for the same account still gets 30/hour, which is correct.",
+    "server.py is now 5842 lines. Prior review already flagged split into modules; SEC additions add ~150 more lines. Splitting is now overdue."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter28_vaidya_charcha_phase_b.py (regression: swapped http URLs → data URIs so SEC-001 doesn't reject the fixtures)",
+    "/app/backend/tests/test_iter29_security_fixes.py (NEW — 34 tests)"
+  ],
+  "success_rate": {"backend": "34/34 (100%) iter29 cold run; iter28 34/34 on cold run (5 errors + 1 fail only when back-to-back with iter29 — pure rate-limit collateral, not a code defect)", "frontend": "n/a (skipped per request)"},
+  "seed_data_creation": "Idempotent. Reuses drtest@vaidhyaji.example.com and creates fresh 'TEST_sec29B_*', 'TEST_sec29C_*', 'TEST_sec29rl_*' verified doctors per session. All test artefacts (stories/reels/DMs/reports) are created under these TEST_ accounts and are safe to purge.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "The Phase-B iter28 tests were updated to use data URIs (SEC-001 requires that now). If you run iter29 + iter28 in the same shell within ~5 minutes, drtest's reel quota (10/hour) can be exhausted by iter29's SEC-002 admin tests — this shows up as 429 on iter28's sample_reel fixture, NOT a real regression. Wait ≥5 minutes or run only one at a time. Base URL: https://swasth-daily.preview.emergentagent.com (EXPO_PUBLIC_BACKEND_URL). Verified doctor: drtest@vaidhyaji.example.com / Doctor@Vaidhya123. Admin: admin@vaidhyaji.com / ADMIN_PASSWORD.",
+  "rca_of_issue": "N/A — no defects found. The SEC-001/002/003 changes in server.py behave exactly as specified. Only environmental note: rate-limits (login 429 window, reel 10/hour, dm-start 30/hour) are strict enough to make consecutive full-suite reruns flake on shared fixtures — this is a testing ergonomics issue, not a production bug."
+}

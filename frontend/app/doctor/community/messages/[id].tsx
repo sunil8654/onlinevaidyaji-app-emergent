@@ -132,7 +132,35 @@ export default function ChatScreen() {
           <Feather name="arrow-left" size={22} color={COLORS.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.title} numberOfLines={1}>{name || "Chat"}</Text>
-        <View style={{ width: 22 }} />
+        <TouchableOpacity
+          onPress={() => {
+            // Report the most recent message from the other side
+            const target = [...messages].reverse().find((m) => m.sender_id !== meId && !m.__sending);
+            if (!target) {
+              Alert.alert("Nothing to report", "There's no message from the other doctor yet.");
+              return;
+            }
+            Alert.alert(
+              "Report a message?",
+              "This will flag the latest message from the other doctor for admin review.",
+              [
+                { text: "Cancel", style: "cancel" },
+                { text: "Report", style: "destructive", onPress: async () => {
+                  try {
+                    await api.docComReport("dm_message", target.id, "Inappropriate message");
+                    Alert.alert("Reported", "A moderator will review this conversation shortly.");
+                  } catch (e: any) {
+                    Alert.alert("Could not report", e?.message || "Try again");
+                  }
+                } },
+              ],
+            );
+          }}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          testID="chat-report"
+        >
+          <Feather name="flag" size={18} color={COLORS.textMuted} />
+        </TouchableOpacity>
       </View>
 
       <KeyboardAvoidingView

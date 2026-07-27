@@ -4575,7 +4575,7 @@ class DoctorCommentIn(BaseModel):
 
 
 class DoctorReportIn(BaseModel):
-    target_type: Literal["post", "comment"]
+    target_type: Literal["post", "comment", "reel", "story", "dm_message"]
     target_id: str = Field(..., max_length=100)
     reason: str = Field(..., max_length=300)
 
@@ -5078,8 +5078,23 @@ async def doc_com_report(body: DoctorReportIn, request: Request, user: dict = De
     # Verify the target actually exists before persisting
     if body.target_type == "post":
         target = await db.doc_com_posts.find_one({"id": body.target_id}, {"_id": 0, "id": 1})
-    else:
+    elif body.target_type == "comment":
         target = await db.doc_com_comments.find_one({"id": body.target_id}, {"_id": 0, "id": 1})
+    elif body.target_type == "reel":
+        target = await db.doc_com_reels.find_one({"id": body.target_id}, {"_id": 0, "id": 1})
+    elif body.target_type == "story":
+        target = await db.doc_com_stories.find_one({"id": body.target_id}, {"_id": 0, "id": 1})
+    elif body.target_type == "dm_message":
+        # For DMs, only participants of the thread may report a message
+        msg = await db.doc_com_dm_messages.find_one({"id": body.target_id}, {"_id": 0, "id": 1, "thread_id": 1})
+        if not msg:
+            raise HTTPException(status_code=404, detail="Reported item not found")
+        thread = await db.doc_com_dm_threads.find_one({"id": msg["thread_id"]}, {"_id": 0, "participants": 1})
+        if not thread or user["id"] not in thread.get("participants", []):
+            raise HTTPException(status_code=403, detail="You can only report messages in your own conversations")
+        target = msg
+    else:  # pragma: no cover - Literal guards this
+        target = None
     if not target:
         raise HTTPException(status_code=404, detail="Reported item not found")
     # De-duplicate: one report per (target, reporter)
@@ -5175,13 +5190,98 @@ async def admin_list_reports(admin: dict = Depends(require_admin), resolved: boo
     ).sort("at", -1).limit(limit).to_list(limit)
     for r in rows:
         r["reporter"] = await _doctor_snapshot(r["reporter_id"])
-        if r["target_type"] == "post":
+        tt = r["target_type"]
+        if tt == "post":
             p = await db.doc_com_posts.find_one({"id": r["target_id"]}, {"_id": 0, "id": 1, "doctor_id": 1, "caption": 1, "hidden": 1})
             r["post"] = p
-        else:
+        elif tt == "comment":
             c = await db.doc_com_comments.find_one({"id": r["target_id"]}, {"_id": 0})
             r["comment"] = c
+        elif tt == "reel":
+            rl = await db.doc_com_reels.find_one({"id": r["target_id"]}, {"_id": 0, "id": 1, "doctor_id": 1, "caption": 1, "hidden": 1, "thumbnail_url": 1})
+            r["reel"] = rl
+        elif tt == "story":
+            st = await db.doc_com_stories.find_one({"id": r["target_id"]}, {"_id": 0, "id": 1, "doctor_id": 1, "caption": 1, "media_type": 1, "expires_at": 1})
+            r["story"] = st
+        elif tt == "dm_message":
+            msg = await db.doc_com_dm_messages.find_one({"id": r["target_id"]}, {"_id": 0, "id": 1, "thread_id": 1, "sender_id": 1, "text": 1, "created_at": 1})
+            if msg:
+                msg["sender"] = await _doctor_snapshot(msg["sender_id"])
+            r["dm_message"] = msg
     return {"items": rows}
+
+
+# ── Admin moderation for Reels ──────────────────────────────────────
+@api_router.post("/admin/doctor-community/reels/{reel_id}/hide")
+async def admin_hide_reel(reel_id: str, body: AdminHideReasonIn, admin: dict = Depends(require_admin)):
+    r = await db.doc_com_reels.update_one(
+        {"id": reel_id},
+        {"$set": {"hidden": True, "hidden_reason": body.reason, "hidden_at": now_iso(), "hidden_by": admin["id"]}},
+    )
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Reel not found")
+    await log_activity("doc_community_hide_reel", actor=admin, meta={"reel_id": reel_id, "reason": body.reason})
+    return {"ok": True}
+
+
+@api_router.post("/admin/doctor-community/reels/{reel_id}/unhide")
+async def admin_unhide_reel(reel_id: str, admin: dict = Depends(require_admin)):
+    r = await db.doc_com_reels.update_one(
+        {"id": reel_id},
+        {"$set": {"hidden": False, "hidden_reason": None}},
+    )
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Reel not found")
+    return {"ok": True}
+
+
+@api_router.delete("/admin/doctor-community/reels/{reel_id}")
+async def admin_delete_reel(reel_id: str, admin: dict = Depends(require_admin)):
+    r = await db.doc_com_reels.find_one({"id": reel_id}, {"_id": 0, "id": 1, "doctor_id": 1})
+    if not r:
+        raise HTTPException(status_code=404, detail="Reel not found")
+    await db.doc_com_reels.delete_one({"id": reel_id})
+    await db.doc_com_reel_likes.delete_many({"reel_id": reel_id})
+    await db.doc_com_reel_views.delete_many({"reel_id": reel_id})
+    await db.doc_com_reports.update_many({"target_type": "reel", "target_id": reel_id}, {"$set": {"resolved": True, "resolved_at": now_iso(), "resolved_by": admin["id"]}})
+    await log_activity("doc_community_delete_reel", actor=admin, meta={"reel_id": reel_id, "author_id": r["doctor_id"]})
+    return {"deleted": True}
+
+
+# ── Admin moderation for Stories ────────────────────────────────────
+@api_router.delete("/admin/doctor-community/stories/{story_id}")
+async def admin_delete_story(story_id: str, admin: dict = Depends(require_admin)):
+    s = await db.doc_com_stories.find_one({"id": story_id}, {"_id": 0, "id": 1, "doctor_id": 1})
+    if not s:
+        raise HTTPException(status_code=404, detail="Story not found")
+    await db.doc_com_stories.delete_one({"id": story_id})
+    await db.doc_com_story_views.delete_many({"story_id": story_id})
+    await db.doc_com_reports.update_many({"target_type": "story", "target_id": story_id}, {"$set": {"resolved": True, "resolved_at": now_iso(), "resolved_by": admin["id"]}})
+    await log_activity("doc_community_delete_story", actor=admin, meta={"story_id": story_id, "author_id": s["doctor_id"]})
+    return {"deleted": True}
+
+
+# ── Admin moderation for Direct Messages ────────────────────────────
+@api_router.delete("/admin/doctor-community/dm/messages/{message_id}")
+async def admin_delete_dm_message(message_id: str, admin: dict = Depends(require_admin)):
+    """Redact an abusive DM message. Removes body but keeps the row so both users
+    see 'Removed by moderator' rather than a broken conversation."""
+    m = await db.doc_com_dm_messages.find_one({"id": message_id}, {"_id": 0, "id": 1, "sender_id": 1, "thread_id": 1})
+    if not m:
+        raise HTTPException(status_code=404, detail="Message not found")
+    await db.doc_com_dm_messages.update_one(
+        {"id": message_id},
+        {"$set": {
+            "text": "[Removed by moderator]",
+            "image_url": "",
+            "redacted": True,
+            "redacted_at": now_iso(),
+            "redacted_by": admin["id"],
+        }},
+    )
+    await db.doc_com_reports.update_many({"target_type": "dm_message", "target_id": message_id}, {"$set": {"resolved": True, "resolved_at": now_iso(), "resolved_by": admin["id"]}})
+    await log_activity("doc_community_redact_dm", actor=admin, meta={"message_id": message_id, "sender_id": m["sender_id"], "thread_id": m["thread_id"]})
+    return {"ok": True, "redacted": True}
 
 
 @api_router.post("/admin/doctor-community/reports/{report_id}/resolve")
@@ -5244,6 +5344,58 @@ DM_MAX_IMG_BYTES = 4_500_000
 REEL_MAX_VIDEO_BYTES = 12_000_000  # ~12 MB base64
 REEL_MAX_CAPTION = 2200
 
+# SEC-001 fix: media allowlist
+ALLOWED_IMAGE_MIMES = {"image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif"}
+ALLOWED_VIDEO_MIMES = {"video/mp4", "video/quicktime", "video/webm", "video/x-m4v"}
+# If we ever want to allow a remote CDN, add the host here. Empty = strict data-URI-only.
+ALLOWED_MEDIA_HOSTS: set = set()
+
+
+def _validate_media_uri(uri: str, kind: Literal["image", "video"], *, max_bytes: int, field_name: str = "media") -> str:
+    """
+    SEC-001: Only accept `data:` URIs with a MIME whitelist, or URLs from an
+    explicit allowlist of trusted hosts. Rejects arbitrary http(s) URLs that
+    would let a doctor plant a tracker or hostile server for other doctors'
+    apps to auto-fetch.
+    """
+    if not uri or not isinstance(uri, str):
+        raise HTTPException(status_code=400, detail=f"{field_name} is required")
+    uri_l = uri.strip()
+    if uri_l.startswith("data:"):
+        # Parse MIME from data URI
+        try:
+            head, _b64 = uri_l.split(",", 1)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"{field_name}: malformed data URI")
+        # head looks like: data:image/jpeg;base64
+        mime = head[5:].split(";", 1)[0].strip().lower()
+        allowed = ALLOWED_IMAGE_MIMES if kind == "image" else ALLOWED_VIDEO_MIMES
+        if mime not in allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{field_name}: unsupported media type '{mime}'. Allowed: {', '.join(sorted(allowed))}",
+            )
+        if len(uri_l) > max_bytes:
+            raise HTTPException(status_code=400, detail=f"{field_name} too large (max {max_bytes // 1_000_000} MB)")
+        return uri_l
+    # Non-data URI: only allow explicit allowlisted hosts
+    if not ALLOWED_MEDIA_HOSTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field_name}: only uploaded media is allowed. Please attach a photo or video from your device.",
+        )
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(uri_l)
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"{field_name}: invalid URL")
+    if parsed.scheme not in ("https",):
+        raise HTTPException(status_code=400, detail=f"{field_name}: only https URLs allowed")
+    host = (parsed.hostname or "").lower()
+    if host not in ALLOWED_MEDIA_HOSTS:
+        raise HTTPException(status_code=400, detail=f"{field_name}: host '{host}' is not on the media allowlist")
+    return uri_l
+
 
 def _story_expires_at() -> str:
     return (datetime.utcnow() + timedelta(hours=STORY_TTL_HOURS)).isoformat() + "Z"
@@ -5270,8 +5422,12 @@ class StoryIn(BaseModel):
 @api_router.post("/community/doctor/stories")
 async def doc_com_create_story(body: StoryIn, request: Request, user: dict = Depends(require_doctor_community)):
     await rate_limit(request, f"dcom:story:{user['id']}", max_calls=STORY_MAX_ACTIVE_PER_DOCTOR, window_seconds=3600)
-    if body.media_url.startswith("data:") and len(body.media_url) > DM_MAX_IMG_BYTES:
-        raise HTTPException(status_code=400, detail="Story media too large (max 4 MB)")
+    # SEC-001: validate media type & host allowlist. Stories are image-only in the client.
+    validated_media = _validate_media_uri(
+        body.media_url, "image" if body.media_type == "image" else "video",
+        max_bytes=DM_MAX_IMG_BYTES if body.media_type == "image" else REEL_MAX_VIDEO_BYTES,
+        field_name="story media",
+    )
     active = await db.doc_com_stories.count_documents({
         "doctor_id": user["id"], "expires_at": {"$gt": now_iso()},
     })
@@ -5280,7 +5436,7 @@ async def doc_com_create_story(body: StoryIn, request: Request, user: dict = Dep
     doc = {
         "id": str(uuid.uuid4()),
         "doctor_id": user["id"],
-        "media_url": body.media_url,
+        "media_url": validated_media,
         "media_type": body.media_type,
         "caption": (body.caption or "").strip(),
         "views_count": 0,
@@ -5420,7 +5576,9 @@ async def doc_com_dm_threads(user: dict = Depends(require_doctor_community)):
 
 
 @api_router.post("/community/doctor/dm/threads")
-async def doc_com_dm_start(body: DMStartIn, user: dict = Depends(require_doctor_community)):
+async def doc_com_dm_start(body: DMStartIn, request: Request, user: dict = Depends(require_doctor_community)):
+    # SEC-003: cap thread creation to prevent inbox spam
+    await rate_limit(request, f"dcom:dm-start:{user['id']}", max_calls=30, window_seconds=3600)
     if body.target_id == user["id"]:
         raise HTTPException(status_code=400, detail="Cannot DM yourself")
     target = await db.doctors.find_one({"user_id": body.target_id}, {"_id": 0, "verified": 1})
@@ -5473,8 +5631,9 @@ async def doc_com_dm_send(thread_id: str, body: DMSendIn, request: Request,
     img = body.image_url or ""
     if not text and not img:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
-    if img and img.startswith("data:") and len(img) > DM_MAX_IMG_BYTES:
-        raise HTTPException(status_code=400, detail="Image too large (max 4 MB)")
+    # SEC-001: validate any attached media
+    if img:
+        img = _validate_media_uri(img, "image", max_bytes=DM_MAX_IMG_BYTES, field_name="attached image")
     t = await db.doc_com_dm_threads.find_one({"id": thread_id}, {"_id": 0, "participants": 1})
     if not t:
         raise HTTPException(status_code=404, detail="Thread not found")
@@ -5550,13 +5709,16 @@ async def _hydrate_reels(reels: List[Dict[str, Any]], me_id: str) -> List[Dict[s
 @api_router.post("/community/doctor/reels")
 async def doc_com_create_reel(body: ReelIn, request: Request, user: dict = Depends(require_doctor_community)):
     await rate_limit(request, f"dcom:reel:{user['id']}", max_calls=10, window_seconds=3600)
-    if body.video_url.startswith("data:") and len(body.video_url) > REEL_MAX_VIDEO_BYTES:
-        raise HTTPException(status_code=400, detail="Video too large (max 12 MB — please compress or trim)")
+    # SEC-001: validate video & optional thumbnail
+    validated_video = _validate_media_uri(body.video_url, "video", max_bytes=REEL_MAX_VIDEO_BYTES, field_name="reel video")
+    validated_thumb = ""
+    if body.thumbnail_url:
+        validated_thumb = _validate_media_uri(body.thumbnail_url, "image", max_bytes=2_000_000, field_name="reel thumbnail")
     doc = {
         "id": str(uuid.uuid4()),
         "doctor_id": user["id"],
-        "video_url": body.video_url,
-        "thumbnail_url": body.thumbnail_url or "",
+        "video_url": validated_video,
+        "thumbnail_url": validated_thumb,
         "caption": (body.caption or "").strip(),
         "hashtags": _normalise_hashtags(body.hashtags),
         "duration_sec": float(body.duration_sec or 0),
@@ -5621,7 +5783,17 @@ async def doc_com_reel_like(reel_id: str, user: dict = Depends(require_doctor_co
 
 @api_router.post("/community/doctor/reels/{reel_id}/view")
 async def doc_com_reel_view(reel_id: str, user: dict = Depends(require_doctor_community)):
-    # Best-effort view counter; no unique constraint (Instagram-style).
+    # SEC-003: dedupe views by (reel_id, doctor_id) so counts can't be inflated by refresh loops.
+    exists = await db.doc_com_reels.find_one({"id": reel_id}, {"_id": 0, "id": 1})
+    if not exists:
+        return {"ok": True}  # silent no-op — reel gone
+    existing = await db.doc_com_reel_views.find_one({"reel_id": reel_id, "doctor_id": user["id"]})
+    if existing:
+        return {"ok": True, "already": True}
+    await db.doc_com_reel_views.insert_one({
+        "id": str(uuid.uuid4()),
+        "reel_id": reel_id, "doctor_id": user["id"], "at": now_iso(),
+    })
     await db.doc_com_reels.update_one({"id": reel_id}, {"$inc": {"views_count": 1}})
     return {"ok": True}
 
@@ -5635,6 +5807,7 @@ async def doc_com_delete_reel(reel_id: str, user: dict = Depends(require_doctor_
         raise HTTPException(status_code=403, detail="Only author or admin can delete")
     await db.doc_com_reels.delete_one({"id": reel_id})
     await db.doc_com_reel_likes.delete_many({"reel_id": reel_id})
+    await db.doc_com_reel_views.delete_many({"reel_id": reel_id})
     return {"deleted": True}
 
 
