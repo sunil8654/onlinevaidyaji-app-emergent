@@ -55,7 +55,8 @@
           "color": "#0F4C36",
           "defaultChannel": "default"
         }
-      ]
+      ],
+      "expo-video"
     ],
     "experiments": {
       "typedRoutes": true

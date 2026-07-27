@@ -4620,7 +4620,8 @@ async def _doctor_snapshot(doctor_user_id: str) -> Dict[str, Any]:
     """Small cached-friendly doctor card for post/comment surfacing."""
     d = await db.doctors.find_one(
         {"user_id": doctor_user_id},
-        {"_id": 0, "name": 1, "specialty": 1, "qualification": 1, "avatar_url": 1, "verified": 1, "clinic_name": 1},
+        {"_id": 0, "name": 1, "specialty": 1, "qualification": 1, "avatar_url": 1, "verified": 1,
+         "clinic_name": 1, "clinic_address": 1, "consultation_fee": 1, "experience_years": 1},
     )
     if not d:
         u = await db.users.find_one({"id": doctor_user_id}, {"_id": 0, "name": 1})
@@ -4632,6 +4633,9 @@ async def _doctor_snapshot(doctor_user_id: str) -> Dict[str, Any]:
         "qualification": d.get("qualification") or "",
         "avatar_url": d.get("avatar_url") or "",
         "clinic_name": d.get("clinic_name") or "",
+        "clinic_address": d.get("clinic_address") or "",
+        "consultation_fee": int(d.get("consultation_fee") or 0),
+        "experience_years": int(d.get("experience_years") or 0),
         "verified": bool(d.get("verified", False)),
     }
 
@@ -5225,6 +5229,413 @@ async def admin_doc_community_broadcast(body: BroadcastIn, admin: dict = Depends
     await log_activity("doc_community_broadcast", actor=admin, meta={"post_id": doc["id"], "recipients": len(recipients)})
     doc.pop("_id", None)
     return doc
+
+
+# ══════════════════════════════════════════════════════════════════
+# VAIDYA CHARCHA — PHASE B
+# 24-hour Stories · Direct Messages (1:1) · Reels
+# All routes require the caller to be a verified, non-banned doctor.
+# ══════════════════════════════════════════════════════════════════
+
+STORY_TTL_HOURS = 24
+STORY_MAX_ACTIVE_PER_DOCTOR = 20
+DM_MAX_MSG_LEN = 4000
+DM_MAX_IMG_BYTES = 4_500_000
+REEL_MAX_VIDEO_BYTES = 12_000_000  # ~12 MB base64
+REEL_MAX_CAPTION = 2200
+
+
+def _story_expires_at() -> str:
+    return (datetime.utcnow() + timedelta(hours=STORY_TTL_HOURS)).isoformat() + "Z"
+
+
+def _is_expired(iso_str: str) -> bool:
+    try:
+        # Handle both "...Z" and offset-aware strings.
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        now = datetime.utcnow().replace(tzinfo=dt.tzinfo) if dt.tzinfo else datetime.utcnow()
+        return dt < now
+    except Exception:
+        return False
+
+
+# ───────────────────────── STORIES ─────────────────────────
+
+class StoryIn(BaseModel):
+    media_url: str = Field(..., min_length=8, max_length=6_000_000)  # base64 data URI or http url
+    media_type: Literal["image", "video"] = "image"
+    caption: Optional[str] = Field(None, max_length=280)
+
+
+@api_router.post("/community/doctor/stories")
+async def doc_com_create_story(body: StoryIn, request: Request, user: dict = Depends(require_doctor_community)):
+    await rate_limit(request, f"dcom:story:{user['id']}", max_calls=STORY_MAX_ACTIVE_PER_DOCTOR, window_seconds=3600)
+    if body.media_url.startswith("data:") and len(body.media_url) > DM_MAX_IMG_BYTES:
+        raise HTTPException(status_code=400, detail="Story media too large (max 4 MB)")
+    active = await db.doc_com_stories.count_documents({
+        "doctor_id": user["id"], "expires_at": {"$gt": now_iso()},
+    })
+    if active >= STORY_MAX_ACTIVE_PER_DOCTOR:
+        raise HTTPException(status_code=400, detail="You already have too many active stories")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "doctor_id": user["id"],
+        "media_url": body.media_url,
+        "media_type": body.media_type,
+        "caption": (body.caption or "").strip(),
+        "views_count": 0,
+        "created_at": now_iso(),
+        "expires_at": _story_expires_at(),
+    }
+    await db.doc_com_stories.insert_one(doc.copy())
+    doc.pop("_id", None)
+    doc["author"] = await _doctor_snapshot(user["id"])
+    doc["viewed_by_me"] = False
+    return doc
+
+
+@api_router.get("/community/doctor/stories/feed")
+async def doc_com_stories_feed(user: dict = Depends(require_doctor_community)):
+    """Return active stories grouped by doctor. Own stories first, then followed doctors."""
+    # Followed doctor ids
+    follows = await db.doc_com_follows.find({"follower_id": user["id"]}, {"_id": 0, "following_id": 1}).to_list(1000)
+    followed_ids = {f["following_id"] for f in follows}
+    followed_ids.add(user["id"])
+    now = now_iso()
+    stories = await db.doc_com_stories.find(
+        {"doctor_id": {"$in": list(followed_ids)}, "expires_at": {"$gt": now}}
+    ).sort("created_at", 1).to_list(500)
+    # Views map
+    story_ids = [s["id"] for s in stories]
+    my_views = await db.doc_com_story_views.find(
+        {"story_id": {"$in": story_ids}, "doctor_id": user["id"]}, {"_id": 0, "story_id": 1}
+    ).to_list(len(story_ids) or 1)
+    seen = {v["story_id"] for v in my_views}
+    # Group
+    grouped: Dict[str, Dict[str, Any]] = {}
+    for s in stories:
+        s.pop("_id", None)
+        s["viewed_by_me"] = s["id"] in seen
+        did = s["doctor_id"]
+        if did not in grouped:
+            grouped[did] = {"doctor": await _doctor_snapshot(did), "stories": [], "all_seen": True}
+        grouped[did]["stories"].append(s)
+        if not s["viewed_by_me"]:
+            grouped[did]["all_seen"] = False
+    # Own bucket first
+    ordered: List[Dict[str, Any]] = []
+    if user["id"] in grouped:
+        own = grouped.pop(user["id"])
+        own["is_me"] = True
+        ordered.append(own)
+    for bucket in grouped.values():
+        bucket["is_me"] = False
+        ordered.append(bucket)
+    return {"items": ordered}
+
+
+@api_router.get("/community/doctor/stories/by/{doctor_id}")
+async def doc_com_stories_by_doctor(doctor_id: str, user: dict = Depends(require_doctor_community)):
+    now = now_iso()
+    stories = await db.doc_com_stories.find(
+        {"doctor_id": doctor_id, "expires_at": {"$gt": now}}, {"_id": 0}
+    ).sort("created_at", 1).to_list(50)
+    story_ids = [s["id"] for s in stories]
+    my_views = await db.doc_com_story_views.find(
+        {"story_id": {"$in": story_ids}, "doctor_id": user["id"]}, {"_id": 0, "story_id": 1}
+    ).to_list(len(story_ids) or 1)
+    seen = {v["story_id"] for v in my_views}
+    for s in stories:
+        s["viewed_by_me"] = s["id"] in seen
+    author = await _doctor_snapshot(doctor_id)
+    return {"author": author, "stories": stories, "is_me": doctor_id == user["id"]}
+
+
+@api_router.post("/community/doctor/stories/{story_id}/view")
+async def doc_com_view_story(story_id: str, user: dict = Depends(require_doctor_community)):
+    s = await db.doc_com_stories.find_one({"id": story_id}, {"_id": 0, "doctor_id": 1, "expires_at": 1})
+    if not s:
+        raise HTTPException(status_code=404, detail="Story not found")
+    if s["doctor_id"] == user["id"]:
+        return {"ok": True, "self": True}
+    existing = await db.doc_com_story_views.find_one({"story_id": story_id, "doctor_id": user["id"]})
+    if existing:
+        return {"ok": True, "already": True}
+    await db.doc_com_story_views.insert_one({
+        "id": str(uuid.uuid4()),
+        "story_id": story_id, "doctor_id": user["id"], "at": now_iso(),
+    })
+    await db.doc_com_stories.update_one({"id": story_id}, {"$inc": {"views_count": 1}})
+    return {"ok": True}
+
+
+@api_router.delete("/community/doctor/stories/{story_id}")
+async def doc_com_delete_story(story_id: str, user: dict = Depends(require_doctor_community)):
+    s = await db.doc_com_stories.find_one({"id": story_id}, {"_id": 0, "doctor_id": 1})
+    if not s:
+        raise HTTPException(status_code=404, detail="Story not found")
+    if s["doctor_id"] != user["id"] and not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Only author or admin can delete")
+    await db.doc_com_stories.delete_one({"id": story_id})
+    await db.doc_com_story_views.delete_many({"story_id": story_id})
+    return {"deleted": True}
+
+
+# ─────────────────────── DIRECT MESSAGES ───────────────────────
+
+class DMStartIn(BaseModel):
+    target_id: str = Field(..., min_length=1, max_length=100)
+
+
+class DMSendIn(BaseModel):
+    text: Optional[str] = Field(None, max_length=DM_MAX_MSG_LEN)
+    image_url: Optional[str] = Field(None, max_length=DM_MAX_IMG_BYTES)
+
+
+def _thread_key(a: str, b: str) -> List[str]:
+    """Canonical sorted pair used to look up a 1:1 thread deterministically."""
+    return sorted([a, b])
+
+
+async def _hydrate_thread(t: Dict[str, Any], me_id: str) -> Dict[str, Any]:
+    t.pop("_id", None)
+    other_id = next((p for p in t.get("participants", []) if p != me_id), None)
+    other = await _doctor_snapshot(other_id) if other_id else {"id": "", "name": "Doctor"}
+    unread_key = f"unread_{me_id}"
+    return {
+        **t,
+        "other": other,
+        "unread": int(t.get(unread_key, 0)),
+    }
+
+
+@api_router.get("/community/doctor/dm/threads")
+async def doc_com_dm_threads(user: dict = Depends(require_doctor_community)):
+    threads = await db.doc_com_dm_threads.find(
+        {"participants": user["id"]}
+    ).sort("last_at", -1).to_list(200)
+    out = [await _hydrate_thread(t, user["id"]) for t in threads]
+    total_unread = sum(t["unread"] for t in out)
+    return {"items": out, "unread_total": total_unread}
+
+
+@api_router.post("/community/doctor/dm/threads")
+async def doc_com_dm_start(body: DMStartIn, user: dict = Depends(require_doctor_community)):
+    if body.target_id == user["id"]:
+        raise HTTPException(status_code=400, detail="Cannot DM yourself")
+    target = await db.doctors.find_one({"user_id": body.target_id}, {"_id": 0, "verified": 1})
+    if not target or not target.get("verified"):
+        raise HTTPException(status_code=404, detail="Doctor not found")
+    tu = await db.users.find_one({"id": body.target_id}, {"_id": 0, "community_banned": 1})
+    if (tu or {}).get("community_banned"):
+        raise HTTPException(status_code=403, detail="This doctor is not available for messages")
+    key = _thread_key(user["id"], body.target_id)
+    existing = await db.doc_com_dm_threads.find_one({"participants_sorted": key})
+    if existing:
+        return await _hydrate_thread(existing, user["id"])
+    doc = {
+        "id": str(uuid.uuid4()),
+        "participants": [user["id"], body.target_id],
+        "participants_sorted": key,
+        "last_message": "",
+        "last_sender_id": None,
+        "last_at": now_iso(),
+        "created_at": now_iso(),
+        f"unread_{user['id']}": 0,
+        f"unread_{body.target_id}": 0,
+    }
+    await db.doc_com_dm_threads.insert_one(doc.copy())
+    return await _hydrate_thread(doc, user["id"])
+
+
+@api_router.get("/community/doctor/dm/threads/{thread_id}/messages")
+async def doc_com_dm_messages(thread_id: str, user: dict = Depends(require_doctor_community),
+                              before: Optional[str] = None, limit: int = 60):
+    limit = min(max(limit, 1), 100)
+    t = await db.doc_com_dm_threads.find_one({"id": thread_id}, {"_id": 0, "participants": 1})
+    if not t:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    if user["id"] not in t["participants"]:
+        raise HTTPException(status_code=403, detail="Not your conversation")
+    q: Dict[str, Any] = {"thread_id": thread_id}
+    if before:
+        q["created_at"] = {"$lt": before}
+    msgs = await db.doc_com_dm_messages.find(q, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
+    msgs.reverse()  # oldest → newest
+    return {"items": msgs}
+
+
+@api_router.post("/community/doctor/dm/threads/{thread_id}/messages")
+async def doc_com_dm_send(thread_id: str, body: DMSendIn, request: Request,
+                          user: dict = Depends(require_doctor_community)):
+    await rate_limit(request, f"dcom:dm:{user['id']}", max_calls=180, window_seconds=3600)
+    text = (body.text or "").strip()
+    img = body.image_url or ""
+    if not text and not img:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    if img and img.startswith("data:") and len(img) > DM_MAX_IMG_BYTES:
+        raise HTTPException(status_code=400, detail="Image too large (max 4 MB)")
+    t = await db.doc_com_dm_threads.find_one({"id": thread_id}, {"_id": 0, "participants": 1})
+    if not t:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    if user["id"] not in t["participants"]:
+        raise HTTPException(status_code=403, detail="Not your conversation")
+    other_id = next(p for p in t["participants"] if p != user["id"])
+    msg = {
+        "id": str(uuid.uuid4()),
+        "thread_id": thread_id,
+        "sender_id": user["id"],
+        "text": text,
+        "image_url": img,
+        "created_at": now_iso(),
+        "read_at": None,
+    }
+    await db.doc_com_dm_messages.insert_one(msg.copy())
+    preview = (text or "📷 Photo")[:120]
+    await db.doc_com_dm_threads.update_one(
+        {"id": thread_id},
+        {"$set": {"last_message": preview, "last_sender_id": user["id"], "last_at": msg["created_at"]},
+         "$inc": {f"unread_{other_id}": 1}},
+    )
+    msg.pop("_id", None)
+    return msg
+
+
+@api_router.post("/community/doctor/dm/threads/{thread_id}/read")
+async def doc_com_dm_read(thread_id: str, user: dict = Depends(require_doctor_community)):
+    t = await db.doc_com_dm_threads.find_one({"id": thread_id}, {"_id": 0, "participants": 1})
+    if not t:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    if user["id"] not in t["participants"]:
+        raise HTTPException(status_code=403, detail="Not your conversation")
+    await db.doc_com_dm_threads.update_one(
+        {"id": thread_id}, {"$set": {f"unread_{user['id']}": 0}}
+    )
+    await db.doc_com_dm_messages.update_many(
+        {"thread_id": thread_id, "sender_id": {"$ne": user["id"]}, "read_at": None},
+        {"$set": {"read_at": now_iso()}},
+    )
+    return {"ok": True}
+
+
+# ─────────────────────── REELS (short video) ───────────────────────
+
+class ReelIn(BaseModel):
+    video_url: str = Field(..., min_length=8, max_length=REEL_MAX_VIDEO_BYTES)  # base64 data URI or http URL
+    thumbnail_url: Optional[str] = Field(None, max_length=2_000_000)
+    caption: Optional[str] = Field(None, max_length=REEL_MAX_CAPTION)
+    hashtags: List[str] = Field(default_factory=list, max_length=MAX_HASHTAGS)
+    duration_sec: Optional[float] = Field(None, ge=0, le=120)
+
+
+async def _hydrate_reels(reels: List[Dict[str, Any]], me_id: str) -> List[Dict[str, Any]]:
+    if not reels:
+        return []
+    doctor_ids = list({r["doctor_id"] for r in reels})
+    doctors: Dict[str, Any] = {did: await _doctor_snapshot(did) for did in doctor_ids}
+    reel_ids = [r["id"] for r in reels]
+    likes = await db.doc_com_reel_likes.find(
+        {"reel_id": {"$in": reel_ids}, "doctor_id": me_id}, {"_id": 0, "reel_id": 1}
+    ).to_list(len(reel_ids))
+    liked = {row["reel_id"] for row in likes}
+    out = []
+    for r in reels:
+        r.pop("_id", None)
+        r["author"] = doctors.get(r["doctor_id"], {"id": r["doctor_id"], "name": "Doctor"})
+        r["liked_by_me"] = r["id"] in liked
+        out.append(r)
+    return out
+
+
+@api_router.post("/community/doctor/reels")
+async def doc_com_create_reel(body: ReelIn, request: Request, user: dict = Depends(require_doctor_community)):
+    await rate_limit(request, f"dcom:reel:{user['id']}", max_calls=10, window_seconds=3600)
+    if body.video_url.startswith("data:") and len(body.video_url) > REEL_MAX_VIDEO_BYTES:
+        raise HTTPException(status_code=400, detail="Video too large (max 12 MB — please compress or trim)")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "doctor_id": user["id"],
+        "video_url": body.video_url,
+        "thumbnail_url": body.thumbnail_url or "",
+        "caption": (body.caption or "").strip(),
+        "hashtags": _normalise_hashtags(body.hashtags),
+        "duration_sec": float(body.duration_sec or 0),
+        "likes_count": 0,
+        "comments_count": 0,
+        "views_count": 0,
+        "hidden": False,
+        "created_at": now_iso(),
+    }
+    await db.doc_com_reels.insert_one(doc.copy())
+    doc.pop("_id", None)
+    doc["author"] = await _doctor_snapshot(user["id"])
+    doc["liked_by_me"] = False
+    return doc
+
+
+@api_router.get("/community/doctor/reels/feed")
+async def doc_com_reels_feed(user: dict = Depends(require_doctor_community),
+                             before: Optional[str] = None, limit: int = 20):
+    limit = min(max(limit, 1), 40)
+    q: Dict[str, Any] = {"hidden": {"$ne": True}}
+    if before:
+        q["created_at"] = {"$lt": before}
+    reels = await db.doc_com_reels.find(q, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
+    return {"items": await _hydrate_reels(reels, user["id"])}
+
+
+@api_router.get("/community/doctor/reels/by/{doctor_id}")
+async def doc_com_reels_by_doctor(doctor_id: str, user: dict = Depends(require_doctor_community), limit: int = 30):
+    limit = min(max(limit, 1), 60)
+    reels = await db.doc_com_reels.find(
+        {"doctor_id": doctor_id, "hidden": {"$ne": True}}, {"_id": 0}
+    ).sort("created_at", -1).limit(limit).to_list(limit)
+    return {"items": await _hydrate_reels(reels, user["id"])}
+
+
+@api_router.get("/community/doctor/reels/{reel_id}")
+async def doc_com_get_reel(reel_id: str, user: dict = Depends(require_doctor_community)):
+    r = await db.doc_com_reels.find_one({"id": reel_id, "hidden": {"$ne": True}}, {"_id": 0})
+    if not r:
+        raise HTTPException(status_code=404, detail="Reel not found")
+    hydrated = await _hydrate_reels([r], user["id"])
+    return hydrated[0]
+
+
+@api_router.post("/community/doctor/reels/{reel_id}/like")
+async def doc_com_reel_like(reel_id: str, user: dict = Depends(require_doctor_community)):
+    r = await db.doc_com_reels.find_one({"id": reel_id}, {"_id": 1})
+    if not r:
+        raise HTTPException(status_code=404, detail="Reel not found")
+    existing = await db.doc_com_reel_likes.find_one({"reel_id": reel_id, "doctor_id": user["id"]})
+    if existing:
+        await db.doc_com_reel_likes.delete_one({"reel_id": reel_id, "doctor_id": user["id"]})
+        await db.doc_com_reels.update_one({"id": reel_id}, {"$inc": {"likes_count": -1}})
+        return {"liked": False}
+    await db.doc_com_reel_likes.insert_one({
+        "reel_id": reel_id, "doctor_id": user["id"], "at": now_iso(),
+    })
+    await db.doc_com_reels.update_one({"id": reel_id}, {"$inc": {"likes_count": 1}})
+    return {"liked": True}
+
+
+@api_router.post("/community/doctor/reels/{reel_id}/view")
+async def doc_com_reel_view(reel_id: str, user: dict = Depends(require_doctor_community)):
+    # Best-effort view counter; no unique constraint (Instagram-style).
+    await db.doc_com_reels.update_one({"id": reel_id}, {"$inc": {"views_count": 1}})
+    return {"ok": True}
+
+
+@api_router.delete("/community/doctor/reels/{reel_id}")
+async def doc_com_delete_reel(reel_id: str, user: dict = Depends(require_doctor_community)):
+    r = await db.doc_com_reels.find_one({"id": reel_id}, {"_id": 0, "doctor_id": 1})
+    if not r:
+        raise HTTPException(status_code=404, detail="Reel not found")
+    if r["doctor_id"] != user["id"] and not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Only author or admin can delete")
+    await db.doc_com_reels.delete_one({"id": reel_id})
+    await db.doc_com_reel_likes.delete_many({"reel_id": reel_id})
+    return {"deleted": True}
 
 
 @api_router.get("/")

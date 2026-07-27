@@ -426,6 +426,35 @@ export const api = {
   docComReport: (target_type: "post" | "comment", target_id: string, reason: string) =>
     request<{ ok: boolean; already: boolean }>("/community/doctor/report", "POST", { target_type, target_id, reason }),
 
+  // ── Vaidya Charcha Phase B — Stories / DMs / Reels ─────────────
+  // Stories (24h)
+  docComStoriesFeed: () => request<{ items: any[] }>("/community/doctor/stories/feed"),
+  docComStoriesBy: (doctor_id: string) => request<{ author: any; stories: any[]; is_me: boolean }>(`/community/doctor/stories/by/${doctor_id}`),
+  docComCreateStory: (body: { media_url: string; media_type?: "image" | "video"; caption?: string }) =>
+    request<any>("/community/doctor/stories", "POST", body),
+  docComViewStory: (story_id: string) => request<{ ok: boolean }>(`/community/doctor/stories/${story_id}/view`, "POST"),
+  docComDeleteStory: (story_id: string) => request<{ deleted: boolean }>(`/community/doctor/stories/${story_id}`, "DELETE"),
+
+  // DMs (1:1)
+  docComDMThreads: () => request<{ items: any[]; unread_total: number }>("/community/doctor/dm/threads"),
+  docComDMStart: (target_id: string) => request<any>("/community/doctor/dm/threads", "POST", { target_id }),
+  docComDMMessages: (thread_id: string, before?: string) =>
+    request<{ items: any[] }>(`/community/doctor/dm/threads/${thread_id}/messages${before ? `?before=${encodeURIComponent(before)}` : ""}`),
+  docComDMSend: (thread_id: string, body: { text?: string; image_url?: string }) =>
+    request<any>(`/community/doctor/dm/threads/${thread_id}/messages`, "POST", body),
+  docComDMRead: (thread_id: string) => request<{ ok: boolean }>(`/community/doctor/dm/threads/${thread_id}/read`, "POST"),
+
+  // Reels
+  docComReelsFeed: (before?: string) =>
+    request<{ items: any[] }>(`/community/doctor/reels/feed${before ? `?before=${encodeURIComponent(before)}` : ""}`),
+  docComReelsBy: (doctor_id: string) => request<{ items: any[] }>(`/community/doctor/reels/by/${doctor_id}`),
+  docComGetReel: (reel_id: string) => request<any>(`/community/doctor/reels/${reel_id}`),
+  docComCreateReel: (body: { video_url: string; thumbnail_url?: string; caption?: string; hashtags?: string[]; duration_sec?: number }) =>
+    request<any>("/community/doctor/reels", "POST", body),
+  docComReelLike: (reel_id: string) => request<{ liked: boolean }>(`/community/doctor/reels/${reel_id}/like`, "POST"),
+  docComReelView: (reel_id: string) => request<{ ok: boolean }>(`/community/doctor/reels/${reel_id}/view`, "POST"),
+  docComDeleteReel: (reel_id: string) => request<{ deleted: boolean }>(`/community/doctor/reels/${reel_id}`, "DELETE"),
+
   // Admin moderation
   adminDocComPin: (post_id: string) => request(`/admin/doctor-community/pin/${post_id}`, "POST"),
   adminDocComUnpin: (post_id: string) => request(`/admin/doctor-community/unpin/${post_id}`, "POST"),

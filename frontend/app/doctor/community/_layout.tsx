@@ -1,11 +1,18 @@
 // Doctor Community — layout with access gate + top bar navigation.
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Slot, useRouter, usePathname } from "expo-router";
+import { Slot, useRouter, usePathname, useFocusEffect } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { api } from "@/src/api";
+
+// Routes that should render full-screen without the community top bar.
+const FULL_SCREEN_ROUTES = [
+  "/doctor/community/stories/",
+  "/doctor/community/messages/",
+  "/doctor/community/reels",
+];
 
 export default function DoctorCommunityLayout() {
   const router = useRouter();
@@ -13,6 +20,18 @@ export default function DoctorCommunityLayout() {
   const [state, setState] = useState<"loading" | "ok" | "blocked">("loading");
   const [reason, setReason] = useState<string>("");
   const [unread, setUnread] = useState(0);
+  const [dmUnread, setDmUnread] = useState(0);
+
+  const loadCounters = useCallback(async () => {
+    try {
+      const [n, d] = await Promise.all([
+        api.docComNotifications().catch(() => ({ unread: 0, items: [] } as any)),
+        api.docComDMThreads().catch(() => ({ unread_total: 0, items: [] } as any)),
+      ]);
+      setUnread(n.unread || 0);
+      setDmUnread(d.unread_total || 0);
+    } catch {}
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -20,10 +39,7 @@ export default function DoctorCommunityLayout() {
         const r = await api.docComAccess();
         if (r.has_access) {
           setState("ok");
-          try {
-            const n = await api.docComNotifications();
-            setUnread(n.unread || 0);
-          } catch {}
+          loadCounters();
         } else {
           setReason(r.reason || "");
           setState("blocked");
@@ -33,7 +49,11 @@ export default function DoctorCommunityLayout() {
         setState("blocked");
       }
     })();
-  }, []);
+  }, [loadCounters]);
+
+  useFocusEffect(useCallback(() => {
+    if (state === "ok") loadCounters();
+  }, [state, loadCounters]));
 
   if (state === "loading") {
     return (
@@ -87,20 +107,34 @@ export default function DoctorCommunityLayout() {
     );
   }
 
+  // Full-screen sub-routes: no top bar, own SafeAreaView.
+  const isFullScreen = path ? FULL_SCREEN_ROUTES.some((p) => path.startsWith(p)) : false;
+  if (isFullScreen) {
+    return <Slot />;
+  }
+
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
       <View style={styles.topBar}>
-        <View>
+        <View style={{ flex: 1 }}>
           <Text style={styles.eyebrow}>Vaidya Charcha</Text>
           <Text style={styles.title}>Doctor Community</Text>
         </View>
         <View style={styles.topActions}>
           <TabIcon icon="home" active={path === "/doctor/community"} onPress={() => router.push("/doctor/community")} testID="dcom-tab-feed" />
           <TabIcon icon="search" active={path?.includes("explore")} onPress={() => router.push("/doctor/community/explore")} testID="dcom-tab-explore" />
-          <TabIcon icon="plus-square" active={path?.includes("create")} onPress={() => router.push("/doctor/community/create")} testID="dcom-tab-create" />
+          <TabIcon icon="film" active={path?.includes("/reels")} onPress={() => router.push("/doctor/community/reels")} testID="dcom-tab-reels" />
+          <TabIcon icon="plus-square" active={path?.includes("/create")} onPress={() => router.push("/doctor/community/create")} testID="dcom-tab-create" />
+          <TabIcon
+            icon="send"
+            active={path?.includes("/messages")}
+            onPress={() => router.push("/doctor/community/messages")}
+            badge={dmUnread}
+            testID="dcom-tab-dm"
+          />
           <TabIcon
             icon="bell"
-            active={path?.includes("notifications")}
+            active={path?.includes("/notifications")}
             onPress={() => router.push("/doctor/community/notifications")}
             badge={unread}
             testID="dcom-tab-notif"
@@ -115,7 +149,7 @@ export default function DoctorCommunityLayout() {
 function TabIcon({ icon, active, onPress, badge, testID }: any) {
   return (
     <TouchableOpacity onPress={onPress} style={styles.tabIcon} testID={testID} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
-      <Feather name={icon} size={20} color={active ? COLORS.brand : COLORS.textPrimary} />
+      <Feather name={icon} size={19} color={active ? COLORS.brand : COLORS.textPrimary} />
       {badge > 0 && (
         <View style={styles.badge}>
           <Text style={styles.badgeText}>{badge > 9 ? "9+" : badge}</Text>
@@ -130,16 +164,16 @@ const styles = StyleSheet.create({
   center: { justifyContent: "center", alignItems: "center" },
   topBar: {
     flexDirection: "row", justifyContent: "space-between", alignItems: "center",
-    paddingHorizontal: SPACING.lg, paddingVertical: SPACING.md,
+    paddingHorizontal: SPACING.md, paddingVertical: SPACING.sm,
     borderBottomWidth: 1, borderBottomColor: COLORS.border,
     backgroundColor: COLORS.bg,
   },
-  eyebrow: { textTransform: "uppercase", letterSpacing: 3, fontSize: 10, color: COLORS.accent, fontWeight: "700" },
-  title: { fontFamily: FONTS.heading, fontSize: 22, color: COLORS.textPrimary },
-  topActions: { flexDirection: "row", gap: 4 },
-  tabIcon: { padding: 8, position: "relative" },
+  eyebrow: { textTransform: "uppercase", letterSpacing: 3, fontSize: 9, color: COLORS.accent, fontWeight: "700" },
+  title: { fontFamily: FONTS.heading, fontSize: 18, color: COLORS.textPrimary },
+  topActions: { flexDirection: "row", gap: 2 },
+  tabIcon: { padding: 7, position: "relative" },
   badge: {
-    position: "absolute", top: 4, right: 4,
+    position: "absolute", top: 2, right: 2,
     minWidth: 16, height: 16, borderRadius: 8, paddingHorizontal: 4,
     backgroundColor: COLORS.error,
     alignItems: "center", justifyContent: "center",
