@@ -1,0 +1,59 @@
+{
+  "summary": "Iter 31 — Phase 1b Health Documents + Pre-Sales Admin Queue backend testing. 34 tests executed; 31 passed, 3 FAILED — all 3 failures point to two real production bugs in /api/admin/presales/leads (GET) and /api/admin/presales/leads/{id}/status (PATCH). All 11 document endpoints work correctly against real Emergent Object Storage: upload accepts JPG/PNG/WEBP/PDF ≤10 MB, rejects text/plain, bad doc_type, empty body, oversize with 400s, unauth with 401; owner/admin/assigned-doctor can read files via Bearer OR ?token=; DELETE only pending_review + owner; presales_leads.documents_uploaded increments on upload; admin queue CSV export + pending-docs hydration + review approve/reupload workflow all pass. Regression suite (auth/login, /admin/patients, /admin/doctors, /quiz/submit) all green. Object-storage init worked first try; NO retries needed. CRITICAL: legacy DB rows with tz-aware ISO strings (18 of 18 presales_leads rows present) break /admin/presales/leads with 500 TypeError.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "GET /api/admin/presales/leads",
+        "issue": "500 TypeError: can't subtract offset-naive and offset-aware datetimes. server.py:6540-6543 does `created = datetime.fromisoformat((r.get('created_at') or now_iso()).replace('Z',''))` — but legacy rows store '2026-08-17T08:39:39.530571+00:00' (no Z, explicit +00:00 offset) so the parsed datetime is tz-AWARE while `now = datetime.utcnow()` (line 6534) is tz-NAIVE. Every request from admin/presales role fails with 500 because at least one legacy tz-aware row exists in DB (verified 18/18 rows). Fix: normalize with `created = datetime.fromisoformat(s.replace('Z','+00:00')).astimezone(timezone.utc).replace(tzinfo=None)` OR use `now = datetime.now(timezone.utc)` and force `created` aware. Reference: /app/backend/server.py:6534,6540-6543.",
+        "priority": "CRITICAL"
+      },
+      {
+        "endpoint": "PATCH /api/admin/presales/leads/{id}/status",
+        "issue": "Two combined bugs: (a) find_one projection at server.py:6575 only returns {_id:0, status_history:1} — so `lead.get('user_id')` is ALWAYS None, meaning the consult_done side-effect on the linked user NEVER runs. (b) The fallback filter `{} if lead.get('user_id') else {}` triggers `db.users.update_one({}, ...)` — Mongo empty-filter matches ALL users and update_one writes free_consult_used=True + free_consult_available=False on an ARBITRARY user (whichever Mongo returns first). This silently corrupts unrelated user data every time an admin marks a lead as consult_done. Fix: change projection to `{'_id':0}` (or add 'user_id':1) AND remove the empty-filter fallback — skip the update entirely if user_id is missing. Reference: /app/backend/server.py:6575,6589-6592.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "PATCH /api/admin/presales/leads/{id}/status (payload)",
+        "issue": "LeadStatusIn.status uses Literal[...] with the same 5 values duplicated from LEAD_STATUSES const. Prefer `constr` + validator OR reuse the constant to avoid drift. Cosmetic."
+      },
+      {
+        "endpoint": "GET /api/admin/documents/pending",
+        "issue": "The download_token is created with the ADMIN's user_id (server.py:6633). Works because /files uses that user_id to fetch the user record and then checks role. Consider tightening token-scope to the specific admin session for auditability."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter31_health_docs.py",
+    "/app/test_reports/pytest/pytest_iter31.xml"
+  ],
+  "action_items": [
+    "URGENT: Fix tz-aware/naive datetime subtraction in GET /api/admin/presales/leads (server.py:6540-6543). Suggested one-liner: replace the try/except block with `created = _parse_iso_naive(r.get('created_at'))` where `_parse_iso_naive` strips 'Z' and any '+HH:MM'/'-HH:MM' suffix before `datetime.fromisoformat`. Endpoint is currently 100% broken against production data.",
+    "URGENT: Fix projection + empty-filter bug in PATCH /api/admin/presales/leads/{id}/status (server.py:6575,6592). Include 'user_id' in the find_one projection and skip the user update (do NOT call update_one({}, ...)) when user_id is missing. Empty-filter update silently corrupts arbitrary user documents.",
+    "Optional: consider indexing presales_leads on (status, created_at) — the SLA sweep + list will be slow at 10k+ rows.",
+    "Optional: `_DL_TOKENS` is an in-memory dict; multi-instance deployment will lose short-lived tokens. Move to Redis when scaling."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 6710 lines — the Phase 1b block (line 6265 onward) should be split into `routers/documents.py` and `routers/presales_admin.py` before more features land.",
+    "`_init_storage_sync` mutates module-global `_storage_key` without a lock; two concurrent uploads on cold start race the /init call. Cheap fix: `asyncio.Lock` or `threading.Lock` around it.",
+    "`_put_object_sync` raises 500 for HTTP 401/403 from storage — good — but 402 (credits) is handled explicitly. Consider adding 429 (rate-limited) → 503 mapping so client sees a retryable error.",
+    "In `download_document` (line 6473) the Bearer decode block catches Exception and silently sets caller_user=None. Prefer catching only `jwt.PyJWTError` so unrelated bugs surface as 500 instead of 401.",
+    "The consult_done side-effect in PATCH /leads/{id}/status also mirrors free_consult_available on the lead but not on the users collection when user_id is present — see critical bug entry."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter31_health_docs.py (new — 34 tests, uses PIL for a real JPEG payload and direct pymongo insert for SLA-breach + status-history seeding)"
+  ],
+  "success_rate": {"backend": "91% (31 pass / 3 fail / 34 total)", "frontend": "not tested (backend-only per request)"},
+  "seed_data_creation": "Ephemeral: fresh patient (patient_a, patient_b) and doctor accounts created via /api/auth/register each run; one seed presales_lead per patient_a; one seed SLA-breach lead (created_at -20 min) inserted directly via pymongo and deleted in the finally block; test users/leads/docs cleaned up in module-scoped teardown. Health documents uploaded to Emergent Object Storage remain (no delete API on the storage side) but the mongo metadata rows are deleted.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "BASE_URL from EXPO_PUBLIC_BACKEND_URL. Uploads use `requests.post` NOT the JSON-headers session in conftest — the multipart Content-Type header is set automatically. Emergent Object Storage is a REAL network call — first upload triggers /init once, subsequent uploads reuse the cached storage_key. Both critical bugs (tz-datetime + status-update projection) block their respective endpoints; retest by (a) upserting a legacy row with `created_at='2026-01-01T00:00:00+00:00'` and hitting GET /admin/presales/leads; (b) creating a lead linked to a user, PATCH to consult_done, then confirming ONLY that user has free_consult_used=True (spot-check another user still has free_consult_used=false).",
+  "rca_of_issue": "Bug #1 (tz-aware datetime) RCA: server.py:6540 parses `r['created_at']` with `.replace('Z','')` — but stored strings sometimes end with `+00:00` (from other write-paths like /admin/leads bulk seeding or older code writing `datetime.now(timezone.utc).isoformat()`). With no Z, `fromisoformat` preserves the +00:00 offset → tz-aware datetime. Line 6534 uses `datetime.utcnow()` (naive). Subtraction on 6543 raises TypeError; endpoint returns 500 for every request. Reproduction: `db.presales_leads.insertOne({id:'x', created_at:'2026-01-01T00:00:00+00:00', status:'not_contacted'})`; GET /api/admin/presales/leads → 500. Mitigation: strip any trailing `+HH:MM` OR use `dt.astimezone(timezone.utc).replace(tzinfo=None)` before subtraction. Bug #2 (arbitrary-user corruption) RCA: server.py:6575 projects only `status_history` from the lead lookup, so line 6592 sees `lead.get('user_id') is None`, falls into `else {}` branch, and calls `db.users.update_one({}, {'$set':{...}})` — Mongo interprets `{}` as match-all-users and update_one writes to the FIRST user document (deterministic per collection storage order but from admin's perspective, arbitrary). Every consult_done click flips a random user's free_consult flags. Reproduction: run TestPresalesQueue.test_lead_status_transitions_and_history — assertion on the linked user's free_consult_used fails; then `db.users.find_one({free_consult_used: True})` returns a completely unrelated user. Mitigation: include 'user_id':1 in the projection AND guard with `if lead.get('user_id'):` before calling update_one — never pass `{}` as filter."
+}

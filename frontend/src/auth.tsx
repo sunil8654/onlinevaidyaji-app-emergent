@@ -7,11 +7,17 @@ export type Role = "patient" | "doctor" | "admin";
 export type AuthUser = {
   id: string;
   name: string;
-  email: string;
+  email?: string | null;
   role: Role;
   phone?: string | null;
   is_admin?: boolean;
   verified?: boolean;
+  preferred_language?: "en" | "hi";
+  free_consult_available?: boolean;
+  free_consult_used?: boolean;
+  call_preference?: "video" | "phone" | null;
+  auth_provider?: "email" | "google" | "phone";
+  profile_photo?: string | null;
 };
 
 type AuthContextValue = {
@@ -19,6 +25,7 @@ type AuthContextValue = {
   loading: boolean;
   login: (email: string, password: string) => Promise<{ user: AuthUser; must_change_password: boolean }>;
   register: (data: { name: string; email: string; password: string; role: Role; phone?: string; registration_number?: string }) => Promise<void>;
+  applySession: (token: string, user: AuthUser) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 };
@@ -72,8 +79,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
   }, []);
 
+  const applySession = useCallback(async (token: string, u: AuthUser) => {
+    await storage.secureSet(TOKEN_KEY, token);
+    setUser(u);
+    registerForPush(u.id).catch(() => {});
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout, refresh: bootstrap }}>
+    <AuthContext.Provider value={{ user, loading, login, register, applySession, logout, refresh: bootstrap }}>
       {children}
     </AuthContext.Provider>
   );

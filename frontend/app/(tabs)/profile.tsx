@@ -102,6 +102,7 @@ export default function Profile() {
         <View style={styles.menu}>
           <MenuItem icon="calendar" label={t("my_appointments")} onPress={() => router.push("/appointments")} testID="profile-menu-appointments" />
           <MenuItem icon="folder" label={t("health_records")} onPress={() => router.push("/records")} testID="profile-menu-records" />
+          <MenuItem icon="upload-cloud" label="Health Documents" onPress={() => router.push("/health-documents")} testID="profile-menu-health-docs" />
           <MenuItem icon="droplet" label="Water tracker" onPress={() => router.push("/water")} testID="profile-menu-water" />
           <MenuItem icon="wind" label="AI Yoga classes" onPress={() => router.push("/ai-yoga")} testID="profile-menu-yoga" />
           <MenuItem icon="heart" label="Lifestyle & diseases" onPress={() => router.push("/lifestyle")} testID="profile-menu-lifestyle" />
@@ -119,7 +120,7 @@ export default function Profile() {
             icon="log-out"
             label={t("logout")}
             danger
-            onPress={async () => { await logout(); router.replace("/onboarding"); }}
+            onPress={async () => { await logout(); router.replace("/signup"); }}
             testID="profile-menu-logout"
           />
         </View>

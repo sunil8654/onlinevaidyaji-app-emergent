@@ -8,7 +8,7 @@ export default function AdminLayout() {
 
   useEffect(() => {
     if (loading) return;
-    if (!user?.is_admin) router.replace("/onboarding");
+    if (!user?.is_admin) router.replace("/signup");
   }, [user, loading, router]);
 
   return <Stack screenOptions={{ headerShown: false }} />;

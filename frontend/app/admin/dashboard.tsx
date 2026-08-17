@@ -62,6 +62,8 @@ export default function AdminDashboard() {
         <View style={styles.actions}>
           <ActionBtn icon="award" label={t("doctors")} onPress={() => router.push("/admin/doctors")} testID="admin-nav-doctors" />
           <ActionBtn icon="users" label={t("patients")} onPress={() => router.push("/admin/patients")} testID="admin-nav-patients" />
+          <ActionBtn icon="phone-call" label="Pre-Sales Queue" onPress={() => router.push("/admin/presales")} testID="admin-nav-presales" />
+          <ActionBtn icon="file-text" label="Docs Review" onPress={() => router.push("/admin/documents-review")} testID="admin-nav-docs-review" />
           <ActionBtn icon="user-check" label="Team & Staff" onPress={() => router.push("/admin/staff")} testID="admin-nav-staff" />
           <ActionBtn icon="key" label="Password resets" onPress={() => router.push("/admin/password-resets")} testID="admin-nav-resets" />
           <ActionBtn icon="message-square" label="Doctor Community" onPress={() => router.push("/admin/doctor-community")} testID="admin-nav-doc-community" />
@@ -83,7 +85,7 @@ export default function AdminDashboard() {
           </View>
         ))}
 
-        <TouchableOpacity style={styles.logout} onPress={async () => { await logout(); router.replace("/onboarding"); }} testID="admin-logout">
+        <TouchableOpacity style={styles.logout} onPress={async () => { await logout(); router.replace("/signup"); }} testID="admin-logout">
           <Feather name="log-out" size={16} color={COLORS.error} />
           <Text style={{ color: COLORS.error, fontWeight: "700" }}>{t("logout")}</Text>
         </TouchableOpacity>

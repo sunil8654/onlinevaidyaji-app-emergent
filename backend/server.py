@@ -9,7 +9,7 @@ import json
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr, validator
-from typing import List, Optional, Literal, Dict, Any
+from typing import List, Optional, Literal, Dict, Any, Tuple
 import uuid
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict, deque
@@ -5809,6 +5809,882 @@ async def doc_com_delete_reel(reel_id: str, user: dict = Depends(require_doctor_
     await db.doc_com_reel_likes.delete_many({"reel_id": reel_id})
     await db.doc_com_reel_views.delete_many({"reel_id": reel_id})
     return {"deleted": True}
+
+
+# ══════════════════════════════════════════════════════════════════
+# PATIENT ONBOARDING FUNNEL — PHASE 1a
+# Sign-up (Google + Phone OTP mock) · Language · Prakriti Quiz ·
+# Call preference · Post-quiz onboarding · Pre-sales lead
+# ══════════════════════════════════════════════════════════════════
+
+# ---- Configurable knobs (env-driven so operations can tune later) ----
+CALLBACK_SLA_MINUTES = int(os.environ.get("CALLBACK_SLA_MINUTES", "10"))
+WHATSAPP_NUMBER = os.environ.get("WHATSAPP_NUMBER", "+917290044081")
+MOCK_OTP_CODE = os.environ.get("MOCK_OTP_CODE", "123456")
+BRAND_TAGLINE = "Swasth Raho Hamesha"
+
+# In-memory OTP store. Fine for dev; production will swap to Redis/DB.
+_OTP_STORE: Dict[str, Dict[str, Any]] = {}
+OTP_TTL_SECONDS = 300
+OTP_COOLDOWN_SECONDS = 30
+OTP_MAX_ATTEMPTS = 3
+OTP_LOCK_MINUTES = 10
+
+
+def _clean_indian_phone(p: str) -> str:
+    """Normalise to 10-digit Indian mobile. Accepts '+91...', ' ', '-' formatting."""
+    if not p:
+        raise HTTPException(status_code=400, detail="Phone is required")
+    digits = "".join(c for c in p if c.isdigit())
+    if digits.startswith("91") and len(digits) == 12:
+        digits = digits[2:]
+    if len(digits) != 10 or digits[0] not in "6789":
+        raise HTTPException(status_code=400, detail="Please enter a valid 10-digit Indian mobile number")
+    return digits
+
+
+# ── Mock Phone OTP ────────────────────────────────────────────────
+class PhoneOTPSendIn(BaseModel):
+    phone: str = Field(..., min_length=6, max_length=20)
+
+
+class PhoneOTPVerifyIn(BaseModel):
+    phone: str = Field(..., min_length=6, max_length=20)
+    otp: str = Field(..., min_length=4, max_length=8)
+    name: Optional[str] = Field(None, max_length=120)
+    email: Optional[EmailStr] = None
+    role: Optional[Literal["patient", "doctor"]] = "patient"
+
+
+@api_router.post("/auth/phone/send-otp")
+async def phone_send_otp(body: PhoneOTPSendIn, request: Request):
+    """Mock OTP send. Uses configurable `MOCK_OTP_CODE` (default 123456) in dev.
+    Enforces 30s cooldown + 3-attempt lock (10 min) matching the spec.
+    """
+    await rate_limit(request, "auth:otp-send", max_calls=30, window_seconds=3600)
+    phone = _clean_indian_phone(body.phone)
+    now = datetime.utcnow()
+    row = _OTP_STORE.get(phone) or {}
+    if row.get("locked_until"):
+        try:
+            lock_dt = datetime.fromisoformat(row["locked_until"].replace("Z", ""))
+        except Exception:
+            lock_dt = now
+        if lock_dt > now:
+            wait_mins = int((lock_dt - now).total_seconds() // 60) + 1
+            raise HTTPException(status_code=429, detail=f"Too many attempts. Try again in {wait_mins} min.")
+    if row.get("last_sent_at"):
+        try:
+            last = datetime.fromisoformat(row["last_sent_at"].replace("Z", ""))
+        except Exception:
+            last = now - timedelta(seconds=60)
+        elapsed = (now - last).total_seconds()
+        if elapsed < OTP_COOLDOWN_SECONDS:
+            raise HTTPException(status_code=429, detail=f"Please wait {int(OTP_COOLDOWN_SECONDS - elapsed)}s before requesting again.")
+    otp = MOCK_OTP_CODE
+    _OTP_STORE[phone] = {
+        "otp": otp,
+        "expires_at": (now + timedelta(seconds=OTP_TTL_SECONDS)).isoformat() + "Z",
+        "attempts": 0,
+        "locked_until": None,
+        "last_sent_at": now.isoformat() + "Z",
+    }
+    return {"ok": True, "message": "OTP sent.", "dev_hint": f"OTP is {otp} (mock mode)"}
+
+
+@api_router.post("/auth/phone/verify-otp")
+async def phone_verify_otp(body: PhoneOTPVerifyIn, request: Request):
+    """Verify OTP; if user with this phone exists → login; else create user."""
+    await rate_limit(request, "auth:otp-verify", max_calls=60, window_seconds=3600)
+    phone = _clean_indian_phone(body.phone)
+    row = _OTP_STORE.get(phone)
+    if not row:
+        raise HTTPException(status_code=400, detail="Please request an OTP first")
+    now = datetime.utcnow()
+    if row.get("locked_until"):
+        try:
+            lock_dt = datetime.fromisoformat(row["locked_until"].replace("Z", ""))
+        except Exception:
+            lock_dt = now
+        if lock_dt > now:
+            wait_mins = int((lock_dt - now).total_seconds() // 60) + 1
+            raise HTTPException(status_code=429, detail=f"Too many attempts. Try again in {wait_mins} min.")
+    try:
+        exp = datetime.fromisoformat(row["expires_at"].replace("Z", ""))
+    except Exception:
+        exp = now
+    if exp < now:
+        raise HTTPException(status_code=400, detail="OTP expired. Please request a new one.")
+    if body.otp.strip() != row["otp"]:
+        row["attempts"] = int(row.get("attempts", 0)) + 1
+        if row["attempts"] >= OTP_MAX_ATTEMPTS:
+            row["locked_until"] = (now + timedelta(minutes=OTP_LOCK_MINUTES)).isoformat() + "Z"
+            _OTP_STORE[phone] = row
+            raise HTTPException(status_code=429, detail=f"Too many wrong attempts. Locked for {OTP_LOCK_MINUTES} min.")
+        _OTP_STORE[phone] = row
+        raise HTTPException(status_code=400, detail=f"Wrong OTP. {OTP_MAX_ATTEMPTS - row['attempts']} attempts left.")
+    _OTP_STORE.pop(phone, None)  # single-use
+    existing = await db.users.find_one({"phone": phone})
+    if existing:
+        existing.pop("_id", None)
+        existing.pop("password", None)
+        token = make_token(existing["id"], existing.get("role", "patient"))
+        return {"token": token, "user": existing, "is_new": False}
+    if not body.name or not body.name.strip():
+        raise HTTPException(status_code=400, detail="Name is required for new signup")
+    user_id = str(uuid.uuid4())
+    doc: Dict[str, Any] = {
+        "id": user_id,
+        "name": body.name.strip(),
+        "phone": phone,
+        "email": (body.email or "").lower() if body.email else None,
+        "role": body.role or "patient",
+        "auth_provider": "phone",
+        "phone_verified": True,
+        "is_admin": False,
+        "preferred_language": "en",
+        "free_consult_available": True,
+        "free_consult_used": False,
+        "call_preference": None,
+        "profile_photo": None,
+        "created_at": now_iso(),
+    }
+    await db.users.insert_one(doc.copy())
+    doc.pop("_id", None)
+    token = make_token(user_id, doc["role"])
+    await log_activity("patient_signup_phone", actor=doc, meta={"phone": phone})
+    return {"token": token, "user": doc, "is_new": True}
+
+
+# ── Emergent Google Auth (session_id exchange) ────────────────────
+class GoogleSessionIn(BaseModel):
+    session_id: str = Field(..., min_length=8, max_length=500)
+
+
+@api_router.post("/auth/session")
+async def auth_session(body: GoogleSessionIn, request: Request):
+    """Exchange Emergent OAuth session_id for a JWT + user record."""
+    await rate_limit(request, "auth:session", max_calls=60, window_seconds=3600)
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        try:
+            resp = await client.get(
+                "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
+                headers={"X-Session-ID": body.session_id},
+            )
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Auth provider unreachable: {e}") from e
+    if resp.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    data = resp.json() or {}
+    email = (data.get("email") or "").lower().strip()
+    if not email:
+        raise HTTPException(status_code=401, detail="Google account did not return email")
+    name = data.get("name") or email.split("@")[0]
+    picture = data.get("picture") or data.get("profile_photo") or None
+    existing = await db.users.find_one({"email": email})
+    if existing:
+        updates: Dict[str, Any] = {}
+        if not existing.get("profile_photo") and picture:
+            updates["profile_photo"] = picture
+        if not existing.get("auth_provider"):
+            updates["auth_provider"] = "google"
+        if not existing.get("preferred_language"):
+            updates["preferred_language"] = "en"
+        if existing.get("free_consult_available") is None:
+            updates["free_consult_available"] = True
+            updates["free_consult_used"] = False
+        if updates:
+            await db.users.update_one({"id": existing["id"]}, {"$set": updates})
+            existing.update(updates)
+        existing.pop("_id", None)
+        existing.pop("password", None)
+        token = make_token(existing["id"], existing.get("role", "patient"))
+        return {"token": token, "user": existing, "is_new": False}
+    user_id = str(uuid.uuid4())
+    doc: Dict[str, Any] = {
+        "id": user_id,
+        "name": name,
+        "email": email,
+        "phone": None,
+        "role": "patient",
+        "auth_provider": "google",
+        "google_id": data.get("id") or data.get("sub") or None,
+        "profile_photo": picture,
+        "phone_verified": False,
+        "is_admin": False,
+        "preferred_language": "en",
+        "free_consult_available": True,
+        "free_consult_used": False,
+        "call_preference": None,
+        "created_at": now_iso(),
+    }
+    await db.users.insert_one(doc.copy())
+    doc.pop("_id", None)
+    token = make_token(user_id, doc["role"])
+    await log_activity("patient_signup_google", actor=doc, meta={"email": email})
+    return {"token": token, "user": doc, "is_new": True}
+
+
+# ── Update current user (language, call preference, profile) ──────
+class UserUpdateIn(BaseModel):
+    preferred_language: Optional[Literal["en", "hi"]] = None
+    call_preference: Optional[Literal["video", "phone"]] = None
+    name: Optional[str] = Field(None, max_length=120)
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = Field(None, max_length=20)
+
+
+@api_router.patch("/users/me")
+async def update_me(body: UserUpdateIn, user: dict = Depends(current_user)):
+    updates: Dict[str, Any] = {}
+    if body.preferred_language:
+        updates["preferred_language"] = body.preferred_language
+    if body.call_preference:
+        updates["call_preference"] = body.call_preference
+    if body.name and body.name.strip():
+        updates["name"] = body.name.strip()
+    if body.email:
+        existing = await db.users.find_one({"email": body.email.lower(), "id": {"$ne": user["id"]}})
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already used by another account")
+        updates["email"] = body.email.lower()
+    if body.phone:
+        cleaned = _clean_indian_phone(body.phone)
+        existing = await db.users.find_one({"phone": cleaned, "id": {"$ne": user["id"]}})
+        if existing:
+            raise HTTPException(status_code=400, detail="Phone already used by another account")
+        updates["phone"] = cleaned
+    if not updates:
+        return {"ok": True, "no_change": True}
+    await db.users.update_one({"id": user["id"]}, {"$set": updates})
+    updated = await db.users.find_one({"id": user["id"]}, {"_id": 0, "password": 0})
+    if "call_preference" in updates:
+        await db.presales_leads.update_one(
+            {"user_id": user["id"]}, {"$set": {"call_preference": updates["call_preference"]}}
+        )
+    return {"ok": True, "user": updated}
+
+
+# ── Prakriti Quiz ─────────────────────────────────────────────────
+KIT_CATALOG: Dict[str, Dict[str, str]] = {
+    "madhu_niyantran": {"en": "Madhu Niyantran — Diabetes Care Kit", "hi": "Madhu Niyantran — Diabetes Care Kit"},
+    "sandhi_sudha":    {"en": "Sandhi Sudha — Joint Pain Relief Kit", "hi": "Sandhi Sudha — Jodon ke Dard ka Kit"},
+    "gut_vaidya":      {"en": "Gut Vaidya — Digestion Care Kit", "hi": "Gut Vaidya — Pet-Digestion Kit"},
+    "sthul_haran":     {"en": "Sthul Haran — Weight Management Kit", "hi": "Sthul Haran — Weight Kam Karne ka Kit"},
+    "kesh_raksha":     {"en": "Kesh Raksha — Hair Fall Control Kit", "hi": "Kesh Raksha — Baal Jhadne ka Kit"},
+    "man_shanti":      {"en": "Man Shanti — Sleep & Stress Kit", "hi": "Man Shanti — Neend-Stress Kit"},
+    "purush_shakti":   {"en": "Purush Shakti — Men's Health Kit", "hi": "Purush Shakti — Purush Health Kit"},
+    "nari_shakti":     {"en": "Nari Shakti — Women's Health / PCOS Kit", "hi": "Nari Shakti — Mahila Health / PCOS Kit"},
+    "yakrit_raksha":   {"en": "Yakrit Raksha — Liver Care Kit", "hi": "Yakrit Raksha — Liver ka Kit"},
+    "shwas_raksha":    {"en": "Shwas Raksha — Cough & Immunity Kit", "hi": "Shwas Raksha — Khansi-Immunity Kit"},
+}
+
+PRAKRITI_COPY: Dict[str, Dict[str, Dict[str, str]]] = {
+    "Vata": {
+        "en": {"line1": "You're a Vata person — creative, quick-moving and lean by nature.",
+                "line2": "Common issues: dry skin, gas or constipation, disturbed sleep, anxious mind.",
+                "line3": "Warm cooked meals, oil massage and steady routines suit you best."},
+        "hi": {"line1": "Aap Vata prakriti ke hain — creative, active aur natural roop se dubla-patla body type.",
+                "line2": "Common problems: dry skin, gas ya kabz, halki neend, chinta.",
+                "line3": "Garam pakaya khana, tel malish aur ek fixed routine aapko suit karta hai."},
+    },
+    "Pitta": {
+        "en": {"line1": "You're a Pitta person — sharp, focused and naturally athletic.",
+                "line2": "Common issues: acidity, skin sensitivity, irritability, burnout when overworked.",
+                "line3": "Cooling foods, coconut water and calm evenings suit you best."},
+        "hi": {"line1": "Aap Pitta prakriti ke hain — teekhi soch, focused aur naturally strong body.",
+                "line2": "Common problems: acidity, sensitive skin, gussa, zyada kaam se burn-out.",
+                "line3": "Thanda khana, nariyal paani aur shanti bhari shaam aapko suit karti hai."},
+    },
+    "Kapha": {
+        "en": {"line1": "You're a Kapha person — grounded, calm and naturally strong-built.",
+                "line2": "Common issues: slow digestion, weight gain, morning sluggishness, congestion.",
+                "line3": "Light warm meals, brisk daily exercise and early mornings suit you best."},
+        "hi": {"line1": "Aap Kapha prakriti ke hain — shant, strong aur naturally heavy build.",
+                "line2": "Common problems: slow digestion, weight badhna, subah sust rehna, congestion.",
+                "line3": "Halka garam khana, roz exercise aur jaldi subah uthna aapko suit karta hai."},
+    },
+    "Vata-Pitta": {
+        "en": {"line1": "You're a Vata-Pitta blend — creative, sharp and always in motion.",
+                "line2": "Common issues: irregular digestion, dry+sensitive skin, mind racing at night.",
+                "line3": "Warm-but-cooling meals, steady routines and daily grounding rituals suit you."},
+        "hi": {"line1": "Aap Vata-Pitta prakriti ke hain — creative, teekhi soch aur active.",
+                "line2": "Common problems: irregular digestion, dry+sensitive skin, raat mein dimaag chalta rehna.",
+                "line3": "Halka garam par cooling khana, ek fixed routine aur grounding rituals aapko suit karte hain."},
+    },
+    "Pitta-Kapha": {
+        "en": {"line1": "You're a Pitta-Kapha blend — strong-built, focused and enduring.",
+                "line2": "Common issues: acidity, weight around the middle, oily skin with breakouts.",
+                "line3": "Light meals, regular exercise and cooling evening walks suit you."},
+        "hi": {"line1": "Aap Pitta-Kapha prakriti ke hain — strong body, focused aur endurance wale.",
+                "line2": "Common problems: acidity, pet ke aas-paas weight, oily skin par pimples.",
+                "line3": "Halka khana, roz exercise aur shaam ki cooling walk aapko suit karti hai."},
+    },
+    "Vata-Kapha": {
+        "en": {"line1": "You're a Vata-Kapha blend — creative yet grounded, with a gentle nature.",
+                "line2": "Common issues: dry-cold hands, low mood in winter, sluggish digestion.",
+                "line3": "Warm cooked meals, gentle morning yoga and daily sunlight suit you."},
+        "hi": {"line1": "Aap Vata-Kapha prakriti ke hain — creative par grounded, shant swabhav.",
+                "line2": "Common problems: dry aur thande haath, sardi mein low mood, slow digestion.",
+                "line3": "Garam pakaya khana, subah ki halki yoga aur roz dhoop aapko suit karti hai."},
+    },
+    "Tridosha (Sam Prakriti)": {
+        "en": {"line1": "You're a rare Sam Prakriti — balanced across Vata, Pitta and Kapha.",
+                "line2": "Great baseline health — but any excess of one dosha shows up quickly.",
+                "line3": "Seasonal routines, home-cooked meals and mindful lifestyle keep you in balance."},
+        "hi": {"line1": "Aap Sam Prakriti (Tridosha) hain — Vata, Pitta, Kapha teenon balanced.",
+                "line2": "Baseline health strong hai — par kisi bhi dosha ka excess jaldi dikhta hai.",
+                "line3": "Seasonal routine, ghar ka khana aur mindful lifestyle aapko balance mein rakhti hai."},
+    },
+}
+
+
+def _score_prakriti(answers: Dict[str, str]) -> Tuple[Dict[str, int], str]:
+    """Sum A/B/C across Q1..Q8. Rules: all three within 1 => Tridosha. Top two
+    tied or differ by 1 => dual (higher first; canonical Ayurvedic order
+    Vata > Pitta > Kapha if tied so labels match PRAKRITI_COPY keys). Else top1.
+    """
+    scores = {"vata": 0, "pitta": 0, "kapha": 0}
+    for i in range(1, 9):
+        v = (answers.get(f"q{i}") or "").upper().strip()
+        if v == "A": scores["vata"] += 1
+        elif v == "B": scores["pitta"] += 1
+        elif v == "C": scores["kapha"] += 1
+    canonical_order = ["vata", "pitta", "kapha"]
+    canon_rank = {k: i for i, k in enumerate(canonical_order)}
+    # Sort by (-count, canonical_rank) so ties resolve in Vata > Pitta > Kapha order.
+    sorted_doshas = sorted(scores.items(), key=lambda kv: (-kv[1], canon_rank[kv[0]]))
+    top1_key, top1_val = sorted_doshas[0]
+    top2_key, top2_val = sorted_doshas[1]
+    top3_key, top3_val = sorted_doshas[2]
+    if (top1_val - top3_val) <= 1:
+        return scores, "Tridosha (Sam Prakriti)"
+    if abs(top1_val - top2_val) <= 1:
+        return scores, f"{top1_key.capitalize()}-{top2_key.capitalize()}"
+    return scores, top1_key.capitalize()
+
+
+class QuizSubmitIn(BaseModel):
+    answers: Dict[str, str] = Field(..., description="{q1..q8: 'A'|'B'|'C'}")
+    health_concern: str = Field(..., min_length=1, max_length=80)
+    age_group: str = Field(..., min_length=3, max_length=10)
+    utm_source: Optional[str] = Field(None, max_length=100)
+    utm_medium: Optional[str] = Field(None, max_length=100)
+    utm_campaign: Optional[str] = Field(None, max_length=100)
+
+
+@api_router.post("/quiz/submit")
+async def submit_prakriti_quiz(body: QuizSubmitIn, user: dict = Depends(current_user)):
+    if body.health_concern not in KIT_CATALOG:
+        raise HTTPException(status_code=400, detail="Unknown health concern")
+    scores, prakriti = _score_prakriti(body.answers or {})
+    lang = user.get("preferred_language") or "en"
+    kit = KIT_CATALOG[body.health_concern]
+    copy_dict = PRAKRITI_COPY.get(prakriti) or PRAKRITI_COPY["Tridosha (Sam Prakriti)"]
+    copy = copy_dict[lang]
+    result_id = str(uuid.uuid4())
+    quiz_doc = {
+        "id": result_id, "user_id": user["id"], "answers": body.answers,
+        "dosha_scores": scores, "prakriti_result": prakriti,
+        "health_concern": body.health_concern,
+        "recommended_kit_id": body.health_concern,
+        "recommended_kit_name": kit[lang],
+        "age_group": body.age_group,
+        "utm_source": body.utm_source, "utm_medium": body.utm_medium, "utm_campaign": body.utm_campaign,
+        "language": lang, "completed_at": now_iso(),
+    }
+    await db.quiz_results.update_one({"user_id": user["id"]}, {"$set": quiz_doc}, upsert=True)
+    lead_existing = await db.presales_leads.find_one({"user_id": user["id"]})
+    if lead_existing:
+        await db.presales_leads.update_one(
+            {"user_id": user["id"]},
+            {"$set": {
+                "prakriti_result": prakriti, "recommended_kit_id": body.health_concern,
+                "recommended_kit_name": kit[lang], "health_concern": body.health_concern,
+                "age_group": body.age_group, "language": lang, "updated_at": now_iso(),
+            }},
+        )
+    else:
+        await db.presales_leads.insert_one({
+            "id": str(uuid.uuid4()), "user_id": user["id"],
+            "name": user.get("name"), "phone": user.get("phone"), "email": user.get("email"),
+            "language": lang, "prakriti_result": prakriti, "health_concern": body.health_concern,
+            "recommended_kit_id": body.health_concern, "recommended_kit_name": kit[lang],
+            "age_group": body.age_group, "call_preference": user.get("call_preference"),
+            "status": "not_contacted", "agent_name": None,
+            "status_history": [{"status": "not_contacted", "timestamp": now_iso(), "agent": None}],
+            "documents_uploaded": 0,
+            "free_consult_available": bool(user.get("free_consult_available", True)),
+            "utm_source": body.utm_source, "utm_medium": body.utm_medium, "utm_campaign": body.utm_campaign,
+            "created_at": now_iso(), "updated_at": now_iso(),
+        })
+    return {
+        "id": result_id, "prakriti": prakriti, "dosha_scores": scores,
+        "description": copy,
+        "recommended_kit": {"id": body.health_concern, "name": kit[lang]},
+        "language": lang,
+        "free_consult_available": bool(user.get("free_consult_available", True)),
+        "callback_sla_minutes": CALLBACK_SLA_MINUTES,
+    }
+
+
+@api_router.get("/quiz/mine")
+async def my_quiz_result(user: dict = Depends(current_user)):
+    r = await db.quiz_results.find_one({"user_id": user["id"]}, {"_id": 0})
+    if not r:
+        return {"has_result": False}
+    prakriti = r.get("prakriti_result", "Tridosha (Sam Prakriti)")
+    lang = user.get("preferred_language") or r.get("language") or "en"
+    copy_dict = PRAKRITI_COPY.get(prakriti) or PRAKRITI_COPY["Tridosha (Sam Prakriti)"]
+    copy = copy_dict[lang]
+    return {
+        "has_result": True, "prakriti": prakriti,
+        "dosha_scores": r.get("dosha_scores", {}), "description": copy,
+        "recommended_kit": {"id": r.get("recommended_kit_id"), "name": r.get("recommended_kit_name")},
+        "age_group": r.get("age_group"), "completed_at": r.get("completed_at"),
+        "language": lang,
+        "free_consult_available": bool(user.get("free_consult_available", True)),
+        "callback_sla_minutes": CALLBACK_SLA_MINUTES,
+    }
+
+
+@api_router.get("/onboarding/config")
+async def onboarding_config():
+    return {
+        "callback_sla_minutes": CALLBACK_SLA_MINUTES,
+        "whatsapp_number": WHATSAPP_NUMBER,
+        "whatsapp_url": f"https://wa.me/{WHATSAPP_NUMBER.lstrip('+').replace(' ', '')}",
+        "tagline": BRAND_TAGLINE, "brand": "Online Vaidhyaji",
+        "kit_catalog": KIT_CATALOG,
+    }
+
+
+
+
+# ══════════════════════════════════════════════════════════════════
+# HEALTH DOCUMENTS + PRE-SALES ADMIN QUEUE — PHASE 1b
+# Emergent Object Storage for private medical documents.
+# ══════════════════════════════════════════════════════════════════
+
+import requests as _requests  # sync client for storage integration
+import secrets
+from starlette.concurrency import run_in_threadpool
+from fastapi import UploadFile, File, Form, Query
+from fastapi.responses import Response, StreamingResponse
+
+STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
+STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
+_EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
+STORAGE_APP_NAME = "online-vaidhyaji"
+_storage_key: Optional[str] = None
+
+DOC_ALLOWED_MIMES = {"image/jpeg", "image/jpg", "image/png", "image/webp", "application/pdf"}
+DOC_MAX_BYTES = 10 * 1024 * 1024  # 10 MB per spec
+DOC_TYPES = ["blood_test", "prescription", "xray_scan", "other"]
+DOC_STATUSES = ["pending_review", "sent_to_doctor", "reupload_requested"]
+LEAD_STATUSES = ["not_contacted", "contacted", "consult_booked", "consult_done", "kit_ordered"]
+
+
+def _init_storage_sync() -> str:
+    global _storage_key
+    if _storage_key:
+        return _storage_key
+    if not _EMERGENT_KEY:
+        raise RuntimeError("EMERGENT_LLM_KEY missing — Object Storage unavailable")
+    resp = _requests.post(f"{STORAGE_URL}/init", json={"emergent_key": _EMERGENT_KEY}, timeout=30)
+    resp.raise_for_status()
+    _storage_key = resp.json()["storage_key"]
+    return _storage_key
+
+
+def _put_object_sync(path: str, data: bytes, content_type: str) -> dict:
+    key = _init_storage_sync()
+    try:
+        resp = _requests.put(
+            f"{STORAGE_URL}/objects/{path}",
+            headers={"X-Storage-Key": key, "Content-Type": content_type},
+            data=data, timeout=180,
+        )
+        if resp.status_code == 503:
+            # Possibly stale key — reset & retry once.
+            globals()["_storage_key"] = None
+            key = _init_storage_sync()
+            resp = _requests.put(
+                f"{STORAGE_URL}/objects/{path}",
+                headers={"X-Storage-Key": key, "Content-Type": content_type},
+                data=data, timeout=180,
+            )
+        resp.raise_for_status()
+        return resp.json()
+    except _requests.HTTPError as e:
+        code = e.response.status_code if e.response is not None else 0
+        if code == 402:
+            raise HTTPException(status_code=402, detail="Storage credits exhausted — please contact support")
+        if code in (401, 403):
+            raise HTTPException(status_code=500, detail="Document storage misconfigured — please contact support")
+        raise
+
+
+def _get_object_sync(path: str) -> Tuple[bytes, str]:
+    key = _init_storage_sync()
+    try:
+        resp = _requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
+        if resp.status_code == 503:
+            globals()["_storage_key"] = None
+            key = _init_storage_sync()
+            resp = _requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
+        resp.raise_for_status()
+        return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+    except _requests.HTTPError:
+        # Storage returns 500 for missing objects — surface a clean 404.
+        raise HTTPException(status_code=404, detail="Document not found in storage")
+
+
+# One-shot download tokens for web browsers that cannot send Authorization headers on <img>.
+# {token: {"user_id": ..., "doc_id": ..., "expires_at": iso}}
+_DL_TOKENS: Dict[str, Dict[str, Any]] = {}
+DL_TOKEN_TTL_SECONDS = 900  # 15 min
+
+
+def _make_dl_token(user_id: str, doc_id: str) -> str:
+    tok = secrets.token_urlsafe(32)
+    _DL_TOKENS[tok] = {
+        "user_id": user_id,
+        "doc_id": doc_id,
+        "expires_at": (datetime.utcnow() + timedelta(seconds=DL_TOKEN_TTL_SECONDS)).isoformat() + "Z",
+    }
+    # Simple GC: drop expired tokens if the map gets big.
+    if len(_DL_TOKENS) > 500:
+        now = datetime.utcnow()
+        for k in list(_DL_TOKENS.keys()):
+            try:
+                if datetime.fromisoformat(_DL_TOKENS[k]["expires_at"].replace("Z", "")) < now:
+                    _DL_TOKENS.pop(k, None)
+            except Exception:
+                _DL_TOKENS.pop(k, None)
+    return tok
+
+
+async def _can_read_doc(doc: Dict[str, Any], user: Dict[str, Any]) -> bool:
+    """Owner + admin + assigned doctor may read."""
+    if doc.get("user_id") == user.get("id"):
+        return True
+    if user.get("is_admin") or user.get("role") == "admin":
+        return True
+    if user.get("role") == "doctor" and doc.get("assigned_doctor_id") == user.get("id"):
+        return True
+    return False
+
+
+# ── Upload ────────────────────────────────────────────────────────
+@api_router.post("/documents/upload")
+async def upload_document(
+    request: Request,
+    file: UploadFile = File(...),
+    doc_type: str = Form("other"),
+    user_note: Optional[str] = Form(None),
+    user: dict = Depends(current_user),
+):
+    await rate_limit(request, f"docs:upload:{user['id']}", max_calls=30, window_seconds=3600)
+    if doc_type not in DOC_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid doc_type. Use one of: {', '.join(DOC_TYPES)}")
+    content_type = (file.content_type or "").lower()
+    if content_type not in DOC_ALLOWED_MIMES:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type '{content_type}'. Allowed: JPG, PNG, WEBP, PDF.")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(data) > DOC_MAX_BYTES:
+        raise HTTPException(status_code=400, detail=f"File too large (max {DOC_MAX_BYTES // (1024 * 1024)} MB)")
+    ext = {"application/pdf": "pdf", "image/jpeg": "jpg", "image/jpg": "jpg",
+           "image/png": "png", "image/webp": "webp"}.get(content_type, "bin")
+    doc_id = str(uuid.uuid4())
+    storage_path = f"{STORAGE_APP_NAME}/uploads/{user['id']}/{doc_id}.{ext}"
+    try:
+        await run_in_threadpool(_put_object_sync, storage_path, data, content_type)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Object storage upload failed: {e}")
+        raise HTTPException(status_code=502, detail="Storage temporarily unavailable — please try again")
+    doc_meta: Dict[str, Any] = {
+        "id": doc_id,
+        "user_id": user["id"],
+        "storage_path": storage_path,
+        "original_name": (file.filename or f"document.{ext}")[:200],
+        "content_type": content_type,
+        "size_bytes": len(data),
+        "doc_type": doc_type,
+        "user_note": (user_note or "").strip()[:500],
+        "status": "pending_review",
+        "reviewed_by": None,
+        "assigned_doctor_id": None,
+        "review_note": None,
+        "uploaded_at": now_iso(),
+        "reviewed_at": None,
+    }
+    await db.health_documents.insert_one(doc_meta.copy())
+    # Bump presales lead documents_uploaded counter for the SLA queue.
+    await db.presales_leads.update_one(
+        {"user_id": user["id"]}, {"$inc": {"documents_uploaded": 1}, "$set": {"updated_at": now_iso()}}
+    )
+    doc_meta.pop("_id", None)
+    return doc_meta
+
+
+@api_router.get("/documents/mine")
+async def list_my_documents(user: dict = Depends(current_user), limit: int = 100):
+    rows = await db.health_documents.find(
+        {"user_id": user["id"]}, {"_id": 0, "storage_path": 0}
+    ).sort("uploaded_at", -1).limit(min(max(limit, 1), 200)).to_list(200)
+    for r in rows:
+        r["download_token"] = _make_dl_token(user["id"], r["id"])
+    return {"items": rows, "total": len(rows)}
+
+
+@api_router.get("/documents/{doc_id}")
+async def get_document_meta(doc_id: str, user: dict = Depends(current_user)):
+    doc = await db.health_documents.find_one({"id": doc_id}, {"_id": 0, "storage_path": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if not await _can_read_doc(doc, user):
+        raise HTTPException(status_code=403, detail="You cannot view this document")
+    doc["download_token"] = _make_dl_token(user["id"], doc_id)
+    return doc
+
+
+@api_router.delete("/documents/{doc_id}")
+async def delete_document(doc_id: str, user: dict = Depends(current_user)):
+    doc = await db.health_documents.find_one({"id": doc_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if doc.get("user_id") != user["id"]:
+        raise HTTPException(status_code=403, detail="Only the uploader can delete")
+    if doc.get("status") != "pending_review":
+        raise HTTPException(status_code=400, detail="Cannot delete a document once it has been reviewed")
+    # Soft delete: mark as deleted; keep storage object (no delete API on emergent storage).
+    await db.health_documents.update_one(
+        {"id": doc_id}, {"$set": {"deleted": True, "deleted_at": now_iso()}}
+    )
+    return {"deleted": True}
+
+
+# ── File download (auth via Bearer OR short-lived query token for web) ──
+@api_router.get("/files/{doc_id}")
+async def download_document(doc_id: str, request: Request, token: Optional[str] = Query(None)):
+    # Path 1 — Bearer token (native app)
+    caller_user: Optional[Dict[str, Any]] = None
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        try:
+            payload = jwt.decode(auth_header.split(" ", 1)[1], JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            caller_user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password": 0})
+        except Exception:
+            caller_user = None
+    # Path 2 — short-lived query token (web <img>)
+    if not caller_user and token:
+        entry = _DL_TOKENS.get(token)
+        if entry:
+            try:
+                exp = datetime.fromisoformat(entry["expires_at"].replace("Z", ""))
+                if exp > datetime.utcnow() and entry["doc_id"] == doc_id:
+                    caller_user = await db.users.find_one({"id": entry["user_id"]}, {"_id": 0, "password": 0})
+            except Exception:
+                pass
+    if not caller_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    doc = await db.health_documents.find_one({"id": doc_id}, {"_id": 0})
+    if not doc or doc.get("deleted"):
+        raise HTTPException(status_code=404, detail="Document not found")
+    if not await _can_read_doc(doc, caller_user):
+        raise HTTPException(status_code=403, detail="You cannot view this document")
+    content, mime = await run_in_threadpool(_get_object_sync, doc["storage_path"])
+    return Response(content=content, media_type=mime, headers={
+        "Content-Disposition": f'inline; filename="{doc.get("original_name", "document")}"',
+        "Cache-Control": "private, max-age=300",
+    })
+
+
+# ══════════════════════════════════════════════════════════════════
+# PRE-SALES ADMIN QUEUE  (role=admin OR role=presales)
+# ══════════════════════════════════════════════════════════════════
+
+def _is_presales(user: Dict[str, Any]) -> bool:
+    return bool(user.get("is_admin") or user.get("super_admin") or user.get("role") in ("admin", "presales"))
+
+
+async def require_presales(user: dict = Depends(current_user)) -> Dict[str, Any]:
+    if not _is_presales(user):
+        raise HTTPException(status_code=403, detail="Admin/pre-sales role required")
+    return user
+
+
+@api_router.get("/admin/presales/leads")
+async def admin_list_presales_leads(
+    admin: dict = Depends(require_presales),
+    status: Optional[str] = None,
+    limit: int = 200,
+):
+    q: Dict[str, Any] = {}
+    if status:
+        if status not in LEAD_STATUSES:
+            raise HTTPException(status_code=400, detail="Invalid status")
+        q["status"] = status
+    rows = await db.presales_leads.find(q, {"_id": 0}).sort("created_at", -1).limit(min(limit, 500)).to_list(500)
+    now = datetime.now(timezone.utc)
+    sla_secs = CALLBACK_SLA_MINUTES * 60
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        # SLA calc — normalise stored timestamp to tz-aware UTC.
+        raw = r.get("created_at") or now_iso()
+        try:
+            iso = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
+            created = datetime.fromisoformat(iso)
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+        except Exception:
+            created = now
+        age_seconds = int((now - created).total_seconds())
+        r["age_seconds"] = age_seconds
+        r["sla_breached"] = (r.get("status") == "not_contacted" and age_seconds > sla_secs)
+        r["tel_link"] = f"tel:{r.get('phone', '')}" if r.get("phone") else None
+        out.append(r)
+    # Counts
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    today_count = await db.presales_leads.count_documents({"created_at": {"$regex": f"^{today}"}})
+    pending_calls = await db.presales_leads.count_documents({"status": "not_contacted"})
+    booked_today = await db.presales_leads.count_documents({"status": "consult_booked", "updated_at": {"$regex": f"^{today}"}})
+    pending_docs = await db.health_documents.count_documents({"status": "pending_review", "deleted": {"$ne": True}})
+    return {
+        "items": out,
+        "stats": {
+            "today_signups": today_count,
+            "pending_calls": pending_calls,
+            "consults_booked_today": booked_today,
+            "pending_documents": pending_docs,
+            "sla_minutes": CALLBACK_SLA_MINUTES,
+        },
+    }
+
+
+class LeadStatusIn(BaseModel):
+    status: Literal["not_contacted", "contacted", "consult_booked", "consult_done", "kit_ordered"]
+    agent_name: Optional[str] = Field(None, max_length=120)
+    note: Optional[str] = Field(None, max_length=500)
+
+
+@api_router.patch("/admin/presales/leads/{lead_id}/status")
+async def admin_update_lead_status(lead_id: str, body: LeadStatusIn, admin: dict = Depends(require_presales)):
+    lead = await db.presales_leads.find_one({"id": lead_id}, {"_id": 0, "status_history": 1, "user_id": 1})
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    entry = {
+        "status": body.status,
+        "timestamp": now_iso(),
+        "agent": body.agent_name or admin.get("name") or admin.get("email"),
+        "note": (body.note or "").strip() or None,
+    }
+    updates = {
+        "status": body.status,
+        "agent_name": entry["agent"],
+        "updated_at": now_iso(),
+    }
+    if body.status == "consult_done":
+        updates["free_consult_available"] = False
+        # Guard: only update if we actually have a linked user_id (empty filter would match-all)
+        linked_user_id = lead.get("user_id")
+        if linked_user_id:
+            await db.users.update_one(
+                {"id": linked_user_id},
+                {"$set": {"free_consult_used": True, "free_consult_available": False}},
+            )
+    await db.presales_leads.update_one(
+        {"id": lead_id},
+        {"$set": updates, "$push": {"status_history": entry}},
+    )
+    await log_activity("presales_lead_status", actor=admin, meta={"lead_id": lead_id, "status": body.status})
+    return {"ok": True}
+
+
+@api_router.get("/admin/presales/leads.csv")
+async def admin_export_leads_csv(admin: dict = Depends(require_presales)):
+    rows = await db.presales_leads.find({}, {"_id": 0}).sort("created_at", -1).to_list(10000)
+    import io, csv
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["created_at", "name", "phone", "email", "language", "prakriti", "concern",
+                "recommended_kit", "call_preference", "age_group", "status", "agent",
+                "documents_uploaded", "utm_source", "utm_medium", "utm_campaign"])
+    for r in rows:
+        w.writerow([
+            r.get("created_at"), r.get("name"), r.get("phone"), r.get("email"),
+            r.get("language"), r.get("prakriti_result"), r.get("health_concern"),
+            r.get("recommended_kit_name"), r.get("call_preference"), r.get("age_group"),
+            r.get("status"), r.get("agent_name"), r.get("documents_uploaded", 0),
+            r.get("utm_source"), r.get("utm_medium"), r.get("utm_campaign"),
+        ])
+    return Response(content=buf.getvalue(), media_type="text/csv", headers={
+        "Content-Disposition": 'attachment; filename="presales_leads.csv"'
+    })
+
+
+# ── Admin documents review queue ──────────────────────────────────
+@api_router.get("/admin/documents/pending")
+async def admin_pending_documents(admin: dict = Depends(require_presales), status: Optional[str] = "pending_review", limit: int = 200):
+    q: Dict[str, Any] = {"deleted": {"$ne": True}}
+    if status and status in DOC_STATUSES:
+        q["status"] = status
+    rows = await db.health_documents.find(q, {"_id": 0, "storage_path": 0}).sort("uploaded_at", -1).limit(min(limit, 500)).to_list(500)
+    for r in rows:
+        u = await db.users.find_one({"id": r.get("user_id")}, {"_id": 0, "name": 1, "phone": 1, "email": 1, "preferred_language": 1})
+        r["user"] = u or {}
+        r["download_token"] = _make_dl_token(admin["id"], r["id"])
+    return {"items": rows}
+
+
+class DocumentReviewIn(BaseModel):
+    decision: Literal["approve", "reupload"]
+    assigned_doctor_id: Optional[str] = Field(None, max_length=100)
+    review_note: Optional[str] = Field(None, max_length=500)
+
+
+@api_router.patch("/admin/documents/{doc_id}/review")
+async def admin_review_document(doc_id: str, body: DocumentReviewIn, admin: dict = Depends(require_presales)):
+    doc = await db.health_documents.find_one({"id": doc_id}, {"_id": 0, "user_id": 1})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if body.decision == "approve":
+        if not body.assigned_doctor_id:
+            raise HTTPException(status_code=400, detail="Please assign a doctor")
+        # Ensure the doctor exists & verified
+        doctor = await db.doctors.find_one({"user_id": body.assigned_doctor_id}, {"_id": 0, "verified": 1})
+        if not doctor:
+            raise HTTPException(status_code=404, detail="Doctor not found")
+        updates = {
+            "status": "sent_to_doctor",
+            "assigned_doctor_id": body.assigned_doctor_id,
+            "reviewed_by": admin["id"],
+            "reviewed_at": now_iso(),
+            "review_note": (body.review_note or "").strip() or None,
+        }
+    else:
+        updates = {
+            "status": "reupload_requested",
+            "reviewed_by": admin["id"],
+            "reviewed_at": now_iso(),
+            "review_note": (body.review_note or "Please re-upload — the document was unclear.").strip(),
+        }
+    await db.health_documents.update_one({"id": doc_id}, {"$set": updates})
+    # Notify the user via existing _notify system (best-effort)
+    try:
+        await _notify(doc["user_id"], "document_review", admin["id"], doc_id,
+                      snippet=("Your document was forwarded to your doctor." if body.decision == "approve" else "Please re-upload your document."))
+    except Exception:
+        pass
+    await log_activity("presales_doc_review", actor=admin, meta={"doc_id": doc_id, "decision": body.decision})
+    return {"ok": True, "status": updates["status"]}
+
+
 
 
 @api_router.get("/")

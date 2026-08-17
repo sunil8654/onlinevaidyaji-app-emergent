@@ -1,0 +1,41 @@
+{
+  "summary": "Iter 30 — Patient Onboarding Funnel (Phase 1a) backend testing. 27 tests executed; 26 passed, 1 xfailed (real product bug). All new endpoints work: OTP send/verify (mock code 123456), invalid-phone rejection (400/422), 30s cooldown 429, 3-wrong-attempts 10-min lock, existing-user login-without-name, Emergent Google /auth/session 401 on invalid session, PATCH /users/me (language, call_preference syncs to presales_lead, duplicate phone rejected), quiz submit + Prakriti scoring for pure Vata/Pitta/Kapha and 3A/3B/2C→Tridosha, second submit updates lead in-place (no duplicate), invalid health_concern → 400, GET /quiz/mine returns language-appropriate description, /onboarding/config returns callback_sla=10 + whatsapp 7290044081 + 10-item kit_catalog. Regression: /api/auth/register + /login work, admin /api/admin/stats stays gated (401 anon, 200 for admin). SMS OTP is MOCKED (dev_hint returns fixed 123456).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/quiz/submit",
+        "issue": "Prakriti scoring bug for tied dual-dosha cases. For 4A/4B/0C the code sorts tied dosha names ALPHABETICALLY and returns 'Pitta-Vata' (spec/description dict expects 'Vata-Pitta'). Same class of bug: 4P/4K tie will produce 'Kapha-Pitta' (also NOT in PRAKRITI_COPY). Because PRAKRITI_COPY.get('Pitta-Vata') is None, the description falls back to Tridosha copy — user sees 'You're a rare Sam Prakriti...' with prakriti label 'Pitta-Vata', which is inconsistent. Fix: use the canonical Ayurvedic order (Vata > Pitta > Kapha) when constructing the tie label instead of alphabetical, OR add Pitta-Vata / Kapha-Pitta keys to PRAKRITI_COPY. Reference: /app/backend/server.py:6166-6170."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter30_onboarding_funnel.py",
+    "/app/test_reports/pytest/pytest_iter30.xml"
+  ],
+  "action_items": [
+    "Fix dual-dosha tie label ordering: swap alphabetical `sorted(...)` in _score_prakriti (server.py:6167-6170) to canonical order Vata > Pitta > Kapha, so 4A/4B → 'Vata-Pitta' and 4B/4C → 'Pitta-Kapha' — matches the keys already present in PRAKRITI_COPY.",
+    "OPTIONAL cleanup: PRAKRITI_COPY has a stale 'Kapha-Vata' entry that becomes unreachable once ordering is canonical; can be removed.",
+    "Note: /api/auth/phone/send-otp min_length=6 on the Pydantic model causes short phones (<6 chars) to return 422 before hitting the custom 400 validator. Not a bug per se — both are 4xx — but the error message shape differs. Consider dropping min_length or lowering it to 1 so all invalid-phone rejects share the friendly 400 message."
+  ],
+  "critical_code_review_comments": [
+    "server.py has grown to 6298 lines — recommend splitting the Phase 1a block (line 5813 onward) into a separate router module (e.g. routers/onboarding.py) before Phase 1b.",
+    "_OTP_STORE is an in-memory dict; will not survive backend restart or scale-out. Fine for MVP mock phase, but plan for Redis when Twilio integration lands.",
+    "/auth/session uses httpx.AsyncClient with a bare 'except Exception' → 502. That's OK but hides underlying errors; consider narrower exception types (httpx.HTTPError) + structured logging."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter30_onboarding_funnel.py (new file)"
+  ],
+  "success_rate": {"backend": "96% (26 pass / 1 xfail-known-bug / 27 total)", "frontend": "not tested"},
+  "seed_data_creation": "Each test creates its own ephemeral users via mock-OTP signup (10-digit random Indian mobile, prefix TEST_ in name). Presales leads and quiz_results collections receive TEST_ rows but there is no admin cleanup endpoint exposed; volume is small (~15 rows per run).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Base URL from EXPO_PUBLIC_BACKEND_URL. OTP is mocked with 123456. When re-running tests to a fresh phone, the 30s cooldown between two send-otp calls to the SAME number is enforced; the existing-user test explicitly sleeps 31s. If the dual-dosha ordering bug is fixed, remove the pytest.xfail branch in test_mixed_4a_4b_returns_vata_pitta and assert strict equality with 'Vata-Pitta'. All admin regression tests use /api/admin/stats (NOT /api/admin/dashboard which returns 404 — no such route).",
+  "rca_of_issue": "Bug: dual-dosha tie label wrong. RCA: _score_prakriti (server.py:6166-6170) constructs the tie label as `sorted([top1.capitalize(), top2.capitalize()])` — pure alphabetical, so tie(V,P)='Pitta-Vata', tie(P,K)='Kapha-Pitta'. PRAKRITI_COPY only contains 'Vata-Pitta','Pitta-Kapha','Vata-Kapha','Kapha-Vata' (this last was added as an ad-hoc alias, but the alphabetical output for V-P and P-K still misses). Reproduction: POST /api/quiz/submit with answers={q1..q4:A, q5..q8:B} → response prakriti='Pitta-Vata' AND description=Tridosha fallback copy. Mitigation: replace the alphabetical sort with canonical ordering: `order = ['vata','pitta','kapha']; ordered = sorted([top1_key, top2_key], key=order.index); return scores, f\"{ordered[0].capitalize()}-{ordered[1].capitalize()}\"`."
+}

@@ -49,6 +49,91 @@ export const api = {
   changePassword: (new_password: string, confirm_password: string) =>
     request<{ ok: boolean; message: string }>("/auth/change-password", "POST", { new_password, confirm_password }),
 
+  // ── Onboarding funnel (Phase 1a) ─────────────────────────────
+  onboardingConfig: () => request<{
+    callback_sla_minutes: number;
+    whatsapp_number: string;
+    whatsapp_url: string;
+    tagline: string;
+    brand: string;
+    kit_catalog: Record<string, { en: string; hi: string }>;
+  }>("/onboarding/config", "GET", undefined, false),
+
+  sendPhoneOtp: (phone: string) =>
+    request<{ ok: boolean; message: string; dev_hint?: string }>("/auth/phone/send-otp", "POST", { phone }, false),
+  verifyPhoneOtp: (payload: { phone: string; otp: string; name?: string; email?: string; role?: "patient" | "doctor" }) =>
+    request<{ token: string; user: any; is_new: boolean }>("/auth/phone/verify-otp", "POST", payload, false),
+  googleSession: (session_id: string) =>
+    request<{ token: string; user: any; is_new: boolean }>("/auth/session", "POST", { session_id }, false),
+
+  updateMe: (body: {
+    preferred_language?: "en" | "hi";
+    call_preference?: "video" | "phone";
+    name?: string;
+    email?: string;
+    phone?: string;
+  }) => request<{ ok: boolean; user?: any }>("/users/me", "PATCH", body),
+
+  submitQuiz: (body: {
+    answers: Record<string, "A" | "B" | "C">;
+    health_concern: string;
+    age_group: string;
+    utm_source?: string;
+    utm_medium?: string;
+    utm_campaign?: string;
+  }) => request<{
+    id: string;
+    prakriti: string;
+    dosha_scores: { vata: number; pitta: number; kapha: number };
+    description: { line1: string; line2: string; line3: string };
+    recommended_kit: { id: string; name: string };
+    language: "en" | "hi";
+    free_consult_available: boolean;
+    callback_sla_minutes: number;
+  }>("/quiz/submit", "POST", body),
+
+  myQuizResult: () => request<any>("/quiz/mine"),
+
+  // ── Health Documents (Phase 1b) ──────────────────────────────
+  listMyDocuments: () => request<{ items: any[]; total: number }>("/documents/mine"),
+  deleteDocument: (doc_id: string) => request<{ deleted: boolean }>(`/documents/${doc_id}`, "DELETE"),
+  documentDownloadUrl: (doc_id: string, token: string) =>
+    `${BASE}/api/files/${doc_id}?token=${encodeURIComponent(token)}`,
+  uploadDocument: async (file: { uri: string; name: string; mimeType: string }, doc_type: string, user_note?: string) => {
+    const token = await storage.secureGet<string>(TOKEN_KEY, "");
+    const form = new FormData();
+    if (typeof window !== "undefined" && !(process as any)?.env?.EXPO_OS) {
+      // web
+      const blob = await (await fetch(file.uri)).blob();
+      form.append("file", blob, file.name);
+    } else {
+      // native
+      form.append("file", { uri: file.uri, name: file.name, type: file.mimeType } as any);
+    }
+    form.append("doc_type", doc_type);
+    if (user_note) form.append("user_note", user_note);
+    const res = await fetch(`${BASE}/api/documents/upload`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },  // NO Content-Type
+      body: form as any,
+    });
+    const raw = await res.text();
+    const data = raw ? JSON.parse(raw) : null;
+    if (!res.ok) throw new Error((data && (data.detail || data.message)) || `HTTP ${res.status}`);
+    return data;
+  },
+
+  // ── Admin Pre-Sales Queue (Phase 1b) ─────────────────────────
+  adminPresalesLeads: (status?: string) =>
+    request<{ items: any[]; stats: any }>(`/admin/presales/leads${status ? `?status=${status}` : ""}`),
+  adminUpdateLeadStatus: (lead_id: string, body: { status: string; agent_name?: string; note?: string }) =>
+    request<{ ok: boolean }>(`/admin/presales/leads/${lead_id}/status`, "PATCH", body),
+  adminPresalesCsvUrl: () => `${BASE}/api/admin/presales/leads.csv`,
+  adminPendingDocuments: (status?: string) =>
+    request<{ items: any[] }>(`/admin/documents/pending${status ? `?status=${status}` : ""}`),
+  adminReviewDocument: (doc_id: string, body: { decision: "approve" | "reupload"; assigned_doctor_id?: string; review_note?: string }) =>
+    request<{ ok: boolean; status: string }>(`/admin/documents/${doc_id}/review`, "PATCH", body),
+
   // Admin — password reset moderation
   adminListPasswordResets: (status: "pending" | "approved" | "rejected" = "pending") =>
     request<{ items: any[] }>(`/admin/password-resets?status=${status}`),

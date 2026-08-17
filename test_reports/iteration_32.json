@@ -1,0 +1,35 @@
+{
+  "summary": "Iter 32 — Focused retest of iter31's two CRITICAL Phase 1b bugs. All 9 targeted tests PASS. Both fixes verified: (1) GET /api/admin/presales/leads now returns 200 for legacy tz-aware `created_at` rows (verified against seeded row with '2026-01-01T00:00:00+00:00' AND live DB with 18 pre-existing rows — endpoint returns 200 with populated items[]/stats{} and correct sla_breached booleans). (2) PATCH /api/admin/presales/leads/{id}/status with status=consult_done now (a) correctly flips ONLY the linked user's free_consult_used=True when user_id is present, and (b) does NOT mutate any user document when user_id is missing/None — a distinctive-email canary user AND the earliest-created other user in the collection both remain pristine (free_consult_used=False, free_consult_available=True) after both the missing-user_id and null-user_id PATCH paths. Status history appends (grows by 1 per call, not replaced). Documents regression (/documents/upload → /documents/mine → /admin/documents/pending → /admin/documents/{id}/review reupload) all pass. Server.py:6522-6606 review confirms the fixes: line 6534 `now = datetime.now(timezone.utc)`, lines 6541-6544 normalize `created` to tz-aware, line 6578 projection includes `user_id: 1`, and lines 6595-6600 guard `if linked_user_id` before calling users.update_one. No new issues found.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter32_presales_bugfix_retest.py",
+    "/app/test_reports/pytest/pytest_iter32.xml"
+  ],
+  "action_items": [
+    "Both iter31 CRITICAL bugs are now fixed and verified. Safe to close.",
+    "Cosmetic (deferred from iter31): consider splitting server.py (6718 lines) — Phase 1b block ~450 lines could move to `routers/documents.py` and `routers/presales_admin.py`.",
+    "Cosmetic: keep an eye on the class-scoped fixture PytestRemovedIn10Warning inside the new file — will need @classmethod when pytest 10 lands, not blocking."
+  ],
+  "critical_code_review_comments": [
+    "Bug #1 fix (server.py:6534,6541-6546) is clean — uses `datetime.now(timezone.utc)` for `now` and coerces any tz-naive `created` back to UTC-aware via `.replace(tzinfo=timezone.utc)`. Handles both 'Z' and '+00:00' variants and legacy naive strings.",
+    "Bug #2 fix (server.py:6578,6595-6600) correctly (a) adds `user_id: 1` to the projection and (b) wraps the users.update_one call in `if linked_user_id:` — no more empty-filter side-effect. The lead's own `free_consult_available=False` still lands regardless, which is intended.",
+    "Note (still outstanding from iter31 minor list, unrelated to these bugs): LeadStatusIn.status uses a hardcoded Literal[...] that duplicates LEAD_STATUSES — cosmetic drift risk only."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter32_presales_bugfix_retest.py (new — 9 focused retest cases: 3 for Bug 1, 4 for Bug 2 including canary + earliest-other-user assertions, 2 documents regression)"
+  ],
+  "success_rate": {"backend": "100% (9 pass / 0 fail / 9 total)", "frontend": "not tested (backend-only per request)"},
+  "seed_data_creation": "Ephemeral per-test: fresh 'canary_iter32_*' user + 'linked_*' user + 'doc_reg_*' user via /api/auth/register; one presales_lead seeded per scenario via direct pymongo insert then torn down in the finally block. All test rows are tagged `_test_: True` and deleted at test/module end. No production data touched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "The two Phase 1b CRITICAL bugs from iter31 (`test_reports/iteration_31.json` → backend_issues.critical) are now fixed and covered by `test_iter32_presales_bugfix_retest.py`. Keep this file in regression rotation. Key selectors: 'earliest-created OTHER user in collection' assertion is the canonical proof for Bug #2 — do not remove it. BASE_URL comes from `EXPO_PUBLIC_BACKEND_URL` via conftest; ADMIN_PASSWORD loaded from `/app/backend/.env`. Live DB currently has 18 presales_leads rows (all with mixed tz formats) which are useful for continued regression."
+}
