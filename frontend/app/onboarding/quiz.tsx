@@ -87,6 +87,7 @@ const CONCERNS: Array<{ id: string; en: string; hi: string; icon: any }> = [
 ];
 
 const AGE_GROUPS = ["18-25", "26-35", "36-45", "46-60", "60+"];
+const KIT_IDS = new Set(CONCERNS.map((c) => c.id));
 
 const Q9_LABEL = { en: "What is your biggest health concern?", hi: "Aapki sabse badi health concern kya hai?" };
 const Q10_LABEL = { en: "Your age group", hi: "Aapka age group" };
@@ -118,9 +119,17 @@ export default function QuizFlow() {
     (async () => {
       const r = await storage.getItem<ResumeState | null>(RESUME_KEY, null as any);
       if (r && typeof r === "object" && r.step != null) {
-        setStep(r.step); setAnswers(r.answers || {});
+        const savedAnswers = r.answers || {};
+        setAnswers(savedAnswers);
         if (r.concern) setConcern(r.concern);
         if (r.age) setAge(r.age);
+        // Don't jump the user past unanswered questions — resume at the first hole.
+        const firstMissing = Array.from({ length: 8 }, (_, i) => `q${i + 1}`).findIndex((k) => !savedAnswers[k]);
+        if (firstMissing >= 0 && r.step > firstMissing) {
+          setStep(firstMissing);
+        } else {
+          setStep(r.step);
+        }
       }
     })();
   }, []);
@@ -139,6 +148,26 @@ export default function QuizFlow() {
   const goBack = () => setStep((s) => Math.max(-1, s - 1));
 
   async function submit(withConcern: string, withAge: string) {
+    // Guard: ensure all 8 dosha questions are answered before firing the API call.
+    const missing = Array.from({ length: 8 }, (_, i) => `q${i + 1}`).filter((k) => !answers[k]);
+    if (missing.length > 0) {
+      // Redirect to the first unanswered question instead of a confusing 422.
+      const firstMissing = parseInt(missing[0].slice(1), 10) - 1;
+      Alert.alert(
+        lang === "hi" ? "Kuch questions reh gaye" : "Some questions are missing",
+        lang === "hi"
+          ? `Kripya pehle Question ${firstMissing + 1} answer karein.`
+          : `Please answer Question ${firstMissing + 1} first.`,
+        [{ text: "OK", onPress: () => setStep(firstMissing) }],
+      );
+      return;
+    }
+    if (!withConcern || !KIT_IDS.has(withConcern)) {
+      Alert.alert(lang === "hi" ? "Concern select karein" : "Please choose your health concern", "", [
+        { text: "OK", onPress: () => setStep(8) },
+      ]);
+      return;
+    }
     setSaving(true);
     try {
       const res = await api.submitQuiz({

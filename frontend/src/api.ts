@@ -90,7 +90,16 @@ export const api = {
     language: "en" | "hi";
     free_consult_available: boolean;
     callback_sla_minutes: number;
-  }>("/quiz/submit", "POST", body),
+  }>("/quiz/submit", "POST", {
+    // Hard-fallback: ensure answers is always a serializable object so JSON.stringify
+    // never drops it (undefined state on some devices caused a 422 in the field before).
+    answers: body.answers && typeof body.answers === "object" ? body.answers : {},
+    health_concern: body.health_concern,
+    age_group: body.age_group,
+    utm_source: body.utm_source,
+    utm_medium: body.utm_medium,
+    utm_campaign: body.utm_campaign,
+  }),
 
   myQuizResult: () => request<any>("/quiz/mine"),
 
