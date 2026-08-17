@@ -1,5 +1,5 @@
 // Sign-up funnel entry — FREE consult banner · Google + Phone OTP · Language toggle.
-// Spec-perfect bilingual copy for the FIRST touchpoint patients see.
+// Role tabs at top: Patient (default) or AYUSH Doctor route to dedicated flows.
 import { useCallback, useEffect, useState } from "react";
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, ActivityIndicator, Alert, Platform, Image,
@@ -16,8 +16,21 @@ import { useAuth } from "@/src/auth";
 
 WebBrowser.maybeCompleteAuthSession();
 
-// Copy is inline (not i18n dictionary) so it matches the spec verbatim.
 const COPY = {
+  // Role tabs
+  patientTab: { en: "I'm a Patient", hi: "Main Patient hoon" },
+  doctorTab:  { en: "I'm an AYUSH Doctor", hi: "Main AYUSH Doctor hoon" },
+  patientSubtab: { en: "Book a consultation · Get FREE first consult", hi: "Consultation book karein · Pehla FREE consult" },
+  doctorSubtab:  { en: "Consult patients · Join Vaidya Charcha", hi: "Patients ko consult karein · Vaidya Charcha join karein" },
+  // Doctor panel
+  doctorPanelTitle: { en: "For verified AYUSH practitioners", hi: "Verified AYUSH doctors ke liye" },
+  doctorPanelBody: {
+    en: "Consult patients online · Manage your calendar & clinic · Join the doctors-only community. Sign-up needs your Ayurveda / Homeopathy / Unani / Siddha / Naturopathy / Yoga registration number.",
+    hi: "Patients ko online consult karein · Apna calendar aur clinic manage karein · Sirf doctors ki community join karein. Sign-up ke liye Ayurveda / Homeopathy / Unani / Siddha / Naturopathy / Yoga registration number chahiye.",
+  },
+  doctorSignIn: { en: "Sign in as Doctor", hi: "Doctor ke roop mein sign in karein" },
+  doctorRegister: { en: "Register as Doctor", hi: "Doctor ke roop mein register karein" },
+  // Patient panel
   banner: {
     en: "🎁 Sign Up & Get Your FIRST DOCTOR CONSULTATION FREE",
     hi: "🎁 Sign Up karein aur paayein PEHLA DOCTOR CONSULTATION बिल्कुल FREE",
@@ -28,8 +41,6 @@ const COPY = {
   phone: { en: "Continue with Phone Number", hi: "Phone Number se aage badhein" },
   or: { en: "OR", hi: "YA" },
   enterPhone: { en: "Enter your 10-digit mobile number", hi: "Apna 10-digit mobile number daalein" },
-  sendOtp: { en: "Send OTP", hi: "OTP Bhejein" },
-  sending: { en: "Sending…", hi: "Bhej rahe hain…" },
   existing: { en: "Already have an account?", hi: "Pehle se account hai?" },
   signIn: { en: "Sign in", hi: "Sign in" },
   disclaimer: {
@@ -53,6 +64,7 @@ export default function Signup() {
   const router = useRouter();
   const { lang, setLang } = useI18n();
   const { applySession } = useAuth();
+  const [role, setRole] = useState<"patient" | "doctor">("patient");
   const [phone, setPhone] = useState("");
   const [sending, setSending] = useState(false);
   const [googleBusy, setGoogleBusy] = useState(false);
@@ -65,7 +77,6 @@ export default function Signup() {
       setGoogleBusy(true);
       const res = await api.googleSession(sessionId);
       await applySession(res.token, res.user);
-      // New Google users always land in language pick; returning users go straight home.
       if (res.is_new || !res.user.preferred_language) router.replace("/signup/language");
       else router.replace("/");
     } catch (e: any) {
@@ -75,7 +86,6 @@ export default function Signup() {
     }
   }, [applySession, lang, router]);
 
-  // Handle cold-start deep link + hot deep link.
   useEffect(() => {
     Linking.getInitialURL().then(handleGoogleCallback);
     const sub = Linking.addEventListener("url", (evt) => handleGoogleCallback(evt.url));
@@ -95,7 +105,6 @@ export default function Signup() {
       }
       const result = await WebBrowser.openAuthSessionAsync(authUrl, redirect);
       const url = (result as any)?.url || null;
-      // Fall through to Linking listener if url is empty (Android often returns "dismiss").
       if (url) handleGoogleCallback(url);
     } catch (e: any) {
       Alert.alert("Sign in failed", e?.message || COPY.googleFail[lang]);
@@ -117,7 +126,6 @@ export default function Signup() {
     setSending(true);
     try {
       const res = await api.sendPhoneOtp(phone);
-      // Show dev hint in an alert so mock OTP is easy in testing
       if (res.dev_hint) console.log(res.dev_hint);
       router.push({ pathname: "/signup/otp", params: { phone } });
     } catch (e: any) {
@@ -140,94 +148,169 @@ export default function Signup() {
       </View>
 
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        {/* Free-consult banner */}
-        <View style={styles.banner}>
-          <Text style={styles.bannerText}>{COPY.banner[lang]}</Text>
-        </View>
-
         {/* Brand */}
         <View style={styles.brandBlock}>
           <View style={styles.logoRing}>
-            <Feather name="heart" size={32} color={COLORS.brand} />
+            <Feather name="heart" size={28} color={COLORS.brand} />
           </View>
           <Text style={styles.title}>{COPY.title[lang]}</Text>
           <Text style={styles.sub}>{COPY.sub[lang]}</Text>
         </View>
 
-        {/* Google button */}
-        <TouchableOpacity
-          style={[styles.googleBtn, googleBusy && { opacity: 0.6 }]}
-          onPress={startGoogle}
-          disabled={googleBusy}
-          activeOpacity={0.9}
-          testID="signup-google"
-        >
-          {googleBusy ? (
-            <ActivityIndicator size="small" color={COLORS.textPrimary} />
-          ) : (
-            <>
-              <Image
-                source={{ uri: "https://upload.wikimedia.org/wikipedia/commons/c/c1/Google_%22G%22_logo.svg" }}
-                style={styles.googleLogo}
+        {/* Role tabs — the "each column" the user asked for */}
+        <View style={styles.roleTabs}>
+          <TouchableOpacity
+            style={[styles.roleTab, role === "patient" && styles.roleTabActive]}
+            onPress={() => setRole("patient")}
+            testID="role-tab-patient"
+            activeOpacity={0.85}
+          >
+            <View style={[styles.roleIcon, role === "patient" && { backgroundColor: COLORS.surface }]}>
+              <Feather name="user" size={22} color={role === "patient" ? COLORS.brand : COLORS.surface} />
+            </View>
+            <Text style={[styles.roleTitle, role === "patient" && { color: COLORS.surface }]}>{COPY.patientTab[lang]}</Text>
+            <Text style={[styles.roleSubtitle, role === "patient" && { color: "rgba(255,255,255,0.9)" }]} numberOfLines={2}>
+              {COPY.patientSubtab[lang]}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.roleTab, role === "doctor" && styles.roleTabActive]}
+            onPress={() => setRole("doctor")}
+            testID="role-tab-doctor"
+            activeOpacity={0.85}
+          >
+            <View style={[styles.roleIcon, role === "doctor" && { backgroundColor: COLORS.surface }]}>
+              <Feather name="award" size={22} color={role === "doctor" ? COLORS.brand : COLORS.surface} />
+            </View>
+            <Text style={[styles.roleTitle, role === "doctor" && { color: COLORS.surface }]}>{COPY.doctorTab[lang]}</Text>
+            <Text style={[styles.roleSubtitle, role === "doctor" && { color: "rgba(255,255,255,0.9)" }]} numberOfLines={2}>
+              {COPY.doctorSubtab[lang]}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {role === "patient" ? (
+          <>
+            {/* Free-consult banner */}
+            <View style={styles.banner}>
+              <Text style={styles.bannerText}>{COPY.banner[lang]}</Text>
+            </View>
+
+            {/* Google button */}
+            <TouchableOpacity
+              style={[styles.googleBtn, googleBusy && { opacity: 0.6 }]}
+              onPress={startGoogle}
+              disabled={googleBusy}
+              activeOpacity={0.9}
+              testID="signup-google"
+            >
+              {googleBusy ? (
+                <ActivityIndicator size="small" color={COLORS.textPrimary} />
+              ) : (
+                <>
+                  <Image
+                    source={{ uri: "https://upload.wikimedia.org/wikipedia/commons/c/c1/Google_%22G%22_logo.svg" }}
+                    style={styles.googleLogo}
+                  />
+                  <Text style={styles.googleText}>{COPY.google[lang]}</Text>
+                </>
+              )}
+            </TouchableOpacity>
+
+            <View style={styles.divider}>
+              <View style={styles.line} />
+              <Text style={styles.dividerText}>{COPY.or[lang]}</Text>
+              <View style={styles.line} />
+            </View>
+
+            <Text style={styles.label}>{COPY.enterPhone[lang]}</Text>
+            <View style={styles.phoneRow}>
+              <View style={styles.ccBox}><Text style={styles.ccText}>+91</Text></View>
+              <TextInput
+                style={styles.phoneInput}
+                value={phone}
+                onChangeText={(t) => setPhone(t.replace(/\D/g, "").slice(0, 10))}
+                placeholder="98765 43210"
+                placeholderTextColor={COLORS.textMuted}
+                keyboardType="phone-pad"
+                maxLength={10}
+                testID="signup-phone"
               />
-              <Text style={styles.googleText}>{COPY.google[lang]}</Text>
-            </>
-          )}
-        </TouchableOpacity>
+            </View>
 
-        {/* OR divider */}
-        <View style={styles.divider}>
-          <View style={styles.line} />
-          <Text style={styles.dividerText}>{COPY.or[lang]}</Text>
-          <View style={styles.line} />
-        </View>
+            <TouchableOpacity
+              style={[styles.phoneCta, (!isValidIndianPhone(phone) || sending) && { opacity: 0.55 }]}
+              onPress={sendOtp}
+              disabled={!isValidIndianPhone(phone) || sending}
+              testID="signup-send-otp"
+            >
+              {sending ? (
+                <ActivityIndicator size="small" color={COLORS.surface} />
+              ) : (
+                <>
+                  <Feather name="smartphone" size={16} color={COLORS.surface} />
+                  <Text style={styles.phoneCtaText}>{COPY.phone[lang]}</Text>
+                </>
+              )}
+            </TouchableOpacity>
 
-        {/* Phone entry */}
-        <Text style={styles.label}>{COPY.enterPhone[lang]}</Text>
-        <View style={styles.phoneRow}>
-          <View style={styles.ccBox}><Text style={styles.ccText}>+91</Text></View>
-          <TextInput
-            style={styles.phoneInput}
-            value={phone}
-            onChangeText={(t) => setPhone(t.replace(/\D/g, "").slice(0, 10))}
-            placeholder="98765 43210"
-            placeholderTextColor={COLORS.textMuted}
-            keyboardType="phone-pad"
-            maxLength={10}
-            testID="signup-phone"
-          />
-        </View>
+            <TouchableOpacity
+              onPress={() => router.push("/auth/login")}
+              style={{ alignSelf: "center", marginTop: SPACING.lg }}
+              testID="signup-signin"
+            >
+              <Text style={styles.linkText}>
+                {COPY.existing[lang]}  <Text style={{ color: COLORS.brand, fontWeight: "700" }}>{COPY.signIn[lang]}</Text>
+              </Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <View style={styles.doctorPanel}>
+            <View style={styles.doctorHead}>
+              <Feather name="shield" size={16} color={COLORS.brand} />
+              <Text style={styles.doctorPanelTitle}>{COPY.doctorPanelTitle[lang]}</Text>
+            </View>
+            <Text style={styles.doctorPanelBody}>{COPY.doctorPanelBody[lang]}</Text>
 
-        <TouchableOpacity
-          style={[styles.phoneCta, (!isValidIndianPhone(phone) || sending) && { opacity: 0.55 }]}
-          onPress={sendOtp}
-          disabled={!isValidIndianPhone(phone) || sending}
-          testID="signup-send-otp"
-        >
-          {sending ? (
-            <ActivityIndicator size="small" color={COLORS.surface} />
-          ) : (
-            <>
-              <Feather name="smartphone" size={16} color={COLORS.surface} />
-              <Text style={styles.phoneCtaText}>{COPY.phone[lang]}</Text>
-            </>
-          )}
-        </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.doctorPrimaryBtn}
+              onPress={() => router.push({ pathname: "/auth/register", params: { role: "doctor" } })}
+              testID="doctor-register"
+            >
+              <Feather name="user-plus" size={16} color={COLORS.surface} />
+              <Text style={styles.doctorPrimaryText}>{COPY.doctorRegister[lang]}</Text>
+            </TouchableOpacity>
 
-        {/* Sign-in link for existing users */}
-        <TouchableOpacity
-          onPress={() => router.push("/auth/login")}
-          style={{ alignSelf: "center", marginTop: SPACING.lg }}
-          testID="signup-signin"
-        >
-          <Text style={styles.linkText}>
-            {COPY.existing[lang]}  <Text style={{ color: COLORS.brand, fontWeight: "700" }}>{COPY.signIn[lang]}</Text>
-          </Text>
-        </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.doctorSecondaryBtn}
+              onPress={() => router.push("/auth/login")}
+              testID="doctor-signin"
+            >
+              <Feather name="log-in" size={16} color={COLORS.brand} />
+              <Text style={styles.doctorSecondaryText}>{COPY.doctorSignIn[lang]}</Text>
+            </TouchableOpacity>
+
+            <View style={styles.doctorFactRow}>
+              <Fact icon="check-circle" text={lang === "hi" ? "Verified badge" : "Verified badge"} />
+              <Fact icon="calendar" text={lang === "hi" ? "Slot calendar" : "Slot calendar"} />
+              <Fact icon="users" text={lang === "hi" ? "Vaidya Charcha" : "Vaidya Charcha"} />
+            </View>
+          </View>
+        )}
 
         <Text style={styles.disclaimer}>{COPY.disclaimer[lang]}</Text>
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+function Fact({ icon, text }: { icon: any; text: string }) {
+  return (
+    <View style={styles.factChip}>
+      <Feather name={icon} size={10} color={COLORS.brand} />
+      <Text style={styles.factText}>{text}</Text>
+    </View>
   );
 }
 
@@ -237,46 +320,46 @@ const styles = StyleSheet.create({
   langBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 12, paddingVertical: 6, borderRadius: RADIUS.pill, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border },
   langText: { color: COLORS.brand, fontSize: 11, fontWeight: "700", letterSpacing: 1 },
   content: { padding: SPACING.lg, paddingBottom: SPACING.xl },
-  banner: {
-    backgroundColor: "#ffe082",
-    paddingHorizontal: SPACING.md, paddingVertical: 14, borderRadius: RADIUS.md,
-    marginBottom: SPACING.lg,
-    borderWidth: 1, borderColor: "#f2c94c",
-  },
-  bannerText: { textAlign: "center", fontWeight: "800", color: "#4a3a00", fontSize: 14, lineHeight: 19 },
-  brandBlock: { alignItems: "center", marginBottom: SPACING.lg },
-  logoRing: {
-    width: 68, height: 68, borderRadius: 34,
-    backgroundColor: COLORS.surface, borderWidth: 2, borderColor: COLORS.brand,
-    alignItems: "center", justifyContent: "center", marginBottom: SPACING.md,
-  },
-  title: { fontFamily: FONTS.heading, fontSize: 26, color: COLORS.textPrimary, textAlign: "center" },
-  sub: { color: COLORS.textSecondary, fontSize: 13, textAlign: "center", marginTop: 6, lineHeight: 19 },
-  googleBtn: {
-    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10,
-    backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border,
-    paddingVertical: 14, borderRadius: RADIUS.pill, marginTop: SPACING.sm, minHeight: 56,
-  },
+  brandBlock: { alignItems: "center", marginBottom: SPACING.md },
+  logoRing: { width: 56, height: 56, borderRadius: 28, backgroundColor: COLORS.surface, borderWidth: 2, borderColor: COLORS.brand, alignItems: "center", justifyContent: "center", marginBottom: SPACING.sm },
+  title: { fontFamily: FONTS.heading, fontSize: 22, color: COLORS.textPrimary, textAlign: "center" },
+  sub: { color: COLORS.textSecondary, fontSize: 12, textAlign: "center", marginTop: 4, lineHeight: 18 },
+  // Role tabs
+  roleTabs: { flexDirection: "row", gap: SPACING.sm, marginTop: SPACING.md, marginBottom: SPACING.lg },
+  roleTab: { flex: 1, backgroundColor: COLORS.surface, borderRadius: RADIUS.md, borderWidth: 2, borderColor: COLORS.border, padding: SPACING.md, alignItems: "center", gap: 6, minHeight: 130 },
+  roleTabActive: { backgroundColor: COLORS.brand, borderColor: COLORS.brand },
+  roleIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: COLORS.brand, alignItems: "center", justifyContent: "center" },
+  roleTitle: { color: COLORS.textPrimary, fontFamily: FONTS.heading, fontSize: 14, textAlign: "center" },
+  roleSubtitle: { color: COLORS.textMuted, fontSize: 10, textAlign: "center", lineHeight: 14 },
+  // Patient
+  banner: { backgroundColor: "#ffe082", paddingHorizontal: SPACING.md, paddingVertical: 12, borderRadius: RADIUS.md, marginBottom: SPACING.md, borderWidth: 1, borderColor: "#f2c94c" },
+  bannerText: { textAlign: "center", fontWeight: "800", color: "#4a3a00", fontSize: 13, lineHeight: 18 },
+  googleBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, paddingVertical: 14, borderRadius: RADIUS.pill, minHeight: 56 },
   googleLogo: { width: 20, height: 20 },
   googleText: { color: COLORS.textPrimary, fontWeight: "700", fontSize: 15 },
-  divider: { flexDirection: "row", alignItems: "center", gap: SPACING.sm, marginVertical: SPACING.lg },
+  divider: { flexDirection: "row", alignItems: "center", gap: SPACING.sm, marginVertical: SPACING.md },
   line: { flex: 1, height: 1, backgroundColor: COLORS.border },
   dividerText: { color: COLORS.textMuted, fontSize: 11, fontWeight: "700", letterSpacing: 2 },
   label: { color: COLORS.textPrimary, fontSize: 13, fontWeight: "600", marginBottom: 8 },
   phoneRow: { flexDirection: "row", gap: 8 },
   ccBox: { paddingHorizontal: 14, justifyContent: "center", backgroundColor: COLORS.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border },
   ccText: { color: COLORS.textPrimary, fontWeight: "700" },
-  phoneInput: {
-    flex: 1, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border,
-    borderRadius: RADIUS.md, paddingHorizontal: SPACING.md, paddingVertical: 14,
-    color: COLORS.textPrimary, fontSize: 16, letterSpacing: 1,
-  },
-  phoneCta: {
-    marginTop: SPACING.md, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    backgroundColor: COLORS.brand, paddingVertical: 16, borderRadius: RADIUS.pill,
-    minHeight: 56,
-  },
+  phoneInput: { flex: 1, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: RADIUS.md, paddingHorizontal: SPACING.md, paddingVertical: 14, color: COLORS.textPrimary, fontSize: 16, letterSpacing: 1 },
+  phoneCta: { marginTop: SPACING.md, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: COLORS.brand, paddingVertical: 16, borderRadius: RADIUS.pill, minHeight: 56 },
   phoneCtaText: { color: COLORS.surface, fontWeight: "700", fontSize: 15 },
   linkText: { color: COLORS.textSecondary, fontSize: 14 },
+  // Doctor panel
+  doctorPanel: { backgroundColor: COLORS.surface, padding: SPACING.lg, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, gap: SPACING.sm },
+  doctorHead: { flexDirection: "row", alignItems: "center", gap: 6 },
+  doctorPanelTitle: { color: COLORS.brand, fontWeight: "800", fontSize: 13, textTransform: "uppercase", letterSpacing: 1.5 },
+  doctorPanelBody: { color: COLORS.textPrimary, fontSize: 13, lineHeight: 20 },
+  doctorPrimaryBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: COLORS.brand, paddingVertical: 14, borderRadius: RADIUS.pill, minHeight: 52, marginTop: SPACING.sm },
+  doctorPrimaryText: { color: COLORS.surface, fontWeight: "800", fontSize: 14 },
+  doctorSecondaryBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.brand, paddingVertical: 14, borderRadius: RADIUS.pill, minHeight: 52 },
+  doctorSecondaryText: { color: COLORS.brand, fontWeight: "800", fontSize: 14 },
+  doctorFactRow: { flexDirection: "row", gap: 6, flexWrap: "wrap", marginTop: SPACING.sm },
+  factChip: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "#ffe082", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
+  factText: { color: "#8a6d00", fontSize: 10, fontWeight: "700" },
   disclaimer: { color: COLORS.textMuted, fontSize: 11, lineHeight: 17, textAlign: "center", marginTop: SPACING.lg },
 });
+
