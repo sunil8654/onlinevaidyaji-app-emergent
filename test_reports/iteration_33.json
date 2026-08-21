@@ -1,0 +1,37 @@
+{
+  "summary": "Iter 33 — Security audit verification (SEC-001 CRITICAL, SEC-002 MEDIUM, SEC-003 MEDIUM + file-download hardening). All 3 fixes verified. New file: /app/backend/tests/test_iter33_security_fixes.py — 10/10 pass (100%). Iter32 presales regression re-run: 9/9 pass. SEC-001 (dev-mode): POST /api/auth/phone/send-otp with default env returns {ok:true, message, dev_hint:'OTP is 123456 …'} and 123456 verifies successfully. SEC-001 (prod-mode): after in-process `server.OTP_MOCK_ENABLED = False` monkey-patch and calling via TestClient(app), `dev_hint` is ABSENT from the response body AND no '123456' anywhere in the serialized body; verify-otp with 123456 STILL succeeds (as intended — the fix is about not echoing, not about disabling mock verify). SEC-002: signup/index.tsx handleGoogleCallback body contains window.history.replaceState AND it is invoked BEFORE api.googleSession (positional check via regex) so session_id is scrubbed even if the network call fails. SEC-003: seeded a presales_leads row with malicious cells (`=cmd|' /C calc'!A0`, `+attacker@example.com`, `@sum(1+9)`, `-2+3+…`, `\\tinjected`); GET /api/admin/presales/leads.csv as admin returns 200 with each dangerous cell prefixed by a single-quote (`'=cmd`, `'+attacker`, `'@sum`, `'-2+3`, `'\\tinjected`) — verified per-cell via csv.reader that no exported cell begins with =/+/-/@/\\t/\\r. Hardening: GET /api/files/{doc_id} response includes `X-Content-Type-Options: nosniff` AND `Referrer-Policy: no-referrer` (verified via a real patient upload → download roundtrip). Regression: send-otp 2nd call within 30s returns 429; 3 wrong verify attempts → 4th (even with correct 123456) returns 429 lock; /api/quiz/submit + /api/admin/presales/leads still 200.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter33_security_fixes.py",
+    "/app/test_reports/pytest/pytest_iter33.xml"
+  ],
+  "action_items": [
+    "All 3 audit findings verified fixed. Safe to close SEC-001 / SEC-002 / SEC-003.",
+    "Deployment reminder: ensure production images set OTP_MOCK_ENABLED=false (or unset MOCK_OTP_CODE) once a real SMS provider is wired in — the server currently defaults OTP_MOCK_ENABLED to true (server.py:5824) which is correct for dev images but must be flipped in prod env.",
+    "Long-term hardening (nice-to-have, not blocking): apply the same X-Content-Type-Options / Referrer-Policy headers globally via a middleware so future file/response endpoints inherit them by default."
+  ],
+  "critical_code_review_comments": [
+    "SEC-001 fix (server.py:5823-5825, 5894-5899) is clean — module-level `OTP_MOCK_ENABLED` boolean gates the response-embedding of `dev_hint`. Only note: the value is read once at import time, so runtime env-flip requires a process restart (acceptable — tests monkey-patch the module attr).",
+    "SEC-002 fix (signup/index.tsx:76-80) correctly scrubs BEFORE the network call and is web-guarded (`Platform.OS === 'web'`), so mobile builds are a no-op — good.",
+    "SEC-003 fix (server.py:6627-6633) neutralises `= + - @ \\t \\r`. Note: '-' is intentionally aggressive and will also prefix legit negative numbers — acceptable trade-off; document if this ever confuses BI ingestion.",
+    "Hardening (server.py:6510-6516) sets headers on the /api/files download path only. If storage_path is ever exposed via another route (e.g. a doctor image endpoint), those headers should be added there too."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter33_security_fixes.py (new — 10 tests: 3 for SEC-001 dev+prod+verify, 1 for SEC-002 source-grep with position assertion, 1 for SEC-003 CSV per-cell neutralisation, 1 for file-download hardening headers, 2 for OTP cooldown/lock regression, 2 for Phase-1 smoke)"
+  ],
+  "success_rate": {"backend": "100% (10 pass / 0 fail / 10 total, plus iter32 regression 9/9)", "frontend": "not tested (backend-only per request; SEC-002 covered via source-grep)"},
+  "seed_data_creation": "Ephemeral per-test: fresh patients/admin sessions via /api/auth/register + /api/auth/login. One malicious presales_leads row seeded via direct pymongo insert (tagged `_test_iter33_: True`) and torn down in the fixture teardown. Auto-created OTP users are deleted after verify. No production data touched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "The prod-mode SEC-001 test uses `fastapi.testclient.TestClient(server.app)` after `server.OTP_MOCK_ENABLED = False` — this is the only way to exercise the prod path without a supervisor restart. Keep the ordering: `server.OTP_MOCK_ENABLED = False` BEFORE constructing TestClient, restore in `finally`. BASE_URL from EXPO_PUBLIC_BACKEND_URL via conftest. ADMIN_PASSWORD loaded from /app/backend/.env. If the CSV endpoint is ever changed to stream, adapt the `matching = [ln for ln in body.splitlines() if …]` search; the seeded row is discoverable by phone `9999900001`. The SEC-002 test grep is intentionally structural (regex on the useCallback body + position of replaceState vs googleSession) so cosmetic refactors won't break it, but a rewrite of handleGoogleCallback to a plain function will — update the regex if that happens.",
+  "rca_of_issue": "N/A — this iteration is a verification pass, not a bug-fix. All 3 SEC findings from the audit are now sealed with executable regressions. Only fix I made in the test file itself: initial draft used `health_concern='diabetes'` for /api/quiz/submit smoke (not in KIT_CATALOG) → 400; corrected to `madhu_niyantran`. Not a product bug."
+}

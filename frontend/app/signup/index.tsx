@@ -1,20 +1,17 @@
 // Sign-up funnel entry — FREE consult banner · Google + Phone OTP · Language toggle.
 // Role tabs at top: Patient (default) or AYUSH Doctor route to dedicated flows.
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, ActivityIndicator, Alert, Platform, Image,
+  View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, ActivityIndicator, Alert,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
-import * as WebBrowser from "expo-web-browser";
-import * as Linking from "expo-linking";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { useI18n } from "@/src/i18n";
 import { api } from "@/src/api";
-import { useAuth } from "@/src/auth";
-
-WebBrowser.maybeCompleteAuthSession();
+import { useGoogleAuth } from "@/src/hooks/useGoogleAuth";
+import { GoogleButton } from "@/src/components/GoogleButton";
 
 const COPY = {
   // Role tabs
@@ -30,6 +27,7 @@ const COPY = {
   },
   doctorSignIn: { en: "Sign in as Doctor", hi: "Doctor ke roop mein sign in karein" },
   doctorRegister: { en: "Register as Doctor", hi: "Doctor ke roop mein register karein" },
+  doctorGoogle: { en: "Continue with Google (Doctor)", hi: "Google se aage badhein (Doctor)" },
   // Patient panel
   banner: {
     en: "🎁 Sign Up & Get Your FIRST DOCTOR CONSULTATION FREE",
@@ -51,67 +49,23 @@ const COPY = {
   googleFail: { en: "Could not sign in with Google. Please try again.", hi: "Google se sign-in nahi ho paaya. Kripya dobara try karein." },
 };
 
-const AUTH_URL = (redirect: string) => `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirect)}`;
-const sentSessionIds = new Set<string>();
-
-function extractSessionId(url: string | null): string | null {
-  if (!url) return null;
-  const m = url.match(/[?#&]session_id=([^&#]+)/);
-  return m ? decodeURIComponent(m[1]) : null;
-}
-
 export default function Signup() {
   const router = useRouter();
   const { lang, setLang } = useI18n();
-  const { applySession } = useAuth();
   const [role, setRole] = useState<"patient" | "doctor">("patient");
   const [phone, setPhone] = useState("");
   const [sending, setSending] = useState(false);
-  const [googleBusy, setGoogleBusy] = useState(false);
 
-  const handleGoogleCallback = useCallback(async (url: string | null) => {
-    const sessionId = extractSessionId(url);
-    if (!sessionId || sentSessionIds.has(sessionId)) return;
-    sentSessionIds.add(sessionId);
-    try {
-      setGoogleBusy(true);
-      const res = await api.googleSession(sessionId);
-      await applySession(res.token, res.user);
-      if (res.is_new || !res.user.preferred_language) router.replace("/signup/language");
+  // Shared Google-auth hook — routes both patients and doctors after Emergent session exchange.
+  const { startGoogle, googleBusy } = useGoogleAuth({
+    onSuccess: (res) => {
+      if (res.is_new || !res.user?.preferred_language) router.replace("/signup/language");
+      else if (res.user?.is_admin) router.replace("/admin/dashboard");
+      else if (res.user?.role === "doctor") router.replace("/doctor/home");
       else router.replace("/");
-    } catch (e: any) {
-      Alert.alert("Sign in failed", e?.message || COPY.googleFail[lang]);
-    } finally {
-      setGoogleBusy(false);
-    }
-  }, [applySession, lang, router]);
-
-  useEffect(() => {
-    Linking.getInitialURL().then(handleGoogleCallback);
-    const sub = Linking.addEventListener("url", (evt) => handleGoogleCallback(evt.url));
-    return () => sub.remove();
-  }, [handleGoogleCallback]);
-
-  async function startGoogle() {
-    try {
-      setGoogleBusy(true);
-      const redirect = Platform.OS === "web"
-        ? (typeof window !== "undefined" ? window.location.origin + "/" : "")
-        : Linking.createURL("");
-      const authUrl = AUTH_URL(redirect);
-      if (Platform.OS === "web") {
-        if (typeof window !== "undefined") window.location.href = authUrl;
-        return;
-      }
-      const result = await WebBrowser.openAuthSessionAsync(authUrl, redirect);
-      const url = (result as any)?.url || null;
-      if (url) handleGoogleCallback(url);
-    } catch (e: any) {
-      Alert.alert("Sign in failed", e?.message || COPY.googleFail[lang]);
-    } finally {
-      setGoogleBusy(false);
-    }
-  }
+    },
+    onError: (msg) => Alert.alert("Sign in failed", msg || COPY.googleFail[lang]),
+  });
 
   function isValidIndianPhone(v: string) {
     const digits = v.replace(/\D/g, "").replace(/^91/, "");
@@ -197,26 +151,13 @@ export default function Signup() {
               <Text style={styles.bannerText}>{COPY.banner[lang]}</Text>
             </View>
 
-            {/* Google button */}
-            <TouchableOpacity
-              style={[styles.googleBtn, googleBusy && { opacity: 0.6 }]}
+            {/* Google button (shared component) */}
+            <GoogleButton
               onPress={startGoogle}
-              disabled={googleBusy}
-              activeOpacity={0.9}
+              busy={googleBusy}
+              label={COPY.google[lang]}
               testID="signup-google"
-            >
-              {googleBusy ? (
-                <ActivityIndicator size="small" color={COLORS.textPrimary} />
-              ) : (
-                <>
-                  <Image
-                    source={{ uri: "https://upload.wikimedia.org/wikipedia/commons/c/c1/Google_%22G%22_logo.svg" }}
-                    style={styles.googleLogo}
-                  />
-                  <Text style={styles.googleText}>{COPY.google[lang]}</Text>
-                </>
-              )}
-            </TouchableOpacity>
+            />
 
             <View style={styles.divider}>
               <View style={styles.line} />
@@ -290,6 +231,20 @@ export default function Signup() {
               <Feather name="log-in" size={16} color={COLORS.brand} />
               <Text style={styles.doctorSecondaryText}>{COPY.doctorSignIn[lang]}</Text>
             </TouchableOpacity>
+
+            {/* Divider + Google option so returning Google-signed doctors have a fast path in. */}
+            <View style={styles.divider}>
+              <View style={styles.line} />
+              <Text style={styles.dividerText}>{COPY.or[lang]}</Text>
+              <View style={styles.line} />
+            </View>
+
+            <GoogleButton
+              onPress={startGoogle}
+              busy={googleBusy}
+              label={COPY.doctorGoogle[lang]}
+              testID="doctor-google"
+            />
 
             <View style={styles.doctorFactRow}>
               <Fact icon="check-circle" text={lang === "hi" ? "Verified badge" : "Verified badge"} />

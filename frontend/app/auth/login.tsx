@@ -5,15 +5,43 @@ import { useRouter } from "expo-router";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { Feather } from "@expo/vector-icons";
 import { useAuth } from "@/src/auth";
+import { useI18n } from "@/src/i18n";
+import { useGoogleAuth } from "@/src/hooks/useGoogleAuth";
+import { GoogleButton } from "@/src/components/GoogleButton";
+
+const COPY = {
+  or: { en: "OR", hi: "YA" },
+  google: { en: "Continue with Google", hi: "Google se aage badhein" },
+  googleFail: { en: "Could not sign in with Google. Please try again.", hi: "Google se sign-in nahi ho paaya." },
+};
 
 export default function Login() {
   const router = useRouter();
   const { login } = useAuth();
+  const { lang } = useI18n();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+
+  // Route the user based on the Emergent session response.
+  const { startGoogle, googleBusy } = useGoogleAuth({
+    onSuccess: (res) => {
+      // If the returning user is missing a language preference, treat them
+      // as onboarding-incomplete and send them through the language step.
+      if (res.is_new || !res.user?.preferred_language) {
+        router.replace("/signup/language");
+      } else if (res.user?.is_admin) {
+        router.replace("/admin/dashboard");
+      } else if (res.user?.role === "doctor") {
+        router.replace("/doctor/home");
+      } else {
+        router.replace("/(tabs)/home");
+      }
+    },
+    onError: (msg) => setErr(msg || COPY.googleFail[lang]),
+  });
 
   const submit = async () => {
     setErr("");
@@ -28,6 +56,8 @@ export default function Login() {
         router.replace("/auth/change-password");
       } else if (user?.is_admin) {
         router.replace("/admin/dashboard");
+      } else if (user?.role === "doctor") {
+        router.replace("/doctor/home");
       } else {
         router.replace("/(tabs)/home");
       }
@@ -49,7 +79,22 @@ export default function Login() {
           <Text style={styles.eyebrow}>Welcome back</Text>
           <Text style={styles.title}>Sign in to{"\n"}your Vaidhyaji</Text>
 
+          {/* Google sign-in first — matches signup flow so users who created their
+              account via Google can log back in the same way. */}
           <View style={{ marginTop: SPACING.lg }}>
+            <GoogleButton
+              onPress={startGoogle}
+              busy={googleBusy}
+              label={COPY.google[lang]}
+              testID="login-google"
+            />
+
+            <View style={styles.divider}>
+              <View style={styles.line} />
+              <Text style={styles.dividerText}>{COPY.or[lang]}</Text>
+              <View style={styles.line} />
+            </View>
+
             <Text style={styles.label}>Email</Text>
             <TextInput
               style={styles.input}
@@ -149,6 +194,9 @@ const styles = StyleSheet.create({
   eyeBtn: {
     padding: 6,
   },
+  divider: { flexDirection: "row", alignItems: "center", gap: SPACING.sm, marginVertical: SPACING.md },
+  line: { flex: 1, height: 1, backgroundColor: COLORS.border },
+  dividerText: { color: COLORS.textMuted, fontSize: 11, fontWeight: "700", letterSpacing: 2 },
   forgotText: { color: COLORS.brand, fontWeight: "700", fontSize: 13 },
   err: { color: COLORS.error, marginTop: SPACING.md, fontSize: 13 },
   cta: {

@@ -5820,6 +5820,8 @@ async def doc_com_delete_reel(reel_id: str, user: dict = Depends(require_doctor_
 # ---- Configurable knobs (env-driven so operations can tune later) ----
 CALLBACK_SLA_MINUTES = int(os.environ.get("CALLBACK_SLA_MINUTES", "10"))
 WHATSAPP_NUMBER = os.environ.get("WHATSAPP_NUMBER", "+917290044081")
+# SEC-001: OTP mock is DEV-ONLY. In production set OTP_MOCK_ENABLED=false and wire a real SMS provider.
+OTP_MOCK_ENABLED = os.environ.get("OTP_MOCK_ENABLED", "true").lower() in ("1", "true", "yes")
 MOCK_OTP_CODE = os.environ.get("MOCK_OTP_CODE", "123456")
 BRAND_TAGLINE = "Swasth Raho Hamesha"
 
@@ -5889,7 +5891,13 @@ async def phone_send_otp(body: PhoneOTPSendIn, request: Request):
         "locked_until": None,
         "last_sent_at": now.isoformat() + "Z",
     }
-    return {"ok": True, "message": "OTP sent.", "dev_hint": f"OTP is {otp} (mock mode)"}
+    # SEC-001: NEVER echo the OTP outside dev/mock mode. In production the client must not
+    # know the code — the user reads it from SMS. `dev_hint` is only exposed when the operator
+    # explicitly turned on OTP_MOCK_ENABLED (default off in prod images).
+    resp: Dict[str, Any] = {"ok": True, "message": "OTP sent."}
+    if OTP_MOCK_ENABLED:
+        resp["dev_hint"] = f"OTP is {otp} (mock mode — DO NOT enable in production)"
+    return resp
 
 
 @api_router.post("/auth/phone/verify-otp")
@@ -6502,6 +6510,9 @@ async def download_document(doc_id: str, request: Request, token: Optional[str] 
     return Response(content=content, media_type=mime, headers={
         "Content-Disposition": f'inline; filename="{doc.get("original_name", "document")}"',
         "Cache-Control": "private, max-age=300",
+        # Hardening: block browser MIME sniffing that could reinterpret an uploaded file as HTML/JS
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
     })
 
 
@@ -6610,6 +6621,16 @@ async def admin_update_lead_status(lead_id: str, body: LeadStatusIn, admin: dict
 async def admin_export_leads_csv(admin: dict = Depends(require_presales)):
     rows = await db.presales_leads.find({}, {"_id": 0}).sort("created_at", -1).to_list(10000)
     import io, csv
+    # SEC-003: neutralise CSV formula-injection. Excel/Sheets/LibreOffice evaluate cells
+    # starting with = + - @ (and tab/CR variants) as formulas. Prepend a single quote to
+    # any user-supplied cell that begins with those chars so the cell becomes inert text.
+    def _safe(v: Any) -> Any:
+        if v is None:
+            return ""
+        s = str(v)
+        if s and s[0] in ("=", "+", "-", "@", "\t", "\r"):
+            return "'" + s
+        return s
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["created_at", "name", "phone", "email", "language", "prakriti", "concern",
@@ -6617,11 +6638,11 @@ async def admin_export_leads_csv(admin: dict = Depends(require_presales)):
                 "documents_uploaded", "utm_source", "utm_medium", "utm_campaign"])
     for r in rows:
         w.writerow([
-            r.get("created_at"), r.get("name"), r.get("phone"), r.get("email"),
-            r.get("language"), r.get("prakriti_result"), r.get("health_concern"),
-            r.get("recommended_kit_name"), r.get("call_preference"), r.get("age_group"),
-            r.get("status"), r.get("agent_name"), r.get("documents_uploaded", 0),
-            r.get("utm_source"), r.get("utm_medium"), r.get("utm_campaign"),
+            _safe(r.get("created_at")), _safe(r.get("name")), _safe(r.get("phone")), _safe(r.get("email")),
+            _safe(r.get("language")), _safe(r.get("prakriti_result")), _safe(r.get("health_concern")),
+            _safe(r.get("recommended_kit_name")), _safe(r.get("call_preference")), _safe(r.get("age_group")),
+            _safe(r.get("status")), _safe(r.get("agent_name")), _safe(r.get("documents_uploaded", 0)),
+            _safe(r.get("utm_source")), _safe(r.get("utm_medium")), _safe(r.get("utm_campaign")),
         ])
     return Response(content=buf.getvalue(), media_type="text/csv", headers={
         "Content-Disposition": 'attachment; filename="presales_leads.csv"'

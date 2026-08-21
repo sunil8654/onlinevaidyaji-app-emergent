@@ -72,3 +72,6 @@ India's first pure AI-powered AYUSH platform that patients open *daily* — not 
   - 🔔 Firebase `google-services.json` for push after Publish
   - 🎥 End-to-end 2-device video call verification on real phones
 
+
+## Session log (Jun 2026 · cont.)
+- **Iteration 34:** Google Sign-in added to **/auth/login** and the **Doctor** tab of /signup. Extracted Emergent-auth flow into a reusable `useGoogleAuth` hook + `GoogleButton` component (`src/hooks/useGoogleAuth.ts`, `src/components/GoogleButton.tsx`). Returning Google users can now log in from the main Sign-in screen; SEC-002 (session_id URL scrub) is preserved.
