@@ -20,6 +20,7 @@ import bcrypt
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 import httpx
+from emails import send_welcome_email_bg  # Phase 1c: welcome email dispatcher
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -367,6 +368,8 @@ async def register(body: RegisterInput, request: Request):
         await log_activity("doctor_enrolled", actor=doc, meta={"email": doc["email"]})
     else:
         await log_activity("patient_registered", actor=doc, meta={"email": doc["email"]})
+    # Phase 1c: fire-and-forget bilingual welcome email (safe if send fails)
+    send_welcome_email_bg({k: v for k, v in doc.items() if k not in ("password", "_id")})
     token = make_token(user_id, body.role)
     return {
         "token": token,
@@ -5961,6 +5964,8 @@ async def phone_verify_otp(body: PhoneOTPVerifyIn, request: Request):
     doc.pop("_id", None)
     token = make_token(user_id, doc["role"])
     await log_activity("patient_signup_phone", actor=doc, meta={"phone": phone})
+    # Phase 1c: bilingual welcome email — only fires if the user shared an email.
+    send_welcome_email_bg(doc)
     return {"token": token, "user": doc, "is_new": True}
 
 
@@ -6030,6 +6035,8 @@ async def auth_session(body: GoogleSessionIn, request: Request):
     doc.pop("_id", None)
     token = make_token(user_id, doc["role"])
     await log_activity("patient_signup_google", actor=doc, meta={"email": email})
+    # Phase 1c: bilingual welcome email.
+    send_welcome_email_bg(doc)
     return {"token": token, "user": doc, "is_new": True}
 
 
@@ -6226,6 +6233,10 @@ async def submit_prakriti_quiz(body: QuizSubmitIn, user: dict = Depends(current_
             "utm_source": body.utm_source, "utm_medium": body.utm_medium, "utm_campaign": body.utm_campaign,
             "created_at": now_iso(), "updated_at": now_iso(),
         })
+    # Phase 1c: if the welcome email hasn't been sent yet (phone-signup + later
+    # email addition), send it now enriched with prakriti + recommended kit.
+    if user.get("email") and not user.get("welcome_email_sent_at"):
+        send_welcome_email_bg(user, prakriti=prakriti, kit_name=kit[lang])
     return {
         "id": result_id, "prakriti": prakriti, "dosha_scores": scores,
         "description": copy,

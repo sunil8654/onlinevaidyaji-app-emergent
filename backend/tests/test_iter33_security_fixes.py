@@ -184,17 +184,16 @@ class TestSEC002_GoogleSessionUrlScrub:
     """This is a frontend behavior — assert the fix exists in source."""
 
     def test_replaceState_called_in_handleGoogleCallback(self):
-        p = Path("/app/frontend/app/signup/index.tsx")
-        assert p.exists(), f"signup/index.tsx missing at {p}"
+        # After Iteration 34 the Emergent-auth flow was extracted into a shared
+        # hook so it can be reused by /signup and /auth/login. Assert the SEC-002
+        # scrub still lives inside handleGoogleCallback in the hook.
+        p = Path("/app/frontend/src/hooks/useGoogleAuth.ts")
+        assert p.exists(), f"useGoogleAuth hook missing at {p}"
         src = p.read_text(encoding="utf-8")
-        # Both symbols must be present
         assert "handleGoogleCallback" in src, "handleGoogleCallback fn missing"
         assert "window.history.replaceState" in src, (
             "window.history.replaceState call missing — SEC-002 fix not applied"
         )
-        # And the call must live inside handleGoogleCallback (not somewhere unrelated).
-        # We accept the pattern: `handleGoogleCallback = ...` block that references replaceState
-        # before applySession/api.googleSession is invoked. Cheap regex check:
         m = re.search(
             r"handleGoogleCallback\s*=\s*useCallback\(([\s\S]*?)\}\s*,\s*\[",
             src,
@@ -204,7 +203,6 @@ class TestSEC002_GoogleSessionUrlScrub:
         assert "window.history.replaceState" in body, (
             "replaceState is present in the file but NOT inside handleGoogleCallback"
         )
-        # Should scrub BEFORE the network call (googleSession)
         idx_replace = body.find("window.history.replaceState")
         idx_google = body.find("googleSession")
         assert idx_replace != -1 and idx_google != -1, "expected both symbols in cb body"
@@ -212,6 +210,18 @@ class TestSEC002_GoogleSessionUrlScrub:
             "replaceState should run BEFORE api.googleSession so session_id "
             "cannot leak via history/referrer if the fetch fails"
         )
+
+        # Also verify BOTH consumers still import the hook (login + signup).
+        for consumer in (
+            "/app/frontend/app/signup/index.tsx",
+            "/app/frontend/app/auth/login.tsx",
+        ):
+            cp = Path(consumer)
+            assert cp.exists(), f"{consumer} missing"
+            csrc = cp.read_text(encoding="utf-8")
+            assert "useGoogleAuth" in csrc, (
+                f"{consumer} must consume useGoogleAuth for SEC-002 scrub"
+            )
 
 
 # ══════════════════════════════════════════════════════════════

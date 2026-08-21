@@ -75,3 +75,13 @@ India's first pure AI-powered AYUSH platform that patients open *daily* — not 
 
 ## Session log (Jun 2026 · cont.)
 - **Iteration 34:** Google Sign-in added to **/auth/login** and the **Doctor** tab of /signup. Extracted Emergent-auth flow into a reusable `useGoogleAuth` hook + `GoogleButton` component (`src/hooks/useGoogleAuth.ts`, `src/components/GoogleButton.tsx`). Returning Google users can now log in from the main Sign-in screen; SEC-002 (session_id URL scrub) is preserved.
+
+## Phase 1c — Welcome Email (Jun 2026)
+- **Iteration 35:** Bilingual (EN + Hinglish) transactional welcome email via **Emergent-managed Resend**. New module `/app/backend/emails.py` with:
+  - Full guardrail gate (`_assert_safe_email`) enforcing G1–G5.
+  - Branded HTML templates for patients (with optional Prakriti + kit) and doctors.
+  - `send_welcome_email_bg(user)` fire-and-forget wrapper — signup never blocks or fails on email issues.
+  - Idempotent: writes `welcome_email_sent_at` on the user doc to avoid duplicate sends.
+- Wired into `/auth/register` (patient + doctor), `/auth/phone/verify-otp` (new users), `/auth/session` (Google new users), and `/quiz/submit` (backfill for phone-only signups that later add email).
+- Live send verified against Emergent Resend proxy (`delivered@resend.dev` returns a delivery ID).
+- New tests: `tests/test_welcome_email.py` (8/8 pass). Full suite: 88/88 pass.
