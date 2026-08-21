@@ -7,6 +7,7 @@ import { api } from "@/src/api";
 import { Feather } from "@expo/vector-icons";
 import { RazorpayCheckout } from "@/src/components/RazorpayCheckout";
 import { useAuth } from "@/src/auth";
+import { openPrescriptionPdf } from "@/src/utils/prescriptionPdf";
 
 export default function Appointments() {
   const router = useRouter();
@@ -106,6 +107,17 @@ export default function Appointments() {
                   <Feather name="file-text" size={14} color={COLORS.surface} />
                   <Text style={styles.joinText}>{hasRx ? "Rx" : "Rx"}</Text>
                 </TouchableOpacity>
+                {hasRx ? (
+                  <TouchableOpacity
+                    style={styles.pdfBtn}
+                    onPress={() => openPrescriptionPdf(item.id)}
+                    testID={`appt-rx-pdf-${item.id}`}
+                    accessibilityLabel="Download prescription as PDF"
+                  >
+                    <Feather name="download" size={14} color={COLORS.surface} />
+                    <Text style={styles.joinText}>PDF</Text>
+                  </TouchableOpacity>
+                ) : null}
               </View>
             </View>
           );
@@ -184,6 +196,7 @@ const styles = StyleSheet.create({
   joinBtn: { flex: 1, flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 6, backgroundColor: COLORS.brand, paddingVertical: 10, borderRadius: RADIUS.pill },
   payBtn: { flex: 1, flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 6, backgroundColor: "#E07B00", paddingVertical: 10, borderRadius: RADIUS.pill },
   rxBtn: { paddingHorizontal: 14, flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 6, backgroundColor: COLORS.accent, paddingVertical: 10, borderRadius: RADIUS.pill },
+  pdfBtn: { paddingHorizontal: 14, flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 6, backgroundColor: COLORS.brand, paddingVertical: 10, borderRadius: RADIUS.pill },
   joinText: { color: COLORS.surface, fontWeight: "700", fontSize: 12 },
   empty: { color: COLORS.textSecondary, textAlign: "center", marginTop: 40 },
   modalWrap: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "flex-end" },

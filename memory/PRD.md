@@ -107,3 +107,14 @@ Shipped four features in one iteration plus an audit-driven P0 hardening.
 - Fix: introduced `APP_ENV` env var (default `development`). When `APP_ENV=production`, `OTP_MOCK_ENABLED` is HARD-DISABLED regardless of the env value. Mock branch also requires `not IS_PRODUCTION`.
 - Added a loud `warning: "TEST MODE — do not use…"` field to every mock-mode send-otp response.
 - Tests: `tests/test_iter37_security_fixes.py` (4/4 pass). Full touched suite: **136/136 pass**.
+
+## Iteration 38 — Prescription Sharing (Jun 2026)
+Every appointment prescription can now be downloaded as a branded, single-page A4 PDF.
+- **New module `/app/backend/prescription_pdf.py`** — ReportLab-based renderer with brand header (Deep Forest Green + terracotta), a watermark, structured medicines table, diagnosis + advice + follow-up sections, digital signature block, and a footer with Rx ID + print time.
+- **New endpoint `GET /api/prescriptions/{appt_id}/pdf`** — streams the PDF inline by default (`?download=1` forces attachment). ACL: patient of record, doctor of record, or admin.
+- **Frontend utility `/app/frontend/src/utils/prescriptionPdf.ts`** — cross-platform downloader:
+  - Web: fetches with auth header → blob URL → opens in a new tab (or triggers download).
+  - Native: `expo-file-system/legacy.downloadAsync(url, dest, { headers })` → `expo-sharing.shareAsync(dest)` so users can save to Files, WhatsApp, mail, etc.
+- **UI change**: appointments screen now shows a "PDF" button next to the Rx button whenever a prescription exists.
+- Response has `Cache-Control: no-store` + `X-Content-Type-Options: nosniff` for defence-in-depth.
+- Tests: `tests/test_iter38_prescription_pdf.py` (9/9 pass). Full touched suite: **102/102 pass**.

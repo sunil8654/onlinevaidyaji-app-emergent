@@ -1,6 +1,7 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from starlette.concurrency import run_in_threadpool
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -766,6 +767,64 @@ async def list_prescriptions(user: dict = Depends(current_user)):
     q["prescription"] = {"$ne": None}
     items = await db.appointments.find(q, {"_id": 0}).sort("slot", -1).to_list(200)
     return items
+
+
+@api_router.get("/prescriptions/{appt_id}/pdf")
+async def prescription_pdf(appt_id: str, download: int = 0, user: dict = Depends(current_user)):
+    """Render an appointment's prescription as a downloadable PDF.
+
+    Access:
+    - the patient of record
+    - the doctor of record
+    - an admin
+
+    Query params:
+    - `?download=1` forces attachment download; otherwise inline (mobile viewer).
+    """
+    appt = await db.appointments.find_one({"id": appt_id}, {"_id": 0})
+    if not appt or not appt.get("prescription"):
+        raise HTTPException(status_code=404, detail="Prescription not found")
+    # Authorization — only participants + admin
+    _, doc_id = await _appt_actor_ids(user)
+    is_patient = appt.get("patient_id") == user["id"]
+    is_doctor = doc_id and appt.get("doctor_id") == doc_id
+    is_admin = bool(user.get("is_admin"))
+    if not (is_patient or is_doctor or is_admin):
+        raise HTTPException(status_code=403, detail="You are not permitted to view this prescription")
+
+    # Enrich the render with public doctor + patient info (best-effort).
+    doctor = None
+    if appt.get("doctor_id"):
+        doctor = await db.doctors.find_one({"id": appt["doctor_id"]}, _PUBLIC_DOCTOR_PROJECTION)
+    patient = None
+    if appt.get("patient_id"):
+        patient = await db.users.find_one(
+            {"id": appt["patient_id"]},
+            {"_id": 0, "id": 1, "name": 1, "age": 1, "gender": 1},
+        )
+
+    try:
+        from prescription_pdf import render_prescription_pdf
+        pdf_bytes = await run_in_threadpool(
+            render_prescription_pdf, appt, doctor=doctor, patient=patient,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("Prescription PDF render failed: %s", e)
+        raise HTTPException(status_code=500, detail="Could not render prescription") from e
+
+    filename = f"prescription-{appt_id[:8]}.pdf"
+    disposition = "attachment" if download else "inline"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{filename}"',
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 # ----------------- Daily.co Video Consultation -----------------
@@ -6370,9 +6429,8 @@ async def onboarding_config():
 
 import requests as _requests  # sync client for storage integration
 import secrets
-from starlette.concurrency import run_in_threadpool
 from fastapi import UploadFile, File, Form, Query
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import StreamingResponse
 
 STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
 STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
