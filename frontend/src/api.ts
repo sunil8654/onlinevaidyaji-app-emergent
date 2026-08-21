@@ -475,7 +475,7 @@ export const api = {
     image_url: string; duration_min: number; points: number;
     questions: { q: string; options: string[] }[];
   }>(`/quizzes/${id}`),
-  submitQuiz: (id: string, answers: number[]) => request<{
+  submitQuizAttempt: (id: string, answers: number[]) => request<{
     score: number; total: number; pct: number; points_awarded: number;
     details: { q: string; picked: number; correct: number; ok: boolean; explain: string }[];
     new_badges?: string[];

@@ -14,16 +14,8 @@ export default function Index() {
   useEffect(() => {
     if (loading) return;
     if (user?.is_admin) router.replace("/admin/dashboard");
-    else if (user) {
-      // If user is a patient who hasn't completed onboarding (no call_preference),
-      // route them through the funnel so we don't skip data capture.
-      if (user.role === "patient" && !user.call_preference) {
-        if (!user.preferred_language) router.replace("/signup/language");
-        else router.replace("/onboarding/quiz");
-      } else {
-        router.replace("/(tabs)/home");
-      }
-    } else router.replace("/signup");
+    else if (user) router.replace("/(tabs)/home");
+    else router.replace("/signup");
   }, [loading, user, router]);
 
   return (

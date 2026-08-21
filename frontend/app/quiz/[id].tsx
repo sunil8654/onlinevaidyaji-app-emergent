@@ -133,7 +133,7 @@ export default function QuizTaker() {
     }
     setSubmitting(true);
     try {
-      const r = await api.submitQuiz(quiz.id, answers);
+      const r = await api.submitQuizAttempt(quiz.id, answers);
       setResult(r);
     } catch (e: any) {
       Alert.alert("Error", e?.message || "Could not submit");
