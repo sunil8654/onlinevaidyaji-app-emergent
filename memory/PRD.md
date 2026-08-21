@@ -85,3 +85,12 @@ India's first pure AI-powered AYUSH platform that patients open *daily* — not 
 - Wired into `/auth/register` (patient + doctor), `/auth/phone/verify-otp` (new users), `/auth/session` (Google new users), and `/quiz/submit` (backfill for phone-only signups that later add email).
 - Live send verified against Emergent Resend proxy (`delivered@resend.dev` returns a delivery ID).
 - New tests: `tests/test_welcome_email.py` (8/8 pass). Full suite: 88/88 pass.
+
+## Security audit — Iteration 36 (Jun 2026)
+Read-only audit of Iterations 34–35 (Google sign-in hook + Welcome Email) returned **no critical/high findings**. Applied three P3 hardening fixes:
+- **SEC-001a:** `/api/quiz/submit` now rate-limited per user (30 / hour) via `rate_limit(f"quiz:submit:{user['id']}")`.
+- **SEC-001b:** `welcome_email_sent_at` claimed atomically via compare-and-set BEFORE dispatch; rolled back if the send fails so legitimate retries succeed.
+- **SEC-002:** Recipient email addresses masked in failure logs (`a***@example.com`) via new `_mask_email` helper.
+- **SEC-003:** Doctor tab shows a bilingual hint below the Google button steering new doctors to the Register form so we can capture and verify their AYUSH registration number.
+- Hardening: `send_welcome_email_bg` now retains a strong task-set reference + wraps the body in try/except (no more "task exception never retrieved" warnings).
+- New regression suite: `tests/test_iter36_security_fixes.py` (7/7 pass). Total: 52/52 pass across the touched surface.

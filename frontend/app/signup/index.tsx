@@ -246,6 +246,15 @@ export default function Signup() {
               testID="doctor-google"
             />
 
+            {/* SEC-003 UX warning: Google sign-in creates a patient account. New
+                doctors must use the Register form so we can capture their AYUSH
+                registration number and verify them. */}
+            <Text style={styles.doctorGoogleHint}>
+              {lang === "hi"
+                ? "Naye doctor: kripya 'Register as Doctor' se sign up karein taaki hum aapka AYUSH registration number verify kar sakein. Google sign-in sirf pehle se registered doctors ke liye hai."
+                : "New doctors: please use 'Register as Doctor' so we can verify your AYUSH registration number. Google sign-in is only for doctors who registered earlier."}
+            </Text>
+
             <View style={styles.doctorFactRow}>
               <Fact icon="check-circle" text={lang === "hi" ? "Verified badge" : "Verified badge"} />
               <Fact icon="calendar" text={lang === "hi" ? "Slot calendar" : "Slot calendar"} />
@@ -312,6 +321,14 @@ const styles = StyleSheet.create({
   doctorPrimaryText: { color: COLORS.surface, fontWeight: "800", fontSize: 14 },
   doctorSecondaryBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.brand, paddingVertical: 14, borderRadius: RADIUS.pill, minHeight: 52 },
   doctorSecondaryText: { color: COLORS.brand, fontWeight: "800", fontSize: 14 },
+  doctorGoogleHint: {
+    color: COLORS.textMuted,
+    fontSize: 11,
+    lineHeight: 16,
+    textAlign: "center",
+    marginTop: SPACING.xs || 4,
+    paddingHorizontal: SPACING.sm,
+  },
   doctorFactRow: { flexDirection: "row", gap: 6, flexWrap: "wrap", marginTop: SPACING.sm },
   factChip: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "#ffe082", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
   factText: { color: "#8a6d00", fontSize: 10, fontWeight: "700" },

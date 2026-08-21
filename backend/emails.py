@@ -26,6 +26,25 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+
+def _mask_email(addr: str) -> str:
+    """Mask a recipient address for log lines. `alice@example.com` -> `a***@example.com`.
+
+    SEC-002: prevents PII (customer email) from spreading into log storage
+    while still leaving enough breadcrumbs to trace individual send failures.
+    """
+    try:
+        local, _, domain = (addr or "").partition("@")
+        if not local or not domain:
+            return "***"
+        if len(local) <= 1:
+            masked_local = local + "***"
+        else:
+            masked_local = local[0] + "***"
+        return f"{masked_local}@{domain}"
+    except Exception:
+        return "***"
+
 # Constant — deliberately NOT read from env (survives deploy).
 EMAIL_BASE_URL = "https://integrations.emergentagent.com"
 
@@ -294,18 +313,33 @@ async def send_welcome_email(
 ) -> Optional[str]:
     """Send a bilingual welcome email once per user.
 
+    SEC-001: atomically claims `welcome_email_sent_at` BEFORE dispatch. If the
+    send later fails we roll back the claim so a legitimate retry can succeed,
+    while concurrent invocations lose the compare-and-set and short-circuit.
+
     Skips silently if:
     - user has no email address (phone-only signup)
-    - user already has `welcome_email_sent_at` set (unless `force=True`)
-    - the underlying send fails (logged but never raised)
-
-    Marks the user doc with `welcome_email_sent_at` after successful delivery.
+    - the atomic claim was already taken (concurrent send already in flight)
     """
     email = (user.get("email") or "").strip()
-    if not email:
+    if not email or not user.get("id"):
         return None
-    if not force and user.get("welcome_email_sent_at"):
-        return None
+
+    # Local import to avoid a circular import at module load.
+    from server import db  # type: ignore
+    from datetime import datetime
+    now = datetime.utcnow().isoformat() + "Z"
+
+    if not force:
+        # SEC-001: compare-and-set — only the first caller wins the claim.
+        # This closes the "two duplicate signups race the flag" window.
+        claim = await db.users.update_one(
+            {"id": user.get("id"), "welcome_email_sent_at": {"$exists": False}},
+            {"$set": {"welcome_email_sent_at": now}},
+        )
+        if claim.modified_count == 0:
+            # Someone else already claimed the send (or it was previously sent).
+            return None
 
     lang = (user.get("preferred_language") or "en").lower()
     if lang not in ("en", "hi"):
@@ -332,21 +366,26 @@ async def send_welcome_email(
 
     try:
         email_id = await send_email(to=email, subject=subject, html=html)
+        return email_id
     except Exception as e:
-        logger.warning("Welcome email failed for %s: %s", email, e)
+        # SEC-002: mask the recipient in logs to avoid leaking PII.
+        logger.warning("Welcome email failed for %s: %s", _mask_email(email), e)
+        # Roll back the claim so a legitimate retry (via another trigger) can proceed.
+        try:
+            await db.users.update_one(
+                {"id": user.get("id"), "welcome_email_sent_at": now},
+                {"$unset": {"welcome_email_sent_at": ""}},
+            )
+        except Exception as rollback_err:
+            logger.warning("Could not roll back welcome_email claim: %s", rollback_err)
         return None
 
-    # Mark on the user doc so we don't re-send from a later quiz submission.
-    try:
-        from server import db  # local import to avoid circular at module load
-        from datetime import datetime
-        await db.users.update_one(
-            {"id": user.get("id")},
-            {"$set": {"welcome_email_sent_at": datetime.utcnow().isoformat() + "Z"}},
-        )
-    except Exception as e:
-        logger.warning("Could not mark welcome_email_sent_at: %s", e)
-    return email_id
+
+# Keep strong references to in-flight welcome-email tasks so the event loop
+# does not garbage-collect them mid-flight (which would surface as
+# "task exception never retrieved" warnings). We discard the reference
+# once the task is done.
+_pending_email_tasks: set = set()
 
 
 def send_welcome_email_bg(
@@ -355,11 +394,21 @@ def send_welcome_email_bg(
     prakriti: Optional[str] = None,
     kit_name: Optional[str] = None,
 ) -> None:
-    """Fire-and-forget welcome email. Safe to call from any async route."""
+    """Fire-and-forget welcome email. Safe to call from any async route.
+
+    Any exception thrown during template rendering OR dispatch is swallowed
+    and logged — signup responses must never fail because of email trouble.
+    """
+    async def _runner():
+        try:
+            await send_welcome_email(user, prakriti=prakriti, kit_name=kit_name)
+        except Exception as e:
+            logger.warning("Welcome email dispatcher crashed: %s", e)
+
     try:
-        asyncio.create_task(
-            send_welcome_email(user, prakriti=prakriti, kit_name=kit_name)
-        )
+        task = asyncio.create_task(_runner())
+        _pending_email_tasks.add(task)
+        task.add_done_callback(_pending_email_tasks.discard)
     except RuntimeError:
         # No running event loop — happens in some test contexts. Ignore.
         pass

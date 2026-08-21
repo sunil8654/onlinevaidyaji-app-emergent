@@ -6189,7 +6189,10 @@ class QuizSubmitIn(BaseModel):
 
 
 @api_router.post("/quiz/submit")
-async def submit_prakriti_quiz(body: QuizSubmitIn, user: dict = Depends(current_user)):
+async def submit_prakriti_quiz(body: QuizSubmitIn, request: Request, user: dict = Depends(current_user)):
+    # SEC-001: rate-limit per user (30 quiz submits / hour) to prevent
+    # spamming duplicate welcome-emails at the user's own address.
+    await rate_limit(request, f"quiz:submit:{user['id']}", max_calls=30, window_seconds=3600)
     if body.health_concern not in KIT_CATALOG:
         raise HTTPException(status_code=400, detail="Unknown health concern")
     scores, prakriti = _score_prakriti(body.answers or {})
