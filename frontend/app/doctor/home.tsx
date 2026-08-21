@@ -10,7 +10,7 @@ import { Feather } from "@expo/vector-icons";
 
 export default function DoctorHome() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const [doc, setDoc] = useState<any>(null);
   const [appts, setAppts] = useState<any[]>([]);
   const [patients, setPatients] = useState<any[]>([]);
@@ -49,7 +49,18 @@ export default function DoctorHome() {
         {/* Hero */}
         <ImageBackground source={{ uri: "https://images.pexels.com/photos/5738735/pexels-photo-5738735.jpeg" }} style={styles.hero}>
           <View style={styles.heroOverlay}>
-            <Text style={styles.eyebrow}>Vaidya workspace</Text>
+            <View style={styles.heroTopRow}>
+              <Text style={styles.eyebrow}>Vaidya workspace</Text>
+              <TouchableOpacity
+                onPress={async () => { await logout(); router.replace("/signup"); }}
+                style={styles.logoutBtn}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                testID="doctor-logout"
+              >
+                <Feather name="log-out" size={13} color={COLORS.surface} />
+                <Text style={styles.logoutText}>Logout</Text>
+              </TouchableOpacity>
+            </View>
             <Text style={styles.hi}>Namaste, {user?.name?.split(" ")[0]}</Text>
             <Text style={styles.role}>{doc?.specialty} · {doc?.qualification}</Text>
             <View style={[styles.status, { backgroundColor: doc?.verified ? COLORS.success : COLORS.warning }]}>
@@ -227,6 +238,9 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: COLORS.bg },
   hero: { height: 200 },
   heroOverlay: { flex: 1, backgroundColor: "rgba(15,76,54,0.75)", padding: SPACING.lg, justifyContent: "flex-end" },
+  heroTopRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 4 },
+  logoutBtn: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(255,255,255,0.18)", paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999, borderWidth: 1, borderColor: "rgba(255,255,255,0.35)" },
+  logoutText: { color: COLORS.surface, fontSize: 11, fontWeight: "700", letterSpacing: 0.5 },
   eyebrow: { color: COLORS.accentSoft, textTransform: "uppercase", letterSpacing: 3, fontSize: 11, fontWeight: "700" },
   hi: { fontFamily: FONTS.heading, color: COLORS.surface, fontSize: 30, marginTop: 4, letterSpacing: -0.5 },
   role: { color: COLORS.accentSoft, marginTop: 2, fontSize: 13 },
