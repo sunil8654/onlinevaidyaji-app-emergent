@@ -168,6 +168,11 @@ async def send_email(*, to: str, subject: str, html: str, reply_to: Optional[str
         return None
 
 
+# Keep strong references to in-flight email tasks so the event loop
+# does not garbage-collect them mid-flight. Removed when the task finishes.
+_pending_email_tasks: set = set()
+
+
 # ─────────────────────────── Bilingual templates ───────────────────────────
 _STYLE = (
     "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;"
@@ -303,6 +308,150 @@ def render_doctor_welcome_html(*, name: str, lang: str = "en") -> str:
     return _wrap_layout(inner, footer)
 
 
+# ─────────────────────────── Prakriti Report template ──────────────────────
+def render_prakriti_report_html(
+    *,
+    name: str,
+    lang: str = "en",
+    prakriti: str,
+    description: str,
+    dosha_scores: Dict[str, int],
+    kit_name: Optional[str] = None,
+    free_consult: bool = True,
+) -> str:
+    """Post-quiz Prakriti report — richer than the welcome email."""
+    n = escape(name.split()[0] if name else ("dost" if lang == "hi" else "there"))
+    total = max(1, sum(dosha_scores.values() or [1]))
+    # Simple dosha bar rows
+    rows = []
+    for dosha in ("vata", "pitta", "kapha"):
+        pct = int(round(100 * (dosha_scores.get(dosha, 0) / total)))
+        rows.append(
+            f'<tr><td style="padding:4px 8px 4px 0;color:{_BRAND};'
+            f'font-weight:700;width:70px">{escape(dosha.title())}</td>'
+            f'<td style="padding:4px 0"><div style="background:#efe7d3;'
+            f'border-radius:8px;height:10px;overflow:hidden;width:100%">'
+            f'<div style="background:{_ACCENT};height:10px;width:{pct}%"></div>'
+            f'</div></td>'
+            f'<td style="padding:4px 0 4px 8px;color:#7b6b53;width:44px;'
+            f'text-align:right">{pct}%</td></tr>'
+        )
+    bar_table = (
+        f'<table role="presentation" width="100%" cellspacing="0" cellpadding="0" '
+        f'style="margin:14px 0 6px 0">{"".join(rows)}</table>'
+    )
+    kit_line = (
+        f'<p><strong>{("Aapke liye recommended kit" if lang == "hi" else "Recommended for you")}:</strong> '
+        f'{escape(kit_name)}.</p>' if kit_name else ""
+    )
+    free_line = (
+        f'<p style="color:{_BRAND};font-weight:700">'
+        f'{"🎁 Aapka pehla consultation FREE hai." if lang == "hi" else "🎁 Your first consultation is free."}</p>'
+        if free_consult else ""
+    )
+    if lang == "hi":
+        inner = (
+            f'<h2 style="color:{_BRAND};margin:0 0 6px 0">Namaste {n} 🙏</h2>'
+            f'<p style="color:#7b6b53;margin:0">Aapki personal Prakriti report taiyaar hai.</p>'
+            f'<h3 style="color:{_ACCENT};margin:18px 0 4px 0">Aapki Prakriti: '
+            f'{escape(prakriti)}</h3>'
+            f'{bar_table}'
+            f'<p>{escape(description)}</p>'
+            f'{kit_line}{free_line}'
+            f'{_cta("Doctor se Book Karein", APP_HTTPS_URL)}'
+        )
+        subject_footer = (
+            f'Sent by {escape(EMAIL_FROM_NAME)} · Yeh report aapke quiz answers par '
+            f'aadharit hai. Doctor consultation ke baad aap aur bhi guidance paayenge.'
+        )
+    else:
+        inner = (
+            f'<h2 style="color:{_BRAND};margin:0 0 6px 0">Hi {n} 🌿</h2>'
+            f'<p style="color:#7b6b53;margin:0">Your personal Prakriti report is ready.</p>'
+            f'<h3 style="color:{_ACCENT};margin:18px 0 4px 0">Your Prakriti: '
+            f'{escape(prakriti)}</h3>'
+            f'{bar_table}'
+            f'<p>{escape(description)}</p>'
+            f'{kit_line}{free_line}'
+            f'{_cta("Book a Doctor", APP_HTTPS_URL)}'
+        )
+        subject_footer = (
+            f'Sent by {escape(EMAIL_FROM_NAME)} · This report is based on your quiz '
+            f'answers. Your doctor will personalise it further during your consultation.'
+        )
+    return _wrap_layout(inner, subject_footer)
+
+
+async def send_prakriti_report_email(
+    user: Dict[str, Any],
+    *,
+    prakriti: str,
+    description: str,
+    dosha_scores: Dict[str, int],
+    kit_name: Optional[str] = None,
+    free_consult: bool = True,
+) -> Optional[str]:
+    """Send the post-quiz Prakriti Report. Idempotent per quiz result via a
+    server-side flag (`prakriti_email_sent_at`). Never raises."""
+    email = (user.get("email") or "").strip()
+    if not email or not user.get("id"):
+        return None
+    lang = (user.get("preferred_language") or "en").lower()
+    if lang not in ("en", "hi"):
+        lang = "en"
+    name = user.get("name") or ("dost" if lang == "hi" else "there")
+
+    # Local import to avoid circular at module load.
+    from server import db  # type: ignore
+    from datetime import datetime
+    now = datetime.utcnow().isoformat() + "Z"
+
+    # Atomic claim per user — same CAS pattern as the welcome email.
+    claim = await db.users.update_one(
+        {"id": user["id"], "prakriti_email_sent_at": {"$exists": False}},
+        {"$set": {"prakriti_email_sent_at": now}},
+    )
+    if claim.modified_count == 0:
+        return None
+
+    subject = (
+        "Your Prakriti report from Online Vaidhyaji 🌿"
+        if lang == "en"
+        else "Aapki Prakriti report — Online Vaidhyaji 🌿"
+    )
+    html = render_prakriti_report_html(
+        name=name, lang=lang, prakriti=prakriti, description=description,
+        dosha_scores=dosha_scores, kit_name=kit_name, free_consult=free_consult,
+    )
+    try:
+        return await send_email(to=email, subject=subject, html=html)
+    except Exception as e:
+        logger.warning("Prakriti report failed for %s: %s", _mask_email(email), e)
+        try:
+            await db.users.update_one(
+                {"id": user["id"], "prakriti_email_sent_at": now},
+                {"$unset": {"prakriti_email_sent_at": ""}},
+            )
+        except Exception as rollback_err:
+            logger.warning("Could not roll back prakriti claim: %s", rollback_err)
+        return None
+
+
+def send_prakriti_report_email_bg(user: Dict[str, Any], **kwargs) -> None:
+    """Fire-and-forget Prakriti Report dispatch."""
+    async def _runner():
+        try:
+            await send_prakriti_report_email(user, **kwargs)
+        except Exception as e:
+            logger.warning("Prakriti report dispatcher crashed: %s", e)
+    try:
+        task = asyncio.create_task(_runner())
+        _pending_email_tasks.add(task)
+        task.add_done_callback(_pending_email_tasks.discard)
+    except RuntimeError:
+        pass
+
+
 # ─────────────────────────── High-level welcome API ────────────────────────
 async def send_welcome_email(
     user: Dict[str, Any],
@@ -385,7 +534,6 @@ async def send_welcome_email(
 # does not garbage-collect them mid-flight (which would surface as
 # "task exception never retrieved" warnings). We discard the reference
 # once the task is done.
-_pending_email_tasks: set = set()
 
 
 def send_welcome_email_bg(

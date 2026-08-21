@@ -7,6 +7,7 @@ import { api } from "@/src/api";
 import { Feather } from "@expo/vector-icons";
 import { useAuth } from "@/src/auth";
 import DoctorPatients from "@/app/doctor/patients-list";
+import { AvailabilityDot } from "@/src/components/AvailabilityDot";
 
 const CITIES = ["All Cities", "Delhi", "Delhi NCR", "Noida", "Mumbai", "Bangalore", "Hyderabad", "Chennai", "Pune", "Ahmedabad", "Kolkata", "Jaipur", "Lucknow"];
 
@@ -85,6 +86,12 @@ export default function Consult() {
             testID={`doctor-card-${item.id}`}
           >
             <Image source={{ uri: item.avatar_url }} style={styles.avatar} />
+            {/* Live-availability green dot in the top-right of the avatar */}
+            {item.is_online ? (
+              <View style={styles.dotWrap} pointerEvents="none">
+                <AvailabilityDot online size={12} />
+              </View>
+            ) : null}
             <View style={{ flex: 1 }}>
               <Text style={styles.docName}>{item.name}</Text>
               <Text style={styles.docQual}>{item.qualification}</Text>
@@ -97,6 +104,7 @@ export default function Consult() {
                   <Text style={styles.tagLightText}>{item.rating || 4.6}</Text>
                 </View>
                 <Text style={styles.exp}>{item.experience_years} yrs</Text>
+                {item.is_online ? <AvailabilityDot online compact={false} /> : null}
               </View>
               <Text style={styles.fee}>₹{item.consultation_fee}</Text>
             </View>
@@ -131,6 +139,7 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.lg, padding: SPACING.md,
   },
   avatar: { width: 68, height: 68, borderRadius: 34, backgroundColor: COLORS.surfaceAlt },
+  dotWrap: { position: "absolute", left: 62, top: 12 },
   docName: { fontFamily: FONTS.heading, fontSize: 20, color: COLORS.textPrimary, lineHeight: 22 },
   docQual: { color: COLORS.textSecondary, fontSize: 12, marginTop: 2 },
   tagRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6, flexWrap: "wrap" },

@@ -94,3 +94,16 @@ Read-only audit of Iterations 34–35 (Google sign-in hook + Welcome Email) retu
 - **SEC-003:** Doctor tab shows a bilingual hint below the Google button steering new doctors to the Register form so we can capture and verify their AYUSH registration number.
 - Hardening: `send_welcome_email_bg` now retains a strong task-set reference + wraps the body in try/except (no more "task exception never retrieved" warnings).
 - New regression suite: `tests/test_iter36_security_fixes.py` (7/7 pass). Total: 52/52 pass across the touched surface.
+
+## Iteration 37 — Multi-feature drop + P0 security fix (Jun 2026)
+Shipped four features in one iteration plus an audit-driven P0 hardening.
+- **Prakriti Report Email**: new bilingual (EN + Hi) post-quiz report with dosha bars, idempotent per user via `prakriti_email_sent_at` compare-and-set. Wired into `/quiz/submit`.
+- **Twilio SMS OTP (with graceful mock fallback)**: new module `/app/backend/otp_sender.py`. Direct Twilio REST API via httpx + HTTP Basic auth (no SDK dep). Falls back to a mock provider when Twilio env vars are empty. Phone masked in logs. Random OTP on the Twilio path via `secrets.randbelow`. `.env` has empty `TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_FROM` placeholders — paste real creds to go live instantly.
+- **Doctor Availability Badge**: new `POST /api/doctors/heartbeat` (doctor-only, role-gated + per-user rate-limited). Computed `is_online` field surfaced on the public doctor projection with `last_seen_at` stripped. Frontend: `AvailabilityDot` component + auto-heartbeat every 60s from `doctor/home.tsx` + green dot on each doctor card in the patient consult tab.
+- **Light modular refactor**: OTP send logic extracted into `otp_sender.py` (mirrors the `emails.py` pattern) — server.py is now more focused; the pattern for future extractions is established.
+
+### P0 fix from post-ship security audit
+- Auditor flagged: with `OTP_MOCK_ENABLED=true` and Twilio blank, a live deployment would ship a fixed `123456` OTP echoed in the API response — enabling account takeover.
+- Fix: introduced `APP_ENV` env var (default `development`). When `APP_ENV=production`, `OTP_MOCK_ENABLED` is HARD-DISABLED regardless of the env value. Mock branch also requires `not IS_PRODUCTION`.
+- Added a loud `warning: "TEST MODE — do not use…"` field to every mock-mode send-otp response.
+- Tests: `tests/test_iter37_security_fixes.py` (4/4 pass). Full touched suite: **136/136 pass**.

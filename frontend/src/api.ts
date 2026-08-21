@@ -158,6 +158,10 @@ export const api = {
   listDoctors: (specialty?: string) =>
     request(`/doctors${specialty && specialty !== "All" ? `?specialty=${specialty}` : ""}`, "GET", undefined, false),
   getDoctor: (id: string) => request(`/doctors/${id}`, "GET", undefined, false),
+  doctorHeartbeat: () =>
+    request<{ ok: boolean; last_seen_at: string; window_seconds: number }>(
+      "/doctors/heartbeat", "POST",
+    ),
 
   bookAppointment: (body: { doctor_id: string; slot: string; reason?: string }) =>
     request("/appointments", "POST", body),

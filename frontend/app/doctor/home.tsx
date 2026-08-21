@@ -36,6 +36,16 @@ export default function DoctorHome() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Heartbeat so patients see a live green dot on this doctor's card.
+  // Fires immediately when the screen mounts, then every 60s while it's alive.
+  useEffect(() => {
+    let cancelled = false;
+    const beat = () => { api.doctorHeartbeat().catch(() => {}); };
+    beat();
+    const t = setInterval(() => { if (!cancelled) beat(); }, 60_000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, []);
+
   const upcoming = appts.filter((a) => new Date(a.slot) > new Date()).slice(0, 5);
   const today = appts.filter((a) => new Date(a.slot).toDateString() === new Date().toDateString()).length;
   const rupees = (paise: number) => `₹${(Math.round(paise) / 100).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;

@@ -20,7 +20,10 @@ import bcrypt
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 import httpx
-from emails import send_welcome_email_bg  # Phase 1c: welcome email dispatcher
+from emails import (
+    send_welcome_email_bg,
+    send_prakriti_report_email_bg,
+)  # Phase 1c: welcome + Prakriti report emails
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -579,8 +582,32 @@ _PUBLIC_DOCTOR_PROJECTION = {
     "experience_years": 1, "languages": 1, "consultation_fee": 1,
     "bio": 1, "avatar_url": 1, "rating": 1, "reviews": 1, "verified": 1,
     "is_available": 1, "consultation_mode": 1,
+    "last_seen_at": 1,  # used to compute the live "online now" green dot
     # Deliberately NOT included: phone, email, registration_number, user_id.
 }
+
+# Doctor is considered "online now" if they heart-beat within this window.
+DOCTOR_ONLINE_WINDOW_SECONDS = 180  # 3 minutes
+
+
+def _compute_is_online(last_seen_iso: Optional[str]) -> bool:
+    if not last_seen_iso:
+        return False
+    try:
+        dt = datetime.fromisoformat(last_seen_iso.replace("Z", ""))
+    except Exception:
+        return False
+    return (datetime.utcnow() - dt).total_seconds() <= DOCTOR_ONLINE_WINDOW_SECONDS
+
+
+def _decorate_doctor(d: Dict[str, Any]) -> Dict[str, Any]:
+    """Add computed `is_online` field + safe defaults."""
+    d.setdefault("is_available", True)
+    d.setdefault("consultation_mode", "both")
+    d["is_online"] = _compute_is_online(d.get("last_seen_at"))
+    # Never leak the raw timestamp to public callers — only the boolean.
+    d.pop("last_seen_at", None)
+    return d
 
 
 @api_router.get("/doctors")
@@ -589,10 +616,7 @@ async def list_doctors(specialty: Optional[str] = None):
     if specialty and specialty.lower() != "all":
         q["specialty"] = specialty
     docs = await db.doctors.find(q, _PUBLIC_DOCTOR_PROJECTION).to_list(200)
-    for d in docs:
-        d.setdefault("is_available", True)
-        d.setdefault("consultation_mode", "both")
-    return docs
+    return [_decorate_doctor(d) for d in docs]
 
 
 @api_router.get("/doctors/{doctor_id}")
@@ -600,7 +624,23 @@ async def get_doctor(doctor_id: str):
     doc = await db.doctors.find_one({"id": doctor_id}, _PUBLIC_DOCTOR_PROJECTION)
     if not doc:
         raise HTTPException(status_code=404, detail="Doctor not found")
-    return doc
+    return _decorate_doctor(doc)
+
+
+@api_router.post("/doctors/heartbeat")
+async def doctor_heartbeat(request: Request, user: dict = Depends(current_user)):
+    """Called by the doctor client every ~60s so patients see a live green dot."""
+    if user.get("role") != "doctor":
+        raise HTTPException(status_code=403, detail="Doctors only")
+    # Cheap per-user throttle — a misbehaving client shouldn't hammer the DB.
+    await rate_limit(request, f"doctor:heartbeat:{user['id']}", max_calls=120, window_seconds=3600)
+    now_iso_str = datetime.utcnow().isoformat() + "Z"
+    await db.doctors.update_one(
+        {"user_id": user["id"]},
+        {"$set": {"last_seen_at": now_iso_str}},
+    )
+    return {"ok": True, "last_seen_at": now_iso_str, "window_seconds": DOCTOR_ONLINE_WINDOW_SECONDS}
+
 
 
 # ----------------- Appointments -----------------
@@ -5824,7 +5864,14 @@ async def doc_com_delete_reel(reel_id: str, user: dict = Depends(require_doctor_
 CALLBACK_SLA_MINUTES = int(os.environ.get("CALLBACK_SLA_MINUTES", "10"))
 WHATSAPP_NUMBER = os.environ.get("WHATSAPP_NUMBER", "+917290044081")
 # SEC-001: OTP mock is DEV-ONLY. In production set OTP_MOCK_ENABLED=false and wire a real SMS provider.
-OTP_MOCK_ENABLED = os.environ.get("OTP_MOCK_ENABLED", "true").lower() in ("1", "true", "yes")
+# When APP_ENV=production we hard-refuse mock OTPs regardless of the OTP_MOCK_ENABLED flag,
+# so a leaked/copied dev env can never accidentally ship a fixed-code account-takeover vector.
+APP_ENV = os.environ.get("APP_ENV", "development").strip().lower()
+IS_PRODUCTION = APP_ENV in ("production", "prod", "live")
+OTP_MOCK_ENABLED = (
+    os.environ.get("OTP_MOCK_ENABLED", "true").lower() in ("1", "true", "yes")
+    and not IS_PRODUCTION
+)
 MOCK_OTP_CODE = os.environ.get("MOCK_OTP_CODE", "123456")
 BRAND_TAGLINE = "Swasth Raho Hamesha"
 
@@ -5863,8 +5910,9 @@ class PhoneOTPVerifyIn(BaseModel):
 
 @api_router.post("/auth/phone/send-otp")
 async def phone_send_otp(body: PhoneOTPSendIn, request: Request):
-    """Mock OTP send. Uses configurable `MOCK_OTP_CODE` (default 123456) in dev.
-    Enforces 30s cooldown + 3-attempt lock (10 min) matching the spec.
+    """Send an OTP over SMS via Twilio when configured, or fall back to the
+    dev mock code so testing keeps working. Enforces 30s cooldown +
+    3-attempt lock (10 min) matching the spec.
     """
     await rate_limit(request, "auth:otp-send", max_calls=30, window_seconds=3600)
     phone = _clean_indian_phone(body.phone)
@@ -5886,7 +5934,16 @@ async def phone_send_otp(body: PhoneOTPSendIn, request: Request):
         elapsed = (now - last).total_seconds()
         if elapsed < OTP_COOLDOWN_SECONDS:
             raise HTTPException(status_code=429, detail=f"Please wait {int(OTP_COOLDOWN_SECONDS - elapsed)}s before requesting again.")
-    otp = MOCK_OTP_CODE
+
+    # Choose the OTP: fixed mock code when in mock mode + Twilio not configured,
+    # random 6-digit otherwise (real SMS path).
+    from otp_sender import twilio_configured, send_otp_sms
+    if twilio_configured():
+        import secrets as _secrets
+        otp = f"{_secrets.randbelow(1_000_000):06d}"
+    else:
+        otp = MOCK_OTP_CODE
+
     _OTP_STORE[phone] = {
         "otp": otp,
         "expires_at": (now + timedelta(seconds=OTP_TTL_SECONDS)).isoformat() + "Z",
@@ -5894,12 +5951,25 @@ async def phone_send_otp(body: PhoneOTPSendIn, request: Request):
         "locked_until": None,
         "last_sent_at": now.isoformat() + "Z",
     }
-    # SEC-001: NEVER echo the OTP outside dev/mock mode. In production the client must not
-    # know the code — the user reads it from SMS. `dev_hint` is only exposed when the operator
-    # explicitly turned on OTP_MOCK_ENABLED (default off in prod images).
-    resp: Dict[str, Any] = {"ok": True, "message": "OTP sent."}
-    if OTP_MOCK_ENABLED:
+
+    # Ship the OTP. `send_otp_sms` handles Twilio-vs-mock internally and never raises.
+    delivery = await send_otp_sms(phone, otp)
+    if not delivery.get("ok"):
+        # Delivery failed — clear the stored code so the user isn't stuck with an
+        # unusable OTP they can't receive.
+        _OTP_STORE.pop(phone, None)
+        raise HTTPException(
+            status_code=503,
+            detail=delivery.get("error") or "OTP delivery failed. Please try again.",
+        )
+
+    resp: Dict[str, Any] = {"ok": True, "message": "OTP sent.", "provider": delivery.get("provider")}
+    # SEC-001: only expose `dev_hint` in mock mode + dev env (never with real Twilio, never in prod).
+    if OTP_MOCK_ENABLED and delivery.get("provider") == "mock" and not IS_PRODUCTION:
         resp["dev_hint"] = f"OTP is {otp} (mock mode — DO NOT enable in production)"
+        # Loud warning so any operator who accidentally sees this in a prod log
+        # knows the current deployment is dev-config.
+        resp["warning"] = "TEST MODE — do not use this deployment for real users."
     return resp
 
 
@@ -6240,6 +6310,16 @@ async def submit_prakriti_quiz(body: QuizSubmitIn, request: Request, user: dict 
     # email addition), send it now enriched with prakriti + recommended kit.
     if user.get("email") and not user.get("welcome_email_sent_at"):
         send_welcome_email_bg(user, prakriti=prakriti, kit_name=kit[lang])
+    # Also fire the richer post-quiz Prakriti Report email (idempotent per user).
+    if user.get("email"):
+        send_prakriti_report_email_bg(
+            user,
+            prakriti=prakriti,
+            description=copy,
+            dosha_scores=scores,
+            kit_name=kit[lang],
+            free_consult=bool(user.get("free_consult_available", True)),
+        )
     return {
         "id": result_id, "prakriti": prakriti, "dosha_scores": scores,
         "description": copy,
