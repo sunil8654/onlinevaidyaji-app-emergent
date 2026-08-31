@@ -118,3 +118,9 @@ Every appointment prescription can now be downloaded as a branded, single-page A
 - **UI change**: appointments screen now shows a "PDF" button next to the Rx button whenever a prescription exists.
 - Response has `Cache-Control: no-store` + `X-Content-Type-Options: nosniff` for defence-in-depth.
 - Tests: `tests/test_iter38_prescription_pdf.py` (9/9 pass). Full touched suite: **102/102 pass**.
+
+## Iteration 39 — Live Razorpay + branded email (Jun 2026)
+- **Live Razorpay keys wired**: `RAZORPAY_KEY_ID=rzp_live_TGVESL1DzHMjQ2` in `.env` (both backend + frontend). Verified with a live `order.create` call that returned a real order id.
+- **Hostinger SMTP wired for branded email**: emails.py now prefers SMTP (STARTTLS on `smtp.hostinger.com:587`, sender `info@onlinevaidyaji.com`) when configured, falling back to Emergent Resend if SMTP fails. Runs the sync `smtplib` call in `run_in_threadpool` so the event loop stays non-blocking. Live SMTP smoke succeeded — real email sent from the domain address.
+- Both credentials **shared by user in plain chat and are treated as leaked** — user has been told to regenerate the Razorpay secret + change the mailbox password.
+- Tests: `tests/test_iter39_smtp_and_live_razorpay.py` (5/5 pass), full touched-surface **43/43 pass**.

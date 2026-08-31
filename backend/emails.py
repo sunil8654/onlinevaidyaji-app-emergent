@@ -52,8 +52,25 @@ EMAIL_KEY = os.environ.get("EMERGENT_EMAIL_KEY", "")
 EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "Online Vaidhyaji")
 EMAIL_REPLY_TO = os.environ.get("EMAIL_REPLY_TO")
 
+# ── Optional SMTP (Hostinger / Gmail / any TLS provider) ──────────────────
+# When SMTP_HOST is present we send via SMTP with STARTTLS and the branded
+# From address the operator owns. If it fails or isn't configured we fall back
+# to the Emergent-managed Resend proxy (which uses a platform sender address).
+SMTP_HOST = os.environ.get("SMTP_HOST", "").strip()
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587") or "587")
+SMTP_USER = os.environ.get("SMTP_USER", "").strip()
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+SMTP_FROM = (os.environ.get("SMTP_FROM") or SMTP_USER or "").strip()
+SMTP_FROM_NAME = os.environ.get("SMTP_FROM_NAME", EMAIL_FROM_NAME)
+SMTP_STARTTLS = os.environ.get("SMTP_STARTTLS", "true").lower() in ("1", "true", "yes")
+
 # Where the welcome email's "Open the app" CTA points to.
 APP_HTTPS_URL = os.environ.get("APP_HTTPS_URL", "https://onlinevaidhyaji.emergent.host")
+
+
+def smtp_configured() -> bool:
+    """True iff SMTP env vars are all set — i.e. we should prefer SMTP."""
+    return bool(SMTP_HOST and SMTP_USER and SMTP_PASSWORD and SMTP_FROM)
 
 # ─────────────────────────── Guardrail Gate ────────────────────────────────
 _SHORTENERS = (
@@ -135,16 +152,75 @@ def _assert_safe_email(subject: str, html: str) -> None:
 
 
 # ─────────────────────────── Send helper ───────────────────────────────────
-async def send_email(*, to: str, subject: str, html: str, reply_to: Optional[str] = None) -> Optional[str]:
-    """Send a single transactional email via Emergent-managed Resend.
+async def _send_email_smtp(*, to: str, subject: str, html: str,
+                            reply_to: Optional[str] = None) -> Optional[str]:
+    """Send via SMTP (STARTTLS on 587 by default). Runs the sync smtplib
+    call in a threadpool so the FastAPI event loop stays non-blocking.
 
-    Raises on send failure. Callers that want fire-and-forget should use
-    `send_welcome_email_bg`.
+    Returns the RFC 5322 Message-Id on success. Raises on failure.
     """
-    if not EMAIL_KEY:
-        logger.warning("EMERGENT_EMAIL_KEY missing — skipping email send")
-        return None
+    import smtplib
+    import ssl
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from email.utils import formataddr, make_msgid
+    from starlette.concurrency import run_in_threadpool
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = formataddr((SMTP_FROM_NAME, SMTP_FROM))
+    msg["To"] = to
+    if reply_to or EMAIL_REPLY_TO:
+        msg["Reply-To"] = (reply_to or EMAIL_REPLY_TO)
+    msg_id = make_msgid(domain=SMTP_FROM.split("@", 1)[-1])
+    msg["Message-Id"] = msg_id
+    # Plain-text fallback derived from the HTML — improves inbox placement.
+    text_fallback = re.sub(r"<[^>]+>", " ", html)
+    text_fallback = re.sub(r"\s+", " ", text_fallback).strip()
+    msg.attach(MIMEText(text_fallback[:5000] or " ", "plain", "utf-8"))
+    msg.attach(MIMEText(html, "html", "utf-8"))
+
+    def _blocking_send():
+        ctx = ssl.create_default_context()
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as srv:
+            srv.ehlo()
+            if SMTP_STARTTLS:
+                srv.starttls(context=ctx)
+                srv.ehlo()
+            srv.login(SMTP_USER, SMTP_PASSWORD)
+            srv.sendmail(SMTP_FROM, [to], msg.as_string())
+
+    await run_in_threadpool(_blocking_send)
+    return msg_id.strip("<>")
+
+
+async def send_email(*, to: str, subject: str, html: str, reply_to: Optional[str] = None) -> Optional[str]:
+    """Send a single transactional email.
+
+    Delivery preference:
+    1. SMTP (Hostinger / any TLS provider) when SMTP_HOST is configured —
+       preserves the branded From address (info@onlinevaidyaji.com).
+    2. Emergent-managed Resend proxy as a fallback (platform-owned sender).
+
+    Raises on complete send failure. Callers that want fire-and-forget should
+    use `send_welcome_email_bg`.
+    """
     _assert_safe_email(subject, html)
+
+    # Prefer SMTP if configured — that's the domain-branded path.
+    if smtp_configured():
+        try:
+            return await _send_email_smtp(to=to, subject=subject, html=html, reply_to=reply_to)
+        except Exception as e:
+            # Fall back to Resend rather than dropping the email entirely.
+            logger.warning(
+                "SMTP send failed for %s (%s); falling back to Emergent Resend",
+                _mask_email(to), e,
+            )
+
+    if not EMAIL_KEY:
+        logger.warning("No email transport available (SMTP failed, EMERGENT_EMAIL_KEY missing)")
+        return None
     payload: Dict[str, Any] = {
         "to": [to],
         "subject": subject,
