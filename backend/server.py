@@ -138,17 +138,23 @@ class RegisterInput(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
     email: EmailStr
     password: str = Field(..., min_length=6, max_length=200)
-    phone: str  # MANDATORY — 10-digit Indian mobile
+    # Phone is OPTIONAL for patient signup — patients can add it later via
+    # `/users/me`. Doctors are still expected to provide one at registration
+    # so admins can call them for verification (enforced in the route).
+    phone: Optional[str] = Field(None, max_length=20)
     role: Literal["patient", "doctor"] = "patient"
     registration_number: Optional[str] = Field(None, max_length=100)  # for doctors
 
     @validator("phone")
-    def validate_phone(cls, v: str) -> str:
+    def validate_phone(cls, v: Optional[str]) -> Optional[str]:
+        # Empty / None is allowed — the field is optional now.
+        if v is None or not str(v).strip():
+            return None
         # Normalise: strip spaces, plus, hyphens, and country code 91
-        raw = "".join(ch for ch in (v or "") if ch.isdigit())
+        raw = "".join(ch for ch in v if ch.isdigit())
         if raw.startswith("91") and len(raw) == 12:
             raw = raw[2:]
-        if len(raw) != 10 or not raw[0] in "6789":
+        if len(raw) != 10 or raw[0] not in "6789":
             raise ValueError("Enter a valid 10-digit Indian mobile number")
         return raw
 
@@ -329,6 +335,10 @@ async def register(body: RegisterInput, request: Request):
     # Rate limit: 30 registrations per IP per hour (prevents mass signup abuse
     # while allowing legitimate signup bursts and CI/test runs on shared IPs)
     await rate_limit(request, "auth:register", max_calls=30, window_seconds=3600)
+    # Doctors must supply a phone we can reach them on for verification.
+    # Patients may leave it blank at signup — they can add it later.
+    if body.role == "doctor" and not body.phone:
+        raise HTTPException(status_code=400, detail="Phone number is required for doctor registration")
     existing = await db.users.find_one({"email": body.email.lower()})
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")

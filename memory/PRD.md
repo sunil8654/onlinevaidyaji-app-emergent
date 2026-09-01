@@ -124,3 +124,8 @@ Every appointment prescription can now be downloaded as a branded, single-page A
 - **Hostinger SMTP wired for branded email**: emails.py now prefers SMTP (STARTTLS on `smtp.hostinger.com:587`, sender `info@onlinevaidyaji.com`) when configured, falling back to Emergent Resend if SMTP fails. Runs the sync `smtplib` call in `run_in_threadpool` so the event loop stays non-blocking. Live SMTP smoke succeeded — real email sent from the domain address.
 - Both credentials **shared by user in plain chat and are treated as leaked** — user has been told to regenerate the Razorpay secret + change the mailbox password.
 - Tests: `tests/test_iter39_smtp_and_live_razorpay.py` (5/5 pass), full touched-surface **43/43 pass**.
+
+## Iteration 40 — Phone truly optional for patients (Jun 2026)
+- `RegisterInput.phone` schema changed from `str` (mandatory) → `Optional[str] = Field(None, max_length=20)` with a validator that returns `None` for empty/null inputs and still rejects garbage (e.g. `12345`).
+- Route-level guard added: `role=="doctor"` still requires a phone (returned as HTTP 400 so operators can distinguish the case from a schema error).
+- Tests: `tests/test_iter40_optional_phone.py` — 6/6 pass. Real HTTP requests verify empty / null / omitted / normalised / garbage / doctor-missing paths.
