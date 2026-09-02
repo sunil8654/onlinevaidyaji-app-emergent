@@ -42,7 +42,7 @@ export default function HealthProfile() {
     <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
         <Text style={styles.eyebrow}>Step 1 · Health profile</Text>
-        <Text style={styles.title}>Personalise your{"\n"}Vaidhyaji</Text>
+        <Text style={styles.title}>Personalise your{"\n"}VaidyaJi</Text>
         <Text style={styles.sub}>Helps us tailor tips, remedies & doctor matches. You can skip anytime.</Text>
 
         <View style={styles.section}>

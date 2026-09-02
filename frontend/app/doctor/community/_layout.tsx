@@ -100,7 +100,7 @@ export default function DoctorCommunityLayout() {
           <Text style={styles.blockTitle}>{info.title}</Text>
           <Text style={styles.blockBody}>{info.body}</Text>
           {info.showContact && (
-            <Text style={styles.contact}>Email: support@vaidhyaji.com  ·  +91 84680 08464</Text>
+            <Text style={styles.contact}>Email: info@onlinevaidyaji.com  ·  +91 84680 08464</Text>
           )}
         </View>
       </SafeAreaView>

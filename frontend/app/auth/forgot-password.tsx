@@ -54,13 +54,13 @@ export default function ForgotPassword() {
               </View>
               <Text style={styles.doneTitle}>Request received</Text>
               <Text style={styles.doneBody}>
-                If an account exists for that email, our Vaidhyaji admin team will
+                If an account exists for that email, our VaidyaJi admin team will
                 verify it and reach out to you within 24 hours with a temporary password.
                 You will be asked to change it on your next login.
               </Text>
               <Text style={styles.doneBody}>
                 Need faster help? Message us at{" "}
-                <Text style={{ color: COLORS.brand, fontWeight: "700" }}>support@vaidhyaji.com</Text>.
+                <Text style={{ color: COLORS.brand, fontWeight: "700" }}>info@onlinevaidyaji.com</Text>.
               </Text>
               <TouchableOpacity
                 style={styles.homeBtn}

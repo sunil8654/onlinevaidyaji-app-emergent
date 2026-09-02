@@ -13,7 +13,7 @@ const PLANS: Record<string, { title: string; price: number; period: string; feat
     title: "7-Day AYUSH Diet Plan",
     price: 200,
     period: "one-time",
-    kicker: "Certified Vaidhyaji Dietician",
+    kicker: "Certified VaidyaJi Dietician",
     purpose: "diet_plan",
     features: [
       "Full 7-day meal chart tailored to your dosha",
@@ -129,7 +129,7 @@ export default function PlanCheckout() {
         amount={plan.price}
         purpose={plan.purpose}
         description={plan.title}
-        title="Online Vaidhyaji"
+        title="Online VaidyaJi"
         prefill={{
           name: user?.name || "",
           email: user?.email || "",

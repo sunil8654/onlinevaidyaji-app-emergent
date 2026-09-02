@@ -148,7 +148,7 @@ export default function VideoCall() {
               // @ts-ignore
               <iframe
                 src={embedUrl}
-                title="Vaidhyaji Consultation"
+                title="VaidyaJi Consultation"
                 // @ts-ignore
                 allow="camera; microphone; autoplay; display-capture; fullscreen"
                 style={{ flex: 1, border: 0, backgroundColor: "#0F5C2A", width: "100%", height: "100%" }}

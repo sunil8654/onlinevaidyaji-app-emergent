@@ -129,3 +129,14 @@ Every appointment prescription can now be downloaded as a branded, single-page A
 - `RegisterInput.phone` schema changed from `str` (mandatory) → `Optional[str] = Field(None, max_length=20)` with a validator that returns `None` for empty/null inputs and still rejects garbage (e.g. `12345`).
 - Route-level guard added: `role=="doctor"` still requires a phone (returned as HTTP 400 so operators can distinguish the case from a schema error).
 - Tests: `tests/test_iter40_optional_phone.py` — 6/6 pass. Real HTTP requests verify empty / null / omitted / normalised / garbage / doctor-missing paths.
+
+## Iteration 41 — Brand rename (Jun 2026)
+- All user-visible occurrences of **"Vaidhyaji"** → **"VaidyaJi"** across 28 files (frontend screens, i18n dictionaries, backend welcome copy, chatbot system prompts, PDF headers, email templates, admin activity messages).
+- Domain / support email references updated from stale `vaidhyaji.com` → real domain `onlinevaidyaji.com` (support -> `info@onlinevaidyaji.com`).
+- Environment: `EMAIL_FROM_NAME`, `SMTP_FROM_NAME`, `EMAIL_REPLY_TO` refreshed to new brand.
+- **Deliberately preserved** for security / infra continuity:
+  - `_WEAK_ADMIN_PWDS` blocks BOTH `vaidhyaji` and `vaidyaji` as weak-password guards
+  - `JWT_SECRET` weakness check keeps blocking the old literal too
+  - `STORAGE_APP_NAME = "online-vaidhyaji"` — kept so existing user-uploaded storage keys stay reachable
+  - `admin@vaidhyaji.com` in the DB — real admin account; not renamed
+- Full touched-suite: **33/33 tests pass**. Screen renders correctly ("Sign in to your VaidyaJi").

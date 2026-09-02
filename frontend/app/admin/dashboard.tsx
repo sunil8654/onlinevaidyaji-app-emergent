@@ -41,7 +41,7 @@ export default function AdminDashboard() {
               <Text style={styles.langText}>{lang === "en" ? "हि" : "EN"}</Text>
             </TouchableOpacity>
           </View>
-          <Text style={styles.tag}>{t("overview")} · Online Vaidhyaji</Text>
+          <Text style={styles.tag}>{t("overview")} · Online VaidyaJi</Text>
         </View>
       </ImageBackground>
 

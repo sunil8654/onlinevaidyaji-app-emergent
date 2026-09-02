@@ -339,7 +339,7 @@ function PlanView({ plan, dayIdx, setDayIdx, onUpgrade }: { plan: any; dayIdx: n
         <View style={{ flex: 1 }}>
           <Text style={styles.upKicker}>UPGRADE · ₹200 only</Text>
           <Text style={styles.upTitle}>Get a 7-day Weekly Plan</Text>
-          <Text style={styles.upBody}>Certified Online Vaidhyaji dietician · daily menus tailored to your dosha, symptoms & taste · WhatsApp support.</Text>
+          <Text style={styles.upBody}>Certified Online VaidyaJi dietician · daily menus tailored to your dosha, symptoms & taste · WhatsApp support.</Text>
         </View>
         <TouchableOpacity style={styles.upBtn} onPress={onUpgrade} testID="dp-upgrade">
           <Text style={styles.upBtnText}>Buy ₹200</Text>

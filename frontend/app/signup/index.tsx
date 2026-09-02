@@ -33,7 +33,7 @@ const COPY = {
     en: "🎁 Sign Up & Get Your FIRST DOCTOR CONSULTATION FREE",
     hi: "🎁 Sign Up karein aur paayein PEHLA DOCTOR CONSULTATION बिल्कुल FREE",
   },
-  title: { en: "Welcome to Online Vaidhyaji", hi: "Online Vaidhyaji mein Swagat hai" },
+  title: { en: "Welcome to Online VaidyaJi", hi: "Online VaidyaJi mein Swagat hai" },
   sub: { en: "Verified AYUSH doctors · Hindi + English · Consult from home", hi: "Verified AYUSH doctors · Hindi + English · Ghar baithe consult karein" },
   google: { en: "Continue with Google", hi: "Google se aage badhein" },
   phone: { en: "Continue with Phone Number", hi: "Phone Number se aage badhein" },

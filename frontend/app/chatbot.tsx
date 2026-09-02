@@ -26,7 +26,7 @@ export default function Chatbot() {
       id: "seed",
       role: "assistant",
       text:
-        "Namaste! I'm your AI Vaidhyaji — trained in Ayurveda, Yoga, Unani, Siddha & Homoeopathy. Share how you're feeling and I'll gently guide you with AYUSH wisdom. (Not a substitute for a real doctor.)",
+        "Namaste! I'm your AI VaidyaJi — trained in Ayurveda, Yoga, Unani, Siddha & Homoeopathy. Share how you're feeling and I'll gently guide you with AYUSH wisdom. (Not a substitute for a real doctor.)",
     },
   ]);
   const [input, setInput] = useState("");
@@ -70,7 +70,7 @@ export default function Chatbot() {
             <Feather name="feather" size={16} color={COLORS.surface} />
           </View>
           <View>
-            <Text style={styles.headTitle}>AI Vaidhyaji</Text>
+            <Text style={styles.headTitle}>AI VaidyaJi</Text>
             <Text style={styles.headSub}>Powered by Claude · always online</Text>
           </View>
         </View>
@@ -101,7 +101,7 @@ export default function Chatbot() {
               <View style={styles.avatarSm}><Feather name="feather" size={12} color={COLORS.surface} /></View>
               <View style={[styles.bubble, styles.bubbleAi, { flexDirection: "row", alignItems: "center", gap: 8 }]}>
                 <ActivityIndicator size="small" color={COLORS.brand} />
-                <Text style={{ color: COLORS.textSecondary }}>Vaidhyaji is thinking…</Text>
+                <Text style={{ color: COLORS.textSecondary }}>VaidyaJi is thinking…</Text>
               </View>
             </View>
           ) : null}

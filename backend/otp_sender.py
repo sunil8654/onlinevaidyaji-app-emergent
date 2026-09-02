@@ -35,7 +35,7 @@ OTP_MOCK_ENABLED = (
     os.environ.get("OTP_MOCK_ENABLED", "true").lower() in ("1", "true", "yes")
     and not _IS_PRODUCTION
 )
-OTP_SENDER_NAME = os.environ.get("OTP_SENDER_NAME", "Online Vaidhyaji")
+OTP_SENDER_NAME = os.environ.get("OTP_SENDER_NAME", "Online VaidyaJi")
 
 _TWILIO_URL = "https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
 

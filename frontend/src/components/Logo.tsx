@@ -1,4 +1,4 @@
-// Official Online Vaidhyaji logo — uses the brand image.
+// Official Online VaidyaJi logo — uses the brand image.
 import { View, Text, Image, StyleSheet } from "react-native";
 import { COLORS, FONTS } from "@/src/theme";
 
@@ -13,7 +13,7 @@ export function Logo({ size = 32, tagline = false, showText = true, tint }: { si
         {showText && (
           <View style={{ marginLeft: 8 }}>
             <Text style={[styles.brand, { fontSize: size * 0.62, color: tint || COLORS.brand }]}>
-              Online<Text style={{ color: tint ? tint : COLORS.accent }}>Vaidhyaji</Text>
+              Online<Text style={{ color: tint ? tint : COLORS.accent }}>VaidyaJi</Text>
             </Text>
             {tagline && (
               <Text style={[styles.tag, { color: tint ? tint : COLORS.textSecondary }]}>

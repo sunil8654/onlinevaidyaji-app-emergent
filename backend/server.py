@@ -37,7 +37,7 @@ db = client[os.environ['DB_NAME']]
 # Auth
 JWT_SECRET = os.environ['JWT_SECRET']
 # Guard against weak/default secrets in production
-if len(JWT_SECRET) < 32 or "change-me" in JWT_SECRET.lower() or JWT_SECRET.lower() in {"secret", "changeme", "vaidhyaji"}:
+if len(JWT_SECRET) < 32 or "change-me" in JWT_SECRET.lower() or JWT_SECRET.lower() in {"secret", "changeme", "vaidyaji", "vaidhyaji"}:
     raise RuntimeError(
         "JWT_SECRET is too weak or a known default. Set a strong random value (>=32 chars) in .env"
     )
@@ -47,7 +47,7 @@ EMERGENT_LLM_KEY = os.environ['EMERGENT_LLM_KEY']
 ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
 # Guard against missing / weak / well-known admin creds (prevents SEC-001)
-_WEAK_ADMIN_PWDS = {"admin", "admin123", "admin@123", "password", "changeme", "vaidhyaji", "admin@vaidhyaji"}
+_WEAK_ADMIN_PWDS = {"admin", "admin123", "admin@123", "password", "changeme", "vaidhyaji", "admin@vaidhyaji", "vaidyaji", "admin@vaidyaji"}
 if not ADMIN_EMAIL or not ADMIN_PASSWORD:
     raise RuntimeError(
         "ADMIN_EMAIL and ADMIN_PASSWORD must be set in environment. "
@@ -68,7 +68,7 @@ _push_client = httpx.AsyncClient(
     timeout=10.0,
 )
 
-app = FastAPI(title="Online Vaidhyaji API")
+app = FastAPI(title="Online VaidyaJi API")
 api_router = APIRouter(prefix="/api")
 bearer = HTTPBearer(auto_error=False)
 
@@ -1038,7 +1038,7 @@ async def video_embed(room_name: str, token: str = "", user_name: str = "Guest",
 <head>
   <meta name='viewport' content='width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no'/>
   <meta charset='utf-8'/>
-  <title>Online Vaidhyaji Consultation</title>
+  <title>Online VaidyaJi Consultation</title>
   <style>
     html, body {{ margin:0; padding:0; height:100%; width:100%; background:#0F4C36; overflow:hidden; font-family: -apple-system, Roboto, sans-serif; }}
     #call {{ position: absolute; inset: 0; }}
@@ -1370,7 +1370,7 @@ async def my_payments(user: dict = Depends(current_user)):
 async def payment_checkout_page(
     order_id: str,
     amount: int,
-    name: str = "Online Vaidhyaji",
+    name: str = "Online VaidyaJi",
     description: str = "Consultation",
     prefill_name: str = "",
     prefill_email: str = "",
@@ -1403,7 +1403,7 @@ async def payment_checkout_page(
 <head>
   <meta name='viewport' content='width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no'/>
   <meta charset='utf-8'/>
-  <title>Vaidhyaji Checkout</title>
+  <title>VaidyaJi Checkout</title>
   <style>
     html, body {{ margin:0; padding:0; height:100%; width:100%; background:#0F4C36; font-family:-apple-system, Roboto, sans-serif; color:#F7F5F0; }}
     .wrap {{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; text-align:center; padding:24px; }}
@@ -1609,7 +1609,7 @@ async def join_challenge(body: ChallengeJoinInput, user: dict = Depends(current_
 
 # ----------------- Engagement (points, streaks, badges) -----------------
 BADGE_LIBRARY = [
-    {"key": "first_step",       "title": "First Step",       "desc": "Signed up for Vaidhyaji",           "icon": "star",          "points": 20},
+    {"key": "first_step",       "title": "First Step",       "desc": "Signed up for VaidyaJi",           "icon": "star",          "points": 20},
     {"key": "wellness_starter", "title": "Wellness Starter", "desc": "Logged your first wellness metric", "icon": "activity",      "points": 30},
     {"key": "check_in_7",       "title": "7-Day Streak",     "desc": "Checked in 7 days in a row",        "icon": "zap",           "points": 100},
     {"key": "check_in_30",      "title": "30-Day Streak",    "desc": "Checked in 30 days in a row",       "icon": "award",         "points": 500},
@@ -1978,7 +1978,7 @@ async def submit_quiz(quiz_id: str, body: QuizSubmitInput, user: dict = Depends(
 
 # ----------------- AI Chatbot -----------------
 SYSTEM_PROMPT = (
-    "You are 'AI Vaidhyaji', a warm, knowledgeable AYUSH health companion inspired by the "
+    "You are 'AI VaidyaJi', a warm, knowledgeable AYUSH health companion inspired by the "
     "Indian traditions of Ayurveda, Homoeopathy, Yoga, Unani, and Siddha. "
     "Your role is to gently help users understand their symptoms, suggest AYUSH-based home "
     "remedies (like herbs, yoga asanas, dietary guidance), and recommend seeing a qualified "
@@ -2259,7 +2259,7 @@ async def seed():
                  "6. Dinner should end 3 hours before sleep."
              ),
              "image_url": "https://images.pexels.com/photos/1640775/pexels-photo-1640775.jpeg",
-             "author": "Vaidhyaji Editorial", "read_min": 3, "created_at": now_iso()},
+             "author": "VaidyaJi Editorial", "read_min": 3, "created_at": now_iso()},
         ]
         await db.blogs.insert_many(blogs)
 
@@ -2288,7 +2288,7 @@ async def on_startup():
     if not existing:
         await db.users.insert_one({
             "id": str(uuid.uuid4()),
-            "name": "Vaidhyaji Admin",
+            "name": "VaidyaJi Admin",
             "email": ADMIN_EMAIL.lower(),
             "password": hash_password(ADMIN_PASSWORD),
             "role": "admin",
@@ -2402,7 +2402,7 @@ async def admin_approve_doctor(doctor_id: str, admin: dict = Depends(require_adm
                 recipients=[d["user_id"]],
                 data={
                     "title": "You're approved! 🎉",
-                    "message": f"Welcome to Online Vaidhyaji, Dr. {d.get('name', 'Vaidya')}. Start seeing patients now.",
+                    "message": f"Welcome to Online VaidyaJi, Dr. {d.get('name', 'Vaidya')}. Start seeing patients now.",
                     "action_url": "/doctor/home",
                 },
                 idempotency_key=f"doc_approved_{doctor_id}",
@@ -2695,13 +2695,13 @@ async def admin_leads(admin: dict = Depends(require_admin)):
 
 # ----------------- Support / Lead-gen AI -----------------
 SUPPORT_PROMPT = (
-    "You are 'Vaidhyaji Support' — a warm, helpful assistant for the Online Vaidhyaji app. "
+    "You are 'VaidyaJi Support' — a warm, helpful assistant for the Online VaidyaJi app. "
     "Your job is TWO-fold: "
     "(1) Answer user questions about how to use the app (booking doctors, AYUSH specialties, symptom checker, medicine reminders, wellness challenges, pricing, health records). "
     "(2) Gently collect the user's name, phone/email and their goal (e.g., 'need Ayurvedic consultation for acidity') so our team can follow up — but ONLY if they haven't shared this yet and only after answering their query. "
     "Keep responses concise (2-3 short paragraphs), warm, and India-focused. Use occasional Hindi phrases (Namaste, Dhanyavaad, Aap ki seva mein). "
     "If a user shares contact details, respond with: 'Got it! We will follow up soon.' and end that message with a marker on a new line: LEAD_CAPTURED. "
-    "Never give medical diagnoses — for medical queries, gently redirect them to the AI Vaidhyaji chatbot inside the app or a real doctor."
+    "Never give medical diagnoses — for medical queries, gently redirect them to the AI VaidyaJi chatbot inside the app or a real doctor."
 )
 
 
@@ -4712,7 +4712,7 @@ async def require_doctor_community(user: dict = Depends(current_user)) -> dict:
         raise HTTPException(status_code=403, detail="Doctor Community is for verified doctors only")
     d = await db.doctors.find_one({"user_id": user["id"]}, {"_id": 0, "verified": 1, "onboarded_at": 1})
     if not d or not d.get("verified"):
-        raise HTTPException(status_code=403, detail="Your doctor account is not yet verified. Please contact the Vaidhyaji admin team.")
+        raise HTTPException(status_code=403, detail="Your doctor account is not yet verified. Please contact the VaidyaJi admin team.")
     return user
 
 
@@ -6425,7 +6425,7 @@ async def onboarding_config():
         "callback_sla_minutes": CALLBACK_SLA_MINUTES,
         "whatsapp_number": WHATSAPP_NUMBER,
         "whatsapp_url": f"https://wa.me/{WHATSAPP_NUMBER.lstrip('+').replace(' ', '')}",
-        "tagline": BRAND_TAGLINE, "brand": "Online Vaidhyaji",
+        "tagline": BRAND_TAGLINE, "brand": "Online VaidyaJi",
         "kit_catalog": KIT_CATALOG,
     }
 
@@ -6872,7 +6872,7 @@ async def admin_review_document(doc_id: str, body: DocumentReviewIn, admin: dict
 
 @api_router.get("/")
 async def root():
-    return {"message": "Online Vaidhyaji API", "version": "1.0"}
+    return {"message": "Online VaidyaJi API", "version": "1.0"}
 
 
 app.include_router(api_router)

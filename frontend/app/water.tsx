@@ -8,7 +8,7 @@ import { storage } from "@/src/utils/storage";
 import { Feather } from "@expo/vector-icons";
 
 const GOAL = 8;
-const KEY = "vaidhyaji.water.";
+const KEY = "vaidyaji.water.";
 
 const todayKey = () => KEY + new Date().toISOString().slice(0, 10);
 

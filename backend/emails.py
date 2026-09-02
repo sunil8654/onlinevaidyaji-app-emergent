@@ -1,9 +1,9 @@
-"""Emergent-managed Resend integration for Online Vaidhyaji.
+"""Emergent-managed Resend integration for Online VaidyaJi.
 
 Sends bilingual welcome emails after signup/quiz completion.
 
 Guardrails (per Emergent playbook):
-- G1: from_name = "Online Vaidhyaji" only. No impersonation.
+- G1: from_name = "Online VaidyaJi" only. No impersonation.
 - G2: no credential asks, no forms/inputs in body.
 - G3: every link is absolute https to our own app.
 - G4: recipients + templates are server-side only.
@@ -49,7 +49,7 @@ def _mask_email(addr: str) -> str:
 EMAIL_BASE_URL = "https://integrations.emergentagent.com"
 
 EMAIL_KEY = os.environ.get("EMERGENT_EMAIL_KEY", "")
-EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "Online Vaidhyaji")
+EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "Online VaidyaJi")
 EMAIL_REPLY_TO = os.environ.get("EMAIL_REPLY_TO")
 
 # ── Optional SMTP (Hostinger / Gmail / any TLS provider) ──────────────────
@@ -269,7 +269,7 @@ def _wrap_layout(inner_html: str, footer: str) -> str:
         f'border:1px solid #e6dfd0;overflow:hidden;{_STYLE}">'
         f'<tr><td style="background:{_BRAND};padding:22px 24px;color:#fff">'
         f'<div style="font-size:12px;letter-spacing:3px;text-transform:uppercase;'
-        f'opacity:.85">ॐ Online Vaidhyaji</div>'
+        f'opacity:.85">ॐ Online VaidyaJi</div>'
         f'<div style="font-size:22px;font-weight:700;margin-top:4px">'
         f'{escape(EMAIL_FROM_NAME)}</div></td></tr>'
         f'<tr><td style="padding:26px 26px 8px 26px">{inner_html}</td></tr>'
@@ -305,7 +305,7 @@ def render_patient_welcome_html(*, name: str, lang: str = "en",
         )
         inner = (
             f'<h2 style="color:{_BRAND};margin:0 0 10px 0">Namaste {n} 🙏</h2>'
-            f'<p><strong>Online Vaidhyaji</strong> mein aapka swagat hai — verified '
+            f'<p><strong>Online VaidyaJi</strong> mein aapka swagat hai — verified '
             f'AYUSH doctors ke saath ghar baithe consultation.</p>'
             f'{prak_line}{kit_line}'
             f'<p>Aapka <strong>pehla consultation FREE</strong> hai 🎁 Hamari team '
@@ -331,7 +331,7 @@ def render_patient_welcome_html(*, name: str, lang: str = "en",
         )
         inner = (
             f'<h2 style="color:{_BRAND};margin:0 0 10px 0">Welcome, {n} 🌿</h2>'
-            f'<p>You\'re now part of <strong>Online Vaidhyaji</strong> — verified '
+            f'<p>You\'re now part of <strong>Online VaidyaJi</strong> — verified '
             f'AYUSH doctors, in Hindi and English, from the comfort of home.</p>'
             f'{prak_line}{kit_line}'
             f'<p>Your <strong>first consultation is FREE</strong> 🎁 Our team will '
@@ -353,7 +353,7 @@ def render_doctor_welcome_html(*, name: str, lang: str = "en") -> str:
     if lang == "hi":
         inner = (
             f'<h2 style="color:{_BRAND};margin:0 0 10px 0">Namaste Dr. {n} 🙏</h2>'
-            f'<p><strong>Online Vaidhyaji</strong> mein aapka swagat hai. Aapka '
+            f'<p><strong>Online VaidyaJi</strong> mein aapka swagat hai. Aapka '
             f'account admin verification ke liye submit ho gaya hai.</p>'
             f'<ul><li>1-2 business days mein hamari team aapki registration number '
             f'verify karegi.</li>'
@@ -369,7 +369,7 @@ def render_doctor_welcome_html(*, name: str, lang: str = "en") -> str:
     else:
         inner = (
             f'<h2 style="color:{_BRAND};margin:0 0 10px 0">Welcome, Dr. {n} 🌿</h2>'
-            f'<p>Thanks for joining <strong>Online Vaidhyaji</strong>. Your account '
+            f'<p>Thanks for joining <strong>Online VaidyaJi</strong>. Your account '
             f'has been submitted for admin verification.</p>'
             f'<ul><li>Our team will verify your registration number within '
             f'1-2 business days.</li>'
@@ -491,9 +491,9 @@ async def send_prakriti_report_email(
         return None
 
     subject = (
-        "Your Prakriti report from Online Vaidhyaji 🌿"
+        "Your Prakriti report from Online VaidyaJi 🌿"
         if lang == "en"
-        else "Aapki Prakriti report — Online Vaidhyaji 🌿"
+        else "Aapki Prakriti report — Online VaidyaJi 🌿"
     )
     html = render_prakriti_report_html(
         name=name, lang=lang, prakriti=prakriti, description=description,
@@ -574,16 +574,16 @@ async def send_welcome_email(
 
     if role == "doctor":
         subject = (
-            "Welcome to Online Vaidhyaji — Doctor onboarding"
+            "Welcome to Online VaidyaJi — Doctor onboarding"
             if lang == "en"
-            else "Online Vaidhyaji: Doctor onboarding shuru"
+            else "Online VaidyaJi: Doctor onboarding shuru"
         )
         html = render_doctor_welcome_html(name=name, lang=lang)
     else:
         subject = (
-            "Welcome to Online Vaidhyaji 🌿 Your first consultation is on us"
+            "Welcome to Online VaidyaJi 🌿 Your first consultation is on us"
             if lang == "en"
-            else "Online Vaidhyaji mein swagat hai 🌿 Pehla consultation FREE"
+            else "Online VaidyaJi mein swagat hai 🌿 Pehla consultation FREE"
         )
         html = render_patient_welcome_html(
             name=name, lang=lang, prakriti=prakriti, kit_name=kit_name,

@@ -171,7 +171,7 @@ export default function Appointments() {
         purpose="appointment"
         reference_id={payTarget?.id}
         description={`Consultation with ${payTarget?.doctor_name || "Vaidya"}`}
-        title="Online Vaidhyaji"
+        title="Online VaidyaJi"
         prefill={{ name: user?.name || "", email: user?.email || "", contact: (user as any)?.phone || "" }}
       />
     </SafeAreaView>

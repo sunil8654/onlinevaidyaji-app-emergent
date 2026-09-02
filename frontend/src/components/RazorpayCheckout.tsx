@@ -44,7 +44,7 @@ export function RazorpayCheckout({
   purpose,
   reference_id,
   description,
-  title = "Online Vaidhyaji",
+  title = "Online VaidyaJi",
   prefill,
 }: RazorpayCheckoutProps) {
   const [loading, setLoading] = useState(true);

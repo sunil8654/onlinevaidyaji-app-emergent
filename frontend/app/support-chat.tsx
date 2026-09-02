@@ -15,7 +15,7 @@ export default function SupportChat() {
   const { t } = useI18n();
   const session = useMemo(() => `sup-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, []);
   const [messages, setMessages] = useState<Msg[]>([
-    { id: "seed", role: "assistant", text: "Namaste! I'm Vaidhyaji Support. Ask me anything about how the app works, pricing, doctors, or leave your name & phone/email and I'll get our team to connect with you." },
+    { id: "seed", role: "assistant", text: "Namaste! I'm VaidyaJi Support. Ask me anything about how the app works, pricing, doctors, or leave your name & phone/email and I'll get our team to connect with you." },
   ]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);

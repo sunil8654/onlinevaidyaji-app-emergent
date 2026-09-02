@@ -77,7 +77,7 @@ export default function Login() {
           </TouchableOpacity>
 
           <Text style={styles.eyebrow}>Welcome back</Text>
-          <Text style={styles.title}>Sign in to{"\n"}your Vaidhyaji</Text>
+          <Text style={styles.title}>Sign in to{"\n"}your VaidyaJi</Text>
 
           {/* Google sign-in first — matches signup flow so users who created their
               account via Google can log back in the same way. */}

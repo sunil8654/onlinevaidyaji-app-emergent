@@ -15,7 +15,7 @@ import { storage } from "@/src/utils/storage";
 
 type Lang = "en" | "hi";
 type Answer = "A" | "B" | "C";
-const RESUME_KEY = "vaidhyaji.quiz.resume";
+const RESUME_KEY = "vaidyaji.quiz.resume";
 
 const T = {
   introTitle:  { en: "Know Your Prakriti — Free 2-Minute Quiz",           hi: "Apni Prakriti Jaanein — 2 Minute ka Free Quiz" },

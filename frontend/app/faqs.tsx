@@ -12,17 +12,17 @@ type Faq = { q: string; a: string; category: string };
 
 const FAQ_DATA: Faq[] = [
   { category: "Getting Started",
-    q: "What is Online Vaidhyaji?",
+    q: "What is Online VaidyaJi?",
     a: "An AI-powered AYUSH healthcare super-app that connects you with verified doctors across Ayurveda, Homoeopathy, Yoga, Unani and Siddha. You can book teleconsultations, take health quizzes, get personalised diet + yoga plans, and track wellness — all in one place." },
   { category: "Getting Started",
     q: "Do I need to register?",
-    a: "Yes — a free account lets you book doctors, save health records, chat with our AI Vaidhyaji, and track your wellness. You'll need a valid Indian mobile number for OTP and appointment reminders." },
+    a: "Yes — a free account lets you book doctors, save health records, chat with our AI VaidyaJi, and track your wellness. You'll need a valid Indian mobile number for OTP and appointment reminders." },
   { category: "Consultation",
     q: "How do teleconsultations work?",
     a: "Once you book and pay for a slot, both you and the doctor receive a secure video-call link. Just tap 'Join' at the appointment time. Sessions are typically 15–30 minutes and end with a digital prescription." },
   { category: "Consultation",
     q: "Are Vaidyas verified?",
-    a: "Every doctor on Vaidhyaji uploads their AYUSH registration number and qualifications during onboarding. Our admin team verifies each document before granting the 'Verified' badge." },
+    a: "Every doctor on VaidyaJi uploads their AYUSH registration number and qualifications during onboarding. Our admin team verifies each document before granting the 'Verified' badge." },
   { category: "Payments",
     q: "How do I pay?",
     a: "We use Razorpay for consultations and premium plans. UPI, cards, wallets and net-banking are supported. Refunds for cancellations are processed to the original payment method within 5–7 working days." },
@@ -37,7 +37,7 @@ const FAQ_DATA: Faq[] = [
     a: "Yes — our digital prescriptions include the doctor's AYUSH registration number and digital signature, accepted at all licensed Indian pharmacies." },
   { category: "AI & Data",
     q: "How does the AI Symptom Checker work?",
-    a: "Our AI Vaidhyaji is powered by Claude (Anthropic) with an AYUSH-specific prompt. It suggests home remedies, yoga and doshic insights — but always recommends seeing a qualified doctor for serious symptoms." },
+    a: "Our AI VaidyaJi is powered by Claude (Anthropic) with an AYUSH-specific prompt. It suggests home remedies, yoga and doshic insights — but always recommends seeing a qualified doctor for serious symptoms." },
   { category: "AI & Data",
     q: "Is my health data private?",
     a: "All records are stored on encrypted servers. Only you and the doctors you consult can see your history. We never sell data to advertisers, and you can request full deletion at any time from Profile → Data & Privacy." },
@@ -52,7 +52,7 @@ const FAQ_DATA: Faq[] = [
     a: "Yes — under 'Family Health' you can add child profiles, track vaccinations, developmental milestones, and even book consultations on their behalf." },
   { category: "Support",
     q: "How do I contact support?",
-    a: "Tap the chat bubble on the home screen for our lead-gen bot, or email support@vaidhyaji.com. Emergency medical issues should always go to your nearest hospital or dial 112." },
+    a: "Tap the chat bubble on the home screen for our lead-gen bot, or email info@onlinevaidyaji.com. Emergency medical issues should always go to your nearest hospital or dial 112." },
 ];
 
 export default function Faqs() {

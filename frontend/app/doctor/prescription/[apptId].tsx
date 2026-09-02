@@ -91,7 +91,7 @@ function buildHtml(opts: {
 <body>
   <div class="header">
     <div class="brand">
-      Online Vaidhyaji
+      Online VaidyaJi
       <small>AYUSH Prescription</small>
     </div>
     <div class="doc">
@@ -131,7 +131,7 @@ function buildHtml(opts: {
   ${opts.followUp ? `<h3>Follow-up</h3><div class="box">${escapeHtml(opts.followUp)}</div>` : ""}
 
   <div class="foot">
-    <div style="font-size:10px;color:#8A968F;">Generated via Online Vaidhyaji · ${new Date().toLocaleDateString()}</div>
+    <div style="font-size:10px;color:#8A968F;">Generated via Online VaidyaJi · ${new Date().toLocaleDateString()}</div>
     <div class="sig">Dr. ${escapeHtml(opts.doctorName)}</div>
   </div>
 </body>

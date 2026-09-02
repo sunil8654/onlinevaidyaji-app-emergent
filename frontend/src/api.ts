@@ -1,8 +1,8 @@
-// Thin API client for Online Vaidhyaji backend.
+// Thin API client for Online VaidyaJi backend.
 import { storage } from "@/src/utils/storage";
 
 const BASE = process.env.EXPO_PUBLIC_BACKEND_URL;
-export const TOKEN_KEY = "vaidhyaji.token";
+export const TOKEN_KEY = "vaidyaji.token";
 
 type Method = "GET" | "POST" | "PUT" | "DELETE";
 

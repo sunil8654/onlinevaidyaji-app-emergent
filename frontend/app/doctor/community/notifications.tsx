@@ -18,7 +18,7 @@ const VERB: Record<string, string> = {
   comment: "commented on your post",
   follow: "started following you",
   mention: "mentioned you",
-  announcement: "Official announcement from Vaidhyaji",
+  announcement: "Official announcement from VaidyaJi",
 };
 
 export default function Notifications() {
@@ -86,7 +86,7 @@ export default function Notifications() {
           <View style={{ flex: 1 }}>
             <Text style={styles.body}>
               {n.type === "announcement" ? (
-                <Text style={styles.name}>Vaidhyaji Admin </Text>
+                <Text style={styles.name}>VaidyaJi Admin </Text>
               ) : (
                 <Text style={styles.name}>{n.actor?.name || "A doctor"} </Text>
               )}

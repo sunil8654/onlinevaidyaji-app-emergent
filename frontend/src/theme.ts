@@ -1,4 +1,4 @@
-// Online Vaidhyaji — Fresh & Warm AYUSH theme tokens (Light Yellow / White with Green + Amber).
+// Online VaidyaJi — Fresh & Warm AYUSH theme tokens (Light Yellow / White with Green + Amber).
 
 export const COLORS = {
   bg: "#FFFDF3",           // Cream white — main background

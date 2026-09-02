@@ -10,7 +10,7 @@ import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 const SUPPORT_EMAIL = "info@onlinevaidyaji.com";
 const SUBJECT = "Account Deletion Request";
 const BODY_TEMPLATE =
-  "Hello Online Vaidhyaji team,\n\n" +
+  "Hello Online VaidyaJi team,\n\n" +
   "I would like to request deletion of my account and all associated data " +
   "(profile, health records, consultation history).\n\n" +
   "Registered email/phone: <please fill in>\n\n" +
@@ -54,7 +54,7 @@ export default function DeleteAccount() {
             <Feather name="user-x" size={26} color={COLORS.brand} />
           </View>
           <Text style={styles.eyebrow}>Privacy · Account controls</Text>
-          <Text style={styles.title}>Delete your Online Vaidhyaji account</Text>
+          <Text style={styles.title}>Delete your Online VaidyaJi account</Text>
         </View>
 
         <View style={styles.card}>

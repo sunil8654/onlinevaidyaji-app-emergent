@@ -1,15 +1,15 @@
-// Lightweight i18n for Online Vaidhyaji — English + Hindi
+// Lightweight i18n for Online VaidyaJi — English + Hindi
 // Auto-detects device language, allows manual override, persists via storage.
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import * as Localization from "expo-localization";
 import { storage } from "@/src/utils/storage";
 
 export type Lang = "en" | "hi";
-const LANG_KEY = "vaidhyaji.lang";
+const LANG_KEY = "vaidyaji.lang";
 
 type Dict = Record<string, string>;
 const en: Dict = {
-  brand: "Online Vaidhyaji",
+  brand: "Online VaidyaJi",
   tagline: "Swasth Raho Hamesha — Ab AI ke saath.",
   eyebrow_india: "India's AI Vaidyaji",
   begin_journey: "Begin Your Wellness Journey",
@@ -39,11 +39,11 @@ const en: Dict = {
   continue: "Continue",
   creating_account: "Creating account…",
   welcome_back: "Welcome back",
-  sign_in_to_vaidhyaji: "Sign in to your Vaidhyaji",
+  sign_in_to_vaidhyaji: "Sign in to your VaidyaJi",
   new_here: "New here?",
   create_new_account: "Create account",
   step_health: "Step 1 · Health profile",
-  personalise: "Personalise your Vaidhyaji",
+  personalise: "Personalise your VaidyaJi",
   personalise_sub: "Helps us tailor tips, remedies & doctor matches. You can skip anytime.",
   age: "Age",
   gender: "Gender",
@@ -74,7 +74,7 @@ const en: Dict = {
   friend: "Friend",
   todays_tip: "Today's AYUSH tip",
   ai_symptom_checker: "AI Symptom Checker",
-  talk_to_vaidhyaji: "Talk to AI Vaidhyaji",
+  talk_to_vaidhyaji: "Talk to AI VaidyaJi",
   book_doctor: "Book Vaidya",
   wellness_streaks: "Wellness Streaks",
   upcoming_consultation: "Upcoming consultation",
@@ -143,8 +143,8 @@ const en: Dict = {
   namaste: "Namaste",
   swasth: "Swasth",
   vaidya: "Vaidya",
-  ai_vaidhyaji: "AI Vaidhyaji",
-  vaidhyaji_thinking: "Vaidhyaji is thinking…",
+  ai_vaidhyaji: "AI VaidyaJi",
+  vaidhyaji_thinking: "VaidyaJi is thinking…",
 };
 
 const hi: Dict = {
