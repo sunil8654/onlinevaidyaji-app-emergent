@@ -6006,8 +6006,10 @@ async def phone_send_otp(body: PhoneOTPSendIn, request: Request):
 
     # Choose the OTP: fixed mock code when in mock mode + Twilio not configured,
     # random 6-digit otherwise (real SMS path).
-    from otp_sender import twilio_configured, send_otp_sms
-    if twilio_configured():
+    # Choose the OTP: fixed mock code only when no real provider exists AND mock is on.
+    # Otherwise generate a fresh random 6-digit code so no two OTPs ever match.
+    from otp_sender import twilio_configured, fast2sms_configured, send_otp_sms
+    if fast2sms_configured() or twilio_configured():
         import secrets as _secrets
         otp = f"{_secrets.randbelow(1_000_000):06d}"
     else:

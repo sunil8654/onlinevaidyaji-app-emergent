@@ -140,3 +140,13 @@ Every appointment prescription can now be downloaded as a branded, single-page A
   - `STORAGE_APP_NAME = "online-vaidhyaji"` — kept so existing user-uploaded storage keys stay reachable
   - `admin@vaidhyaji.com` in the DB — real admin account; not renamed
 - Full touched-suite: **33/33 tests pass**. Screen renders correctly ("Sign in to your VaidyaJi").
+
+## Iteration 42 — Fast2SMS integration (Jun 2026)
+- OTP delivery is now a **3-provider cascade**: **Fast2SMS ➜ Twilio ➜ Mock (dev only)**. First configured provider wins; on failure we cascade automatically.
+- New helpers `_send_via_fast2sms(to, body)` + `fast2sms_configured()` in `otp_sender.py`. Uses Fast2SMS Quick SMS route (POST `https://www.fast2sms.com/dev/bulkV2`, `route=q`), no DLT registration needed.
+- Correctly strips `+91` before POSTing, sends `sender_id` when configured, never surfaces raw Fast2SMS error messages to the client (masked phone in logs, friendly message returned).
+- Env vars added to `.env`: `FAST2SMS_API_KEY=` and `FAST2SMS_SENDER_ID=` (empty placeholders — user has NOT provided the real key yet).
+- Send-otp route generates a fresh random 6-digit OTP when either Fast2SMS or Twilio is configured; the fixed mock code is used only when neither provider is set.
+- Tests: `tests/test_iter42_fast2sms.py` (7/7 pass). Touched-suite regression: **37/37 pass**. Live Fast2SMS API reachability verified (fake key returns 401 as expected).
+
+**Action still needed from user**: paste the real Fast2SMS API key from fast2sms.com Dashboard → Dev API into `FAST2SMS_API_KEY` in `.env`. The moment that value is set, real SMS OTPs go live automatically.
