@@ -182,3 +182,10 @@ Every appointment prescription can now be downloaded as a branded, single-page A
   - `assets/images/adaptive-icon.png` — transparent foreground, logo in inner 66% safe zone
 - **Signup welcome screen**: heart Feather icon replaced with the new logo image (`Image` with `resizeMode="contain"`, 96x72, accessible label "Online VaidyaJi").
 - Lint clean, screenshot verified — logo renders above "Welcome to Online VaidyaJi" on /signup.
+
+## Iteration 46 — Clean solid-green app icon (Jun 2026)
+- Regenerated app icons so the Android home screen shows the user's Ayurvedic logo centered on a solid **brand green** background — no more cream badge or terracotta ring:
+  - `assets/images/icon.png` — 1024×1024, deep forest green vertical gradient (BRAND_DARK → BRAND_LIGHT), logo pasted at 62% width centred, rounded-rect mask
+  - `assets/images/adaptive-icon.png` — transparent foreground with the logo at 52% width so it fits inside Android's adaptive-icon 66% circular safe zone (works for square, round, and teardrop launchers)
+- `app.json` updated: `android.adaptiveIcon.backgroundColor` switched from `#FFFDF3` (cream) → `#0F4C36` (brand green) to match the new foreground.
+- Result: identical look on iOS (system-masked rounded square) and Android (adaptive icon in any mask shape).
