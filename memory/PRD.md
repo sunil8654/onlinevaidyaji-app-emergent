@@ -171,3 +171,14 @@ Every appointment prescription can now be downloaded as a branded, single-page A
   - `expo-splash-screen` plugin `backgroundColor` switched from `#000000` → `#FFFDF3` (matches the new splash, invisible transition)
   - `android.adaptiveIcon.backgroundColor` switched from `#000000` → `#FFFDF3`
 - Startup visuals are now fully VaidyaJi — no Emergent logo or "Start building apps on emergent" text anywhere.
+
+## Iteration 45 — User's logo integrated everywhere (Jun 2026)
+- User-supplied Ayurvedic mortar-pestle + stethoscope logo (1254x1254, white bg) processed:
+  - Flood-fill background removal (preserves interior white of bowl / stethoscope)
+  - Tight crop to content (1034x763) → transparent master saved at `assets/images/logo.png`
+- All three startup assets regenerated to use the user's real logo:
+  - `assets/images/splash-image.png` — cream bg + logo centred (72% width) + "Online VaidyaJi" wordmark + tagline
+  - `assets/images/icon.png` — dark green gradient + cream badge + terracotta ring + logo inside
+  - `assets/images/adaptive-icon.png` — transparent foreground, logo in inner 66% safe zone
+- **Signup welcome screen**: heart Feather icon replaced with the new logo image (`Image` with `resizeMode="contain"`, 96x72, accessible label "Online VaidyaJi").
+- Lint clean, screenshot verified — logo renders above "Welcome to Online VaidyaJi" on /signup.

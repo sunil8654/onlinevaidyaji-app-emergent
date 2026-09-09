@@ -2,7 +2,7 @@
 // Role tabs at top: Patient (default) or AYUSH Doctor route to dedicated flows.
 import { useState } from "react";
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, ActivityIndicator, Alert,
+  View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, ActivityIndicator, Alert, Image,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -104,9 +104,12 @@ export default function Signup() {
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         {/* Brand */}
         <View style={styles.brandBlock}>
-          <View style={styles.logoRing}>
-            <Feather name="heart" size={28} color={COLORS.brand} />
-          </View>
+          <Image
+            source={require("@/assets/images/logo.png")}
+            style={styles.brandLogo}
+            resizeMode="contain"
+            accessibilityLabel="Online VaidyaJi"
+          />
           <Text style={styles.title}>{COPY.title[lang]}</Text>
           <Text style={styles.sub}>{COPY.sub[lang]}</Text>
         </View>
@@ -285,7 +288,7 @@ const styles = StyleSheet.create({
   langText: { color: COLORS.brand, fontSize: 11, fontWeight: "700", letterSpacing: 1 },
   content: { padding: SPACING.lg, paddingBottom: SPACING.xl },
   brandBlock: { alignItems: "center", marginBottom: SPACING.md },
-  logoRing: { width: 56, height: 56, borderRadius: 28, backgroundColor: COLORS.surface, borderWidth: 2, borderColor: COLORS.brand, alignItems: "center", justifyContent: "center", marginBottom: SPACING.sm },
+  brandLogo: { width: 96, height: 72, marginBottom: SPACING.sm },
   title: { fontFamily: FONTS.heading, fontSize: 22, color: COLORS.textPrimary, textAlign: "center" },
   sub: { color: COLORS.textSecondary, fontSize: 12, textAlign: "center", marginTop: 4, lineHeight: 18 },
   // Role tabs
