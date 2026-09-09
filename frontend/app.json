@@ -19,7 +19,7 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#000000"
+        "backgroundColor": "#FFFDF3"
       },
       "package": "com.onlinevaidyaji.app",
       "googleServicesFile": "./google-services.json",
@@ -43,7 +43,7 @@
           "image": "./assets/images/splash-image.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#000000"
+          "backgroundColor": "#FFFDF3"
         }
       ],
       "expo-localization",

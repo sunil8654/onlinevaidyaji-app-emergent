@@ -161,3 +161,13 @@ Every appointment prescription can now be downloaded as a branded, single-page A
 - `yarn expo-doctor` — **20/20 checks passed**, no issues detected.
 - Screenshot verified — login screen boots on SDK 57 with all Feather icons rendering.
 - Backend regression: **31/31 tests still pass**.
+
+## Iteration 44 — Remove Emergent splash / startup branding (Jun 2026)
+- All three Emergent-branded startup assets replaced with VaidyaJi-branded ones, generated programmatically with Pillow:
+  - `assets/images/icon.png` — 1024x1024 app icon, deep forest green bg + cream badge + terracotta ring + serif "V" monogram
+  - `assets/images/adaptive-icon.png` — transparent-background Android foreground, same composition in the inner 66% safe zone
+  - `assets/images/splash-image.png` — 1284x2778 full-screen splash, warm-sand background matching Stack contentStyle, badge + "Online VaidyaJi" wordmark + tagline + footer
+- `app.json` updated:
+  - `expo-splash-screen` plugin `backgroundColor` switched from `#000000` → `#FFFDF3` (matches the new splash, invisible transition)
+  - `android.adaptiveIcon.backgroundColor` switched from `#000000` → `#FFFDF3`
+- Startup visuals are now fully VaidyaJi — no Emergent logo or "Start building apps on emergent" text anywhere.
