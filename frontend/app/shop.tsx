@@ -5,7 +5,7 @@ import { useRouter } from "expo-router";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { api } from "@/src/api";
 import { useI18n } from "@/src/i18n";
-import { Feather } from "@expo/vector-icons";
+import Feather from "@react-native-vector-icons/feather";
 import { ComingSoonBanner } from "@/src/components/ComingSoon";
 
 const CATS = ["all", "immunity", "stress", "digestive", "skin", "joint", "sleep"];

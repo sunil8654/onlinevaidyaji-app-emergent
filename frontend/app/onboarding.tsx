@@ -2,7 +2,7 @@ import { View, Text, StyleSheet, TouchableOpacity, ImageBackground, ScrollView }
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
-import { Feather } from "@expo/vector-icons";
+import Feather from "@react-native-vector-icons/feather";
 import { useI18n } from "@/src/i18n";
 import { LogoBlock } from "@/src/components/Logo";
 

@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Linking } from "r
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
-import { Feather } from "@expo/vector-icons";
+import Feather from "@react-native-vector-icons/feather";
 import { Logo } from "@/src/components/Logo";
 
 const CONTACT_PHONE = "+917290044081";

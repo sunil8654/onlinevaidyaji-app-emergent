@@ -150,3 +150,14 @@ Every appointment prescription can now be downloaded as a branded, single-page A
 - Tests: `tests/test_iter42_fast2sms.py` (7/7 pass). Touched-suite regression: **37/37 pass**. Live Fast2SMS API reachability verified (fake key returns 401 as expected).
 
 **Action still needed from user**: paste the real Fast2SMS API key from fast2sms.com Dashboard → Dev API into `FAST2SMS_API_KEY` in `.env`. The moment that value is set, real SMS OTPs go live automatically.
+
+## Iteration 43 — Expo SDK 54 → 57 upgrade (Jun 2026)
+- `yarn expo install expo@latest` + `--fix` migrated the app cleanly to **Expo SDK 57.0.21** (React 19.2.3, React Native 0.86.3, expo-router 57.0.20).
+- Breaking-change fixes applied:
+  - **54 → 55**: removed `newArchEnabled` and `edgeToEdgeEnabled` from `app.json` (new arch is default in 55+; edge-to-edge is now managed by the OS).
+  - **55 → 56**: replaced `@expo/vector-icons` with `@react-native-vector-icons/feather` across **93 import sites** in `app/` and `src/` (single unified pattern — `import Feather from "@react-native-vector-icons/feather"`).
+  - **56 → 57**: no breaking changes.
+- Updated `use-icon-fonts` helper — CDN font URL for Expo Go fallback now points at the new package's `fonts/Feather.ttf`.
+- `yarn expo-doctor` — **20/20 checks passed**, no issues detected.
+- Screenshot verified — login screen boots on SDK 57 with all Feather icons rendering.
+- Backend regression: **31/31 tests still pass**.

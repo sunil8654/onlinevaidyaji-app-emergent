@@ -12,7 +12,7 @@ import { useLocalSearchParams, useRouter, Stack } from "expo-router";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { api } from "@/src/api";
 import { useAuth } from "@/src/auth";
-import { Feather } from "@expo/vector-icons";
+import Feather from "@react-native-vector-icons/feather";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 

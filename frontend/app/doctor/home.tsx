@@ -6,7 +6,7 @@ import { useRouter } from "expo-router";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { api } from "@/src/api";
 import { useAuth } from "@/src/auth";
-import { Feather } from "@expo/vector-icons";
+import Feather from "@react-native-vector-icons/feather";
 
 export default function DoctorHome() {
   const router = useRouter();

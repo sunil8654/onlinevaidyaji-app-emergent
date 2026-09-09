@@ -1,6 +1,6 @@
 // Reusable "Coming Soon" overlay banner.
 import { View, Text, StyleSheet } from "react-native";
-import { Feather } from "@expo/vector-icons";
+import Feather from "@react-native-vector-icons/feather";
 import { COLORS, RADIUS, FONTS } from "@/src/theme";
 
 export function ComingSoonBanner({ label = "Coming soon" }: { label?: string }) {

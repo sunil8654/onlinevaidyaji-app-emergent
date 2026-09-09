@@ -5,7 +5,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, Stack } from "expo-router";
-import { Feather } from "@expo/vector-icons";
+import Feather from "@react-native-vector-icons/feather";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 
 type Faq = { q: string; a: string; category: string };

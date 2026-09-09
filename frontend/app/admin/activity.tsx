@@ -5,7 +5,7 @@ import { useRouter } from "expo-router";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { api } from "@/src/api";
 import { useI18n } from "@/src/i18n";
-import { Feather } from "@expo/vector-icons";
+import Feather from "@react-native-vector-icons/feather";
 
 const ICON: Record<string, any> = {
   patient_registered: "user-plus",

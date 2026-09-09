@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, FlatList, TouchableOpacity, Image } from "react
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
-import { Feather } from "@expo/vector-icons";
+import Feather from "@react-native-vector-icons/feather";
 
 const DISEASES = [
   { key: "digestive", name: "Digestive Health", tag: "Ayurveda", desc: "Acidity, IBS, bloating, constipation", img: "https://images.pexels.com/photos/8436587/pexels-photo-8436587.jpeg" },

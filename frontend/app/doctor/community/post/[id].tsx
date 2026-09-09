@@ -5,7 +5,7 @@ import {
   ActivityIndicator, KeyboardAvoidingView, Platform, RefreshControl,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { Feather } from "@expo/vector-icons";
+import Feather from "@react-native-vector-icons/feather";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { api } from "@/src/api";
 import { DoctorPostCard } from "@/src/components/DoctorPostCard";

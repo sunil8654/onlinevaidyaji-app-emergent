@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { View, Text, StyleSheet, Image, TouchableOpacity, ScrollView, Dimensions, Alert } from "react-native";
 import { useRouter } from "expo-router";
-import { Feather } from "@expo/vector-icons";
+import Feather from "@react-native-vector-icons/feather";
 import { COLORS, RADIUS, SPACING } from "@/src/theme";
 import { api } from "@/src/api";
 

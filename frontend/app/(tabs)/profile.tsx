@@ -6,7 +6,7 @@ import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { useAuth } from "@/src/auth";
 import { api } from "@/src/api";
 import { useI18n } from "@/src/i18n";
-import { Feather } from "@expo/vector-icons";
+import Feather from "@react-native-vector-icons/feather";
 
 export default function Profile() {
   const router = useRouter();

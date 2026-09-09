@@ -4,7 +4,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { COLORS, FONTS, RADIUS, SPACING, SPECIALTIES } from "@/src/theme";
 import { api } from "@/src/api";
-import { Feather } from "@expo/vector-icons";
+import Feather from "@react-native-vector-icons/feather";
 import { useAuth } from "@/src/auth";
 import DoctorPatients from "@/app/doctor/patients-list";
 import { AvailabilityDot } from "@/src/components/AvailabilityDot";
