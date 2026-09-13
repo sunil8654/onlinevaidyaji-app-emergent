@@ -8,6 +8,7 @@ import { useAuth } from "@/src/auth";
 import { useI18n } from "@/src/i18n";
 import { useGoogleAuth } from "@/src/hooks/useGoogleAuth";
 import { GoogleButton } from "@/src/components/GoogleButton";
+import { useAppleAuth, AppleButton } from "@/src/components/AppleButton";
 
 const COPY = {
   or: { en: "OR", hi: "YA" },
@@ -30,6 +31,22 @@ export default function Login() {
     onSuccess: (res) => {
       // If the returning user is missing a language preference, treat them
       // as onboarding-incomplete and send them through the language step.
+      if (res.is_new || !res.user?.preferred_language) {
+        router.replace("/signup/language");
+      } else if (res.user?.is_admin) {
+        router.replace("/admin/dashboard");
+      } else if (res.user?.role === "doctor") {
+        router.replace("/doctor/home");
+      } else {
+        router.replace("/(tabs)/home");
+      }
+    },
+    onError: (msg) => setErr(msg || COPY.googleFail[lang]),
+  });
+
+  // Sign in with Apple — same routing as Google. iOS only.
+  const { startApple, appleBusy, appleAvailable } = useAppleAuth({
+    onSuccess: (res) => {
       if (res.is_new || !res.user?.preferred_language) {
         router.replace("/signup/language");
       } else if (res.user?.is_admin) {
@@ -79,8 +96,9 @@ export default function Login() {
           <Text style={styles.eyebrow}>Welcome back</Text>
           <Text style={styles.title}>Sign in to{"\n"}your VaidyaJi</Text>
 
-          {/* Google sign-in first — matches signup flow so users who created their
-              account via Google can log back in the same way. */}
+          {/* Google + Apple sign-in first — matches signup flow so users who created their
+              account via Google/Apple can log back in the same way. Apple button
+              auto-hides on Android/Web per App Review rules. */}
           <View style={{ marginTop: SPACING.lg }}>
             <GoogleButton
               onPress={startGoogle}
@@ -88,6 +106,12 @@ export default function Login() {
               label={COPY.google[lang]}
               testID="login-google"
             />
+
+            {appleAvailable ? (
+              <View style={{ marginTop: SPACING.sm }}>
+                <AppleButton onPress={startApple} busy={appleBusy} />
+              </View>
+            ) : null}
 
             <View style={styles.divider}>
               <View style={styles.line} />

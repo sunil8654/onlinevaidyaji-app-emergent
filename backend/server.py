@@ -6181,6 +6181,130 @@ async def auth_session(body: GoogleSessionIn, request: Request):
     return {"token": token, "user": doc, "is_new": True}
 
 
+# ─────────────────────────── Apple Sign In ────────────────────────────────
+APPLE_AUDIENCES = {
+    a.strip()
+    for a in os.environ.get("APPLE_AUDIENCES", "").split(",")
+    if a.strip()
+}
+_APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys"
+
+
+class AppleAuthIn(BaseModel):
+    identity_token: str = Field(..., min_length=32)
+    # Apple only returns these on FIRST sign-in. Backend must persist them
+    # immediately — subsequent logins send `None`.
+    full_name: Optional[str] = Field(None, max_length=120)
+    email: Optional[EmailStr] = None
+
+
+async def _verify_apple_identity_token(token: str) -> dict:
+    """Validate an Apple identity token against Apple's public JWKS.
+    Returns the decoded claims dict. Raises HTTPException on any failure."""
+    try:
+        from jwt import PyJWKClient  # local import so backend still starts without [crypto]
+    except ImportError:
+        raise HTTPException(
+            status_code=500,
+            detail="Apple sign-in is not configured on the server (pyjwt[crypto] missing)",
+        )
+    try:
+        jwks = PyJWKClient(_APPLE_JWKS_URL)
+        signing_key = jwks.get_signing_key_from_jwt(token)
+        claims = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["RS256"],
+            issuer="https://appleid.apple.com",
+            options={
+                "verify_aud": True, "verify_iss": True,
+                "verify_exp": True, "require": ["exp", "iat", "sub"],
+            },
+            audience=list(APPLE_AUDIENCES) if APPLE_AUDIENCES else None,
+        )
+    except jwt.PyJWTError as e:
+        logger.warning("Apple token verify failed: %s", e)
+        raise HTTPException(status_code=401, detail="Invalid Apple identity token") from e
+    except Exception as e:
+        logger.error("Apple JWKS fetch error: %s", e)
+        raise HTTPException(status_code=503, detail="Apple sign-in temporarily unavailable") from e
+    return claims
+
+
+@api_router.post("/auth/apple")
+async def auth_apple(body: AppleAuthIn, request: Request):
+    """Exchange an Apple identity token for a VaidyaJi JWT session.
+
+    Mirrors the Google `/auth/session` flow. Users are keyed on `apple_sub`
+    (never email — Apple may send a private-relay address that changes).
+    """
+    await rate_limit(request, "auth:apple", max_calls=30, window_seconds=3600)
+    if not APPLE_AUDIENCES:
+        raise HTTPException(
+            status_code=503,
+            detail="Apple sign-in is not configured on the server (APPLE_AUDIENCES missing)",
+        )
+    claims = await _verify_apple_identity_token(body.identity_token)
+    apple_sub = claims["sub"]
+    email = (claims.get("email") or (body.email or "")).strip().lower() or None
+    email_verified = bool(claims.get("email_verified")) or bool(
+        str(claims.get("email_verified") or "").lower() == "true"
+    )
+
+    user = await db.users.find_one({"apple_sub": apple_sub}, {"_id": 0, "password": 0})
+    if user:
+        # Persist first-sign-in name/email ONLY if we don't have them yet —
+        # never overwrite existing values with the nulls Apple sends on later logins.
+        updates: Dict[str, Any] = {}
+        if body.full_name and not user.get("name"):
+            updates["name"] = body.full_name
+        if email and not user.get("email"):
+            # Don't collide with an existing account
+            existing = await db.users.find_one({"email": email, "id": {"$ne": user["id"]}})
+            if not existing:
+                updates["email"] = email
+                if email_verified:
+                    updates["email_verified"] = True
+        if updates:
+            await db.users.update_one({"id": user["id"]}, {"$set": updates})
+            user.update(updates)
+        token = make_token(user["id"], user["role"])
+        await log_activity("patient_signin_apple", actor=user, meta={"apple_sub": apple_sub})
+        return {"token": token, "user": user, "is_new": False}
+
+    # New user via Apple.
+    user_id = str(uuid.uuid4())
+    derived_name = (
+        (body.full_name or "").strip()
+        or (email.split("@")[0] if email else "")
+        or "Patient"
+    )
+    doc = {
+        "id": user_id,
+        "name": derived_name,
+        "email": email,
+        "email_verified": bool(email and email_verified),
+        "phone": None,
+        "password": None,
+        "role": "patient",
+        "is_admin": False,
+        "auth_provider": "apple",
+        "apple_sub": apple_sub,
+        "preferred_language": None,
+        "free_consult_available": True,
+        "call_preference": None,
+        "created_at": now_iso(),
+        "last_login_at": now_iso(),
+    }
+    await db.users.insert_one(doc)
+    token = make_token(user_id, "patient")
+    await log_activity("patient_signup_apple", actor=doc, meta={"email": email})
+    # Phase 1c: bilingual welcome email (fires only if we got a real email).
+    if email:
+        send_welcome_email_bg({k: v for k, v in doc.items() if k != "_id"})
+    return {"token": token, "user": doc, "is_new": True}
+
+
 # ── Update current user (language, call preference, profile) ──────
 class UserUpdateIn(BaseModel):
     preferred_language: Optional[Literal["en", "hi"]] = None

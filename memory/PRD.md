@@ -189,3 +189,17 @@ Every appointment prescription can now be downloaded as a branded, single-page A
   - `assets/images/adaptive-icon.png` — transparent foreground with the logo at 52% width so it fits inside Android's adaptive-icon 66% circular safe zone (works for square, round, and teardrop launchers)
 - `app.json` updated: `android.adaptiveIcon.backgroundColor` switched from `#FFFDF3` (cream) → `#0F4C36` (brand green) to match the new foreground.
 - Result: identical look on iOS (system-masked rounded square) and Android (adaptive icon in any mask shape).
+
+## Iteration 46 — Sign in with Apple (Jun 2026)
+- **Backend** (`server.py`):
+  - New `POST /api/auth/apple` endpoint — validates Apple identity tokens against Apple's JWKS (`https://appleid.apple.com/auth/keys`) with RS256 + issuer + audience + expiry checks. Audience whitelist loaded from `APPLE_AUDIENCES` env (`com.onlinevaidyaji.app,host.exp.Exponent`).
+  - Users keyed on `apple_sub` (never email — Apple sends private-relay addresses).
+  - First-sign-in name/email persisted ONLY when the user doesn't already have them (Apple returns null on subsequent logins).
+  - Mirrors the Google `/auth/session` response shape: `{token, user, is_new}`. Returns 503 when `APPLE_AUDIENCES` isn't configured. Rate-limited (30/hour).
+- **Frontend**:
+  - New `expo-apple-authentication` dependency + `src/components/AppleButton.tsx` (iOS-only render, hides on Android/Web per App Review rules).
+  - New `useAppleAuth` hook — same routing logic as Google (new users → `/signup/language`, admins → `/admin/dashboard`, patients → home).
+  - Wired into `/auth/login.tsx` right below the Google button.
+- **app.json**: `expo.ios.usesAppleSignIn: true` added next to the bundle identifier.
+- **⚠️ Important**: Sign in with Apple requires a **real iOS build** (EAS or production). It does NOT work inside Expo Go. Backend + integration are fully wired, but the button only appears on a real iPhone with the app installed.
+- Tests: `tests/test_iter46_apple_signin.py` (4/4 pass). Lint clean on touched frontend files.

@@ -10,6 +10,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.onlinevaidyaji.app",
+      "usesAppleSignIn": true,
       "infoPlist": {
         "NSCameraUsageDescription": "Video-consult your AYUSH doctor face-to-face",
         "NSMicrophoneUsageDescription": "Talk with your Vaidya during consultations",
