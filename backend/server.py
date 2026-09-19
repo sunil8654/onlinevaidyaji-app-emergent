@@ -2275,6 +2275,12 @@ async def on_startup():
     await db.doctors.update_many(
         {"verified": None, "user_id": {"$exists": False}}, {"$set": {"verified": True}}
     )
+    # Create all documented indexes (idempotent, safe on re-run).
+    try:
+        from db_schema import ensure_indexes
+        await ensure_indexes(db)
+    except Exception as e:
+        logger.warning(f"ensure_indexes failed: {e}")
     # Ensure a unique index on community_likes to prevent duplicate likes
     # under concurrent taps (race-safe like count).
     try:

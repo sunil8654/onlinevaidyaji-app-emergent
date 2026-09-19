@@ -203,3 +203,10 @@ Every appointment prescription can now be downloaded as a branded, single-page A
 - **app.json**: `expo.ios.usesAppleSignIn: true` added next to the bundle identifier.
 - **⚠️ Important**: Sign in with Apple requires a **real iOS build** (EAS or production). It does NOT work inside Expo Go. Backend + integration are fully wired, but the button only appears on a real iPhone with the app installed.
 - Tests: `tests/test_iter46_apple_signin.py` (4/4 pass). Lint clean on touched frontend files.
+
+## Iteration 47 — DB schema + indexes module (Jun 2026)
+- New `/app/backend/db_schema.py`:
+  - Documents **all 52 MongoDB collections** with descriptions and (for the critical ones) full field schemas.
+  - Central `INDEX_SPEC` declaring **29 indexes** across the hottest collections (users, doctors, appointments, quiz_results, health_documents, presales_leads, payments, reminders, activity, doctor community, chat_messages).
+  - `ensure_indexes(db)` wired into the FastAPI startup event — idempotent, safe to re-run, logs the per-collection index count.
+- Startup verified: 29 indexes created cleanly on first run, second boot is a no-op (idempotent).
