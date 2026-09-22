@@ -9,7 +9,7 @@ import * as Linking from "expo-linking";
 import { useIconFonts } from "@/src/hooks/use-icon-fonts";
 import { AuthProvider, useAuth } from "@/src/auth";
 import { I18nProvider } from "@/src/i18n";
-import { registerForPush } from "@/src/push";
+import { registerForPush, getNotifications } from "@/src/push";
 
 LogBox.ignoreAllLogs(true);
 
