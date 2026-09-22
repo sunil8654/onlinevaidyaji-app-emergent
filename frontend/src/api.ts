@@ -63,8 +63,6 @@ export const api = {
     request<{ ok: boolean; message: string; dev_hint?: string }>("/auth/phone/send-otp", "POST", { phone }, false),
   verifyPhoneOtp: (payload: { phone: string; otp: string; name?: string; email?: string; role?: "patient" | "doctor" }) =>
     request<{ token: string; user: any; is_new: boolean }>("/auth/phone/verify-otp", "POST", payload, false),
-  googleSession: (session_id: string) =>
-    request<{ token: string; user: any; is_new: boolean }>("/auth/session", "POST", { session_id }, false),
   appleAuth: (identity_token: string, full_name?: string | null, email?: string | null) =>
     request<{ token: string; user: any; is_new: boolean }>(
       "/auth/apple",
