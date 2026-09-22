@@ -11,16 +11,23 @@
 // whole bundle with "RNGoogleSignin could not be found" — which then breaks
 // every screen that imports this hook. So it is loaded lazily, only when the
 // user actually taps "Continue with Google" on a real Android build.
+//
+// Expo Go fallback: when the native module is unavailable, we run a
+// backend-mediated OAuth flow in an in-app browser instead:
+//   app → GET /api/auth/google/oauth/start → Google consent →
+//   /api/auth/google/oauth/callback → deep link back with our app JWT.
 import { Platform, Alert } from "react-native";
 import { useCallback, useState } from "react";
-import Constants from "expo-constants";
+import * as Linking from "expo-linking";
+import * as WebBrowser from "expo-web-browser";
 import { api } from "@/src/api";
 import { useAuth } from "@/src/auth";
 
+WebBrowser.maybeCompleteAuthSession();
+
 // Configure once, lazily. EXPO_PUBLIC_* is inlined at build time.
 const WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || "";
-
-const isExpoGo = Constants.executionEnvironment === "storeClient";
+const BASE = process.env.EXPO_PUBLIC_BACKEND_URL || "";
 
 let _gs: any = null;
 let _statusCodes: any = null;
@@ -68,15 +75,48 @@ export function useGoogleAuthNative({ onSuccess, onError }: UseGoogleAuthNativeO
   const { applySession } = useAuth();
   const [googleBusy, setGoogleBusy] = useState(false);
 
+  /** Browser OAuth fallback (Expo Go / no native module). Opens an in-app
+   * browser, completes Google consent, and comes back with our app JWT. */
+  const startBrowserGoogle = useCallback(async () => {
+    try {
+      setGoogleBusy(true);
+      const returnTo = Linking.createURL("oauth/callback");
+      const startUrl = `${BASE}/api/auth/google/oauth/start?return_to=${encodeURIComponent(returnTo)}`;
+      const result = await WebBrowser.openAuthSessionAsync(startUrl, returnTo);
+      if (result.type !== "success" || !(result as any).url) {
+        return; // user dismissed the browser — silent
+      }
+      const url = (result as any).url as string;
+      // The app JWT arrives in the URL fragment: oauth/callback#token=...
+      const m = url.match(/[#&?]token=([^&#]+)/);
+      if (!m) {
+        if (url.includes("error=google_denied")) return; // user denied consent
+        throw new Error("Google sign-in did not return a session");
+      }
+      const token = decodeURIComponent(m[1]);
+      // Fetch the full profile so AuthContext has a complete user object.
+      const res = await fetch(`${BASE}/api/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error("Could not load your profile after Google sign-in");
+      const user = await res.json();
+      await applySession(token, user);
+      onSuccess({ token, user, is_new: false } as GoogleAuthResult);
+    } catch (e: any) {
+      const msg = e?.message || "Could not sign in with Google. Please try again.";
+      if (onError) onError(msg);
+      else Alert.alert("Sign in failed", msg);
+    } finally {
+      setGoogleBusy(false);
+    }
+  }, [applySession, onError, onSuccess]);
+
   const startGoogle = useCallback(async () => {
     if (Platform.OS !== "android") return;
 
+    // Expo Go / builds without the native module → browser OAuth fallback.
     if (!loadGoogleSignin()) {
-      const msg = isExpoGo
-        ? "Google Sign-In is not available inside Expo Go. It works in the installed app build."
-        : "Google Sign-In is not available on this device build.";
-      if (onError) onError(msg);
-      else Alert.alert("Google Sign-In", msg);
+      await startBrowserGoogle();
       return;
     }
 
@@ -112,7 +152,7 @@ export function useGoogleAuthNative({ onSuccess, onError }: UseGoogleAuthNativeO
     } finally {
       setGoogleBusy(false);
     }
-  }, [applySession, onError, onSuccess]);
+  }, [applySession, onError, onSuccess, startBrowserGoogle]);
 
   return { startGoogle, googleBusy };
 }

@@ -871,11 +871,16 @@ class Collection:
         t = _ident(self._table)
         col_names = list(cols.keys())
         params = list(cols.values()) + [json.dumps(data, ensure_ascii=False, default=str)]
-        sql = "INSERT INTO `%s` (`%s`, data) VALUES (%s)" % (
-            t,
-            "`, `".join(_ident(c) for c in col_names),
-            ", ".join(["%s"] * len(col_names) + ["%s"]),
-        )
+        if col_names:
+            sql = "INSERT INTO `%s` (`%s`, data) VALUES (%s)" % (
+                t,
+                "`, `".join(_ident(c) for c in col_names),
+                ", ".join(["%s"] * len(col_names) + ["%s"]),
+            )
+        else:
+            # No mirrorable scalar columns (e.g. table has only temporal cols
+            # which intentionally stay in the JSON blob) — insert data only.
+            sql = "INSERT INTO `%s` (data) VALUES (%%s)" % t
         last_id = await _query(sql, params)
         real_id = int(last_id)
         # SQL rows are AUTO_INCREMENT — reflect the real id back into the
