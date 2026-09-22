@@ -140,15 +140,21 @@ export function useGoogleAuthNative({ onSuccess, onError }: UseGoogleAuthNativeO
       onSuccess(res as GoogleAuthResult);
     } catch (e: any) {
       const code = e?.code;
-      // Silently ignore user-cancelled + in-progress. Show real failures.
-      if (!isCancel(code) && code !== _statusCodes?.PLAY_SERVICES_NOT_AVAILABLE) {
-        const msg =
-          code === _statusCodes?.SIGN_IN_REQUIRED
-            ? "Google Sign-In needs your account. Please sign in again."
-            : e?.message || "Could not sign in with Google. Please try again.";
-        if (onError) onError(msg);
-        else Alert.alert("Sign in failed", msg);
+      // Silently ignore user-cancelled + in-progress.
+      if (isCancel(code) || code === _statusCodes?.PLAY_SERVICES_NOT_AVAILABLE) {
+        return;
       }
+      // DEVELOPER_ERROR / SIGN_IN_REQUIRED = signing-key SHA-1 not yet
+      // registered in Firebase (or stale google-services.json). Instead of a
+      // dead-end error, transparently fall back to the browser OAuth flow so
+      // users can still sign in while the fingerprint is being whitelisted.
+      if (code === _statusCodes?.SIGN_IN_REQUIRED || String(code) === "10" || /DEVELOPER_ERROR/i.test(e?.message || "")) {
+        await startBrowserGoogle();
+        return;
+      }
+      const msg = e?.message || "Could not sign in with Google. Please try again.";
+      if (onError) onError(msg);
+      else Alert.alert("Sign in failed", msg);
     } finally {
       setGoogleBusy(false);
     }
