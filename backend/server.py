@@ -4,7 +4,6 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.concurrency import run_in_threadpool
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import json
 import logging
@@ -19,7 +18,10 @@ import time
 import jwt
 import bcrypt
 
-from emergentintegrations.llm.chat import LlmChat, UserMessage
+try:
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
+except ImportError:  # local dev only — real package ships in the Emergent cloud env
+    from llm_stub import LlmChat, UserMessage  # noqa: F401
 import httpx
 from emails import (
     send_welcome_email_bg,
@@ -29,10 +31,12 @@ from emails import (
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+# MySQL-backed Mongo-compatible data layer.
+# msdb.py implements the motor-style API (`db.<collection>.find_one(...)`,
+# insert/update/delete/count/aggregate/create_index) against the SAME MySQL
+# database used by the website backend — one database for web + app.
+# Server code below keeps its `db.<collection>...` calls unchanged.
+from msdb import db
 
 # Auth
 JWT_SECRET = os.environ['JWT_SECRET']
@@ -342,9 +346,8 @@ async def register(body: RegisterInput, request: Request):
     existing = await db.users.find_one({"email": body.email.lower()})
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
-    user_id = str(uuid.uuid4())
     doc = {
-        "id": user_id,
+        "id": str(uuid.uuid4()),  # placeholder; real AUTO_INCREMENT id assigned below
         "name": body.name,
         "email": body.email.lower(),
         "password": hash_password(body.password),
@@ -357,7 +360,11 @@ async def register(body: RegisterInput, request: Request):
         doc["registration_number"] = body.registration_number
         doc["verified"] = False  # pending admin approval
         doc["documents_uploaded"] = bool(body.registration_number)
-    await db.users.insert_one(doc)
+    res = await db.users.insert_one(doc)
+    # msdb assigns MySQL AUTO_INCREMENT ids — the token + response + doctor link
+    # must use the real STORED id (the Mongo-era UUID above is ignored by msdb).
+    user_id = str(res.inserted_id)
+    doc["id"] = user_id
 
     # Doctor self-registration => create a pending entry in doctors collection
     if body.role == "doctor":
@@ -6090,9 +6097,8 @@ async def phone_verify_otp(body: PhoneOTPVerifyIn, request: Request):
         return {"token": token, "user": existing, "is_new": False}
     if not body.name or not body.name.strip():
         raise HTTPException(status_code=400, detail="Name is required for new signup")
-    user_id = str(uuid.uuid4())
     doc: Dict[str, Any] = {
-        "id": user_id,
+        "id": str(uuid.uuid4()),  # placeholder; real AUTO_INCREMENT id below
         "name": body.name.strip(),
         "phone": phone,
         "email": (body.email or "").lower() if body.email else None,
@@ -6107,7 +6113,8 @@ async def phone_verify_otp(body: PhoneOTPVerifyIn, request: Request):
         "profile_photo": None,
         "created_at": now_iso(),
     }
-    await db.users.insert_one(doc.copy())
+    res = await db.users.insert_one(doc.copy())
+    doc["id"] = user_id = str(res.inserted_id)  # MySQL AUTO_INCREMENT id
     doc.pop("_id", None)
     token = make_token(user_id, doc["role"])
     await log_activity("patient_signup_phone", actor=doc, meta={"phone": phone})
@@ -6162,7 +6169,7 @@ async def auth_session(body: GoogleSessionIn, request: Request):
         return {"token": token, "user": existing, "is_new": False}
     user_id = str(uuid.uuid4())
     doc: Dict[str, Any] = {
-        "id": user_id,
+        "id": user_id,  # placeholder; replaced by the real id below
         "name": name,
         "email": email,
         "phone": None,
@@ -6178,7 +6185,8 @@ async def auth_session(body: GoogleSessionIn, request: Request):
         "call_preference": None,
         "created_at": now_iso(),
     }
-    await db.users.insert_one(doc.copy())
+    res = await db.users.insert_one(doc.copy())
+    doc["id"] = user_id = str(res.inserted_id)  # MySQL AUTO_INCREMENT id
     doc.pop("_id", None)
     token = make_token(user_id, doc["role"])
     await log_activity("patient_signup_google", actor=doc, meta={"email": email})
@@ -6279,14 +6287,13 @@ async def auth_apple(body: AppleAuthIn, request: Request):
         return {"token": token, "user": user, "is_new": False}
 
     # New user via Apple.
-    user_id = str(uuid.uuid4())
     derived_name = (
         (body.full_name or "").strip()
         or (email.split("@")[0] if email else "")
         or "Patient"
     )
     doc = {
-        "id": user_id,
+        "id": str(uuid.uuid4()),  # placeholder; replaced by the real id below
         "name": derived_name,
         "email": email,
         "email_verified": bool(email and email_verified),
@@ -6302,10 +6309,150 @@ async def auth_apple(body: AppleAuthIn, request: Request):
         "created_at": now_iso(),
         "last_login_at": now_iso(),
     }
-    await db.users.insert_one(doc)
+    res = await db.users.insert_one(doc)
+    doc["id"] = user_id = str(res.inserted_id)  # MySQL AUTO_INCREMENT id
     token = make_token(user_id, "patient")
     await log_activity("patient_signup_apple", actor=doc, meta={"email": email})
     # Phase 1c: bilingual welcome email (fires only if we got a real email).
+    if email:
+        send_welcome_email_bg({k: v for k, v in doc.items() if k != "_id"})
+    return {"token": token, "user": doc, "is_new": True}
+
+
+# ─────────────────────────── Google Sign In (native, Android) ──────────────
+# Direct Google ID-token verification against Google's public JWKS — does NOT
+# use the Emergent auth portal. Android app calls this with the ID token from
+# @react-native-google-signin/google-signin. Users are keyed on `google_id`
+# (the token "sub"), with an email-based merge so existing Emergent-Google
+# accounts keep working without duplicates.
+_GOOGLE_AUDIENCES = {
+    a.strip()
+    for a in os.environ.get("GOOGLE_AUDIENCES", "").split(",")
+    if a.strip()
+}
+_GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs"
+
+
+class GoogleAuthIn(BaseModel):
+    id_token: str = Field(..., min_length=20)
+
+
+async def _verify_google_id_token(token: str) -> dict:
+    """Validate a Google ID token against Google's public JWKS.
+    Returns the decoded claims dict. Raises HTTPException on any failure."""
+    try:
+        from jwt import PyJWKClient  # local import so backend still starts without [crypto]
+    except ImportError:
+        raise HTTPException(
+            status_code=500,
+            detail="Google sign-in is not configured on the server (pyjwt[crypto] missing)",
+        )
+    try:
+        jwks = PyJWKClient(_GOOGLE_JWKS_URL)
+        signing_key = jwks.get_signing_key_from_jwt(token)
+        claims = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["RS256"],
+            options={
+                "verify_aud": True, "verify_iss": True,
+                "verify_exp": True, "require": ["exp", "iat", "sub"],
+            },
+            issuer=["https://accounts.google.com", "accounts.google.com"],
+            audience=list(_GOOGLE_AUDIENCES) if _GOOGLE_AUDIENCES else None,
+        )
+    except jwt.PyJWTError as e:
+        logger.warning("Google token verify failed: %s", e)
+        raise HTTPException(status_code=401, detail="Invalid Google ID token") from e
+    except Exception as e:
+        logger.error("Google JWKS fetch error: %s", e)
+        raise HTTPException(status_code=503, detail="Google sign-in temporarily unavailable") from e
+    return claims
+
+
+@api_router.post("/auth/google")
+async def auth_google(body: GoogleAuthIn, request: Request):
+    """Exchange a Google ID token (native Android SDK) for a VaidyaJi JWT.
+
+    Mirrors the Apple `/auth/apple` flow: verify the token against Google's
+    public keys, then login-or-create keyed on `google_id` (claims["sub"]).
+    """
+    await rate_limit(request, "auth:google", max_calls=30, window_seconds=3600)
+    if not _GOOGLE_AUDIENCES:
+        raise HTTPException(
+            status_code=503,
+            detail="Google sign-in is not configured on the server (GOOGLE_AUDIENCES missing)",
+        )
+    claims = await _verify_google_id_token(body.id_token)
+    google_id = claims["sub"]
+    email = (claims.get("email") or "").strip().lower() or None
+    email_verified = bool(str(claims.get("email_verified") or "").lower() == "true")
+    name = (claims.get("name") or "").strip() or (email.split("@")[0] if email else None)
+    picture = claims.get("picture") or None
+
+    # 1) Existing native-Google user → straight login, refresh deets if missing.
+    user = await db.users.find_one({"google_id": google_id}, {"_id": 0, "password": 0})
+    if user:
+        updates: Dict[str, Any] = {}
+        if name and not user.get("name"):
+            updates["name"] = name
+        if email and not user.get("email"):
+            existing = await db.users.find_one({"email": email, "id": {"$ne": user["id"]}})
+            if not existing:
+                updates["email"] = email
+                if email_verified:
+                    updates["email_verified"] = True
+        if picture and not user.get("profile_photo"):
+            updates["profile_photo"] = picture
+        if updates:
+            await db.users.update_one({"id": user["id"]}, {"$set": updates})
+            user.update(updates)
+        token = make_token(user["id"], user.get("role") or "patient")
+        await log_activity("patient_signin_google", actor=user, meta={"google_id": google_id})
+        return {"token": token, "user": user, "is_new": False}
+
+    # 2) Existing Emergent-Google (or any email) user → link google_id, login.
+    if email:
+        existing = await db.users.find_one({"email": email}, {"_id": 0, "password": 0})
+        if existing:
+            link: Dict[str, Any] = {"google_id": google_id, "auth_provider": "google"}
+            if email_verified:
+                link["email_verified"] = True
+            if picture and not existing.get("profile_photo"):
+                link["profile_photo"] = picture
+            if name and not existing.get("name"):
+                link["name"] = name
+            await db.users.update_one({"id": existing["id"]}, {"$set": link})
+            existing.update(link)
+            token = make_token(existing["id"], existing.get("role") or "patient")
+            await log_activity("patient_link_google", actor=existing, meta={"google_id": google_id})
+            return {"token": token, "user": existing, "is_new": False}
+
+    # 3) New user via Google.
+    doc = {
+        "id": str(uuid.uuid4()),  # placeholder; replaced by the real id below
+        "name": name or "Patient",
+        "email": email,
+        "email_verified": bool(email and email_verified),
+        "phone": None,
+        "password": None,
+        "role": "patient",
+        "is_admin": False,
+        "auth_provider": "google",
+        "google_id": google_id,
+        "profile_photo": picture,
+        "phone_verified": False,
+        "preferred_language": None,
+        "free_consult_available": True,
+        "free_consult_used": False,
+        "call_preference": None,
+        "created_at": now_iso(),
+        "last_login_at": now_iso(),
+    }
+    res = await db.users.insert_one(doc)
+    doc["id"] = user_id = str(res.inserted_id)  # MySQL AUTO_INCREMENT id
+    token = make_token(user_id, "patient")
+    await log_activity("patient_signup_google_native", actor=doc, meta={"email": email})
     if email:
         send_welcome_email_bg({k: v for k, v in doc.items() if k != "_id"})
     return {"token": token, "user": doc, "is_new": True}
@@ -7029,4 +7176,4 @@ logger = logging.getLogger(__name__)
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
-    client.close()
+    await db.close()

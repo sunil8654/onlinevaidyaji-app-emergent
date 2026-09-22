@@ -63,7 +63,8 @@
       "expo-sharing",
       "expo-status-bar",
       "expo-web-browser",
-      "@react-native-vector-icons/feather"
+      "@react-native-vector-icons/feather",
+      "@react-native-google-signin/google-signin"
     ],
     "experiments": {
       "typedRoutes": true

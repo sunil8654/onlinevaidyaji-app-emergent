@@ -6,7 +6,8 @@ import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import Feather from "@react-native-vector-icons/feather";
 import { useAuth } from "@/src/auth";
 import { useI18n } from "@/src/i18n";
-import { useGoogleAuth } from "@/src/hooks/useGoogleAuth";
+import { useGoogleAuthWeb } from "@/src/hooks/useGoogleAuthWeb";
+import { useGoogleAuthNative } from "@/src/hooks/useGoogleAuthNative";
 import { GoogleButton } from "@/src/components/GoogleButton";
 import { useAppleAuth, AppleButton } from "@/src/components/AppleButton";
 
@@ -26,23 +27,36 @@ export default function Login() {
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // Route the user based on the Emergent session response.
-  const { startGoogle, googleBusy } = useGoogleAuth({
-    onSuccess: (res) => {
-      // If the returning user is missing a language preference, treat them
-      // as onboarding-incomplete and send them through the language step.
-      if (res.is_new || !res.user?.preferred_language) {
-        router.replace("/signup/language");
-      } else if (res.user?.is_admin) {
-        router.replace("/admin/dashboard");
-      } else if (res.user?.role === "doctor") {
-        router.replace("/doctor/home");
-      } else {
-        router.replace("/(tabs)/home");
-      }
-    },
+  // Route the user based on the auth response.
+  const routeAfterGoogle = (res: { is_new: boolean; user?: any }) => {
+    // If the returning user is missing a language preference, treat them
+    // as onboarding-incomplete and send them through the language step.
+    if (res.is_new || !res.user?.preferred_language) {
+      router.replace("/signup/language");
+    } else if (res.user?.is_admin) {
+      router.replace("/admin/dashboard");
+    } else if (res.user?.role === "doctor") {
+      router.replace("/doctor/home");
+    } else {
+      router.replace("/(tabs)/home");
+    }
+  };
+
+  // Web Google (GIS): the browser signs in directly with Google — no Emergent.
+  const { startGoogle: startGoogleWeb, googleBusy: googleBusyWeb } = useGoogleAuthWeb({
+    onSuccess: routeAfterGoogle,
     onError: (msg) => setErr(msg || COPY.googleFail[lang]),
   });
+
+  // Native Google SDK — used on Android (no Emergent involved).
+  const { startGoogle: startGoogleNative, googleBusy: googleBusyNative } = useGoogleAuthNative({
+    onSuccess: routeAfterGoogle,
+    onError: (msg) => setErr(msg || COPY.googleFail[lang]),
+  });
+
+  // Android → native SDK; every other platform (web) → GIS (real Google).
+  const startGoogle = Platform.OS === "android" ? startGoogleNative : startGoogleWeb;
+  const googleBusy = Platform.OS === "android" ? googleBusyNative : googleBusyWeb;
 
   // Sign in with Apple — same routing as Google. iOS only.
   const { startApple, appleBusy, appleAvailable } = useAppleAuth({

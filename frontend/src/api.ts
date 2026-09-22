@@ -72,6 +72,13 @@ export const api = {
       { identity_token, full_name, email },
       false,
     ),
+  googleAuth: (id_token: string) =>
+    request<{ token: string; user: any; is_new: boolean }>(
+      "/auth/google",
+      "POST",
+      { id_token },
+      false,
+    ),
 
   updateMe: (body: {
     preferred_language?: "en" | "hi";

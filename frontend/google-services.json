@@ -12,7 +12,16 @@
           "package_name": "com.onlinevaidyaji.app"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "333559780075-rq5on2dk5q17tiu7ao2515gegocqb4pg.apps.googleusercontent.com",
+          "client_type": 1
+        },
+        {
+          "client_id": "333559780075-9lobsu1m7jdr9lgg7h2k0t615hi8tldi.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyB80FP5BUpkEVeXmJt51O1qllLaS17ixY4"
@@ -20,7 +29,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "333559780075-9lobsu1m7jdr9lgg7h2k0t615hi8tldi.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     },
@@ -31,7 +45,12 @@
           "package_name": "com.swasthdaily.app"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "333559780075-9lobsu1m7jdr9lgg7h2k0t615hi8tldi.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyB80FP5BUpkEVeXmJt51O1qllLaS17ixY4"
@@ -39,7 +58,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "333559780075-9lobsu1m7jdr9lgg7h2k0t615hi8tldi.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }

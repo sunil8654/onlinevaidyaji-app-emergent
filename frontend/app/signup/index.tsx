@@ -2,7 +2,7 @@
 // Role tabs at top: Patient (default) or AYUSH Doctor route to dedicated flows.
 import { useState } from "react";
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, ActivityIndicator, Alert, Image,
+  View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, ActivityIndicator, Alert, Image, Platform,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -10,7 +10,8 @@ import Feather from "@react-native-vector-icons/feather";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { useI18n } from "@/src/i18n";
 import { api } from "@/src/api";
-import { useGoogleAuth } from "@/src/hooks/useGoogleAuth";
+import { useGoogleAuthWeb } from "@/src/hooks/useGoogleAuthWeb";
+import { useGoogleAuthNative } from "@/src/hooks/useGoogleAuthNative";
 import { GoogleButton } from "@/src/components/GoogleButton";
 
 const COPY = {
@@ -56,16 +57,28 @@ export default function Signup() {
   const [phone, setPhone] = useState("");
   const [sending, setSending] = useState(false);
 
-  // Shared Google-auth hook — routes both patients and doctors after Emergent session exchange.
-  const { startGoogle, googleBusy } = useGoogleAuth({
-    onSuccess: (res) => {
-      if (res.is_new || !res.user?.preferred_language) router.replace("/signup/language");
-      else if (res.user?.is_admin) router.replace("/admin/dashboard");
-      else if (res.user?.role === "doctor") router.replace("/doctor/home");
-      else router.replace("/");
-    },
+  // Google auth — shared routing for both patient & doctor sign-up.
+  // Android uses the native Google SDK; web uses Google Identity Services
+  // (real Google, no Emergent).
+  const routeAfterGoogle = (res: any) => {
+    if (res.is_new || !res.user?.preferred_language) router.replace("/signup/language");
+    else if (res.user?.is_admin) router.replace("/admin/dashboard");
+    else if (res.user?.role === "doctor") router.replace("/doctor/home");
+    else router.replace("/");
+  };
+
+  const { startGoogle: startGoogleWeb, googleBusy: googleBusyWeb } = useGoogleAuthWeb({
+    onSuccess: routeAfterGoogle,
     onError: (msg) => Alert.alert("Sign in failed", msg || COPY.googleFail[lang]),
   });
+
+  const { startGoogle: startGoogleNative, googleBusy: googleBusyNative } = useGoogleAuthNative({
+    onSuccess: routeAfterGoogle,
+    onError: (msg) => Alert.alert("Sign in failed", msg || COPY.googleFail[lang]),
+  });
+
+  const startGoogle = Platform.OS === "android" ? startGoogleNative : startGoogleWeb;
+  const googleBusy = Platform.OS === "android" ? googleBusyNative : googleBusyWeb;
 
   function isValidIndianPhone(v: string) {
     const digits = v.replace(/\D/g, "").replace(/^91/, "");

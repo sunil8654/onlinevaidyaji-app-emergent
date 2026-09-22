@@ -12,7 +12,7 @@
 // package's font asset.
 //
 // If we add more icon families later, extend `ICON_FAMILIES` below.
-import Constants, { ExecutionEnvironment } from "expo-constants";
+import Constants from "expo-constants";
 import { useFonts } from "expo-font";
 
 // Match `@react-native-vector-icons/feather` version in package.json.
@@ -36,7 +36,7 @@ const iconFontMap = (): Record<string, string> =>
 
 export const useIconFonts = (): readonly [boolean, Error | null] =>
   useFonts(
-    Constants.executionEnvironment === ExecutionEnvironment.StoreClient
+    Constants.executionEnvironment === "storeClient"
       ? iconFontMap()
       : {},
   );

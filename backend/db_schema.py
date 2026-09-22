@@ -17,9 +17,14 @@ Call `await ensure_indexes(db)` from the FastAPI startup event.
 """
 from typing import Any, Dict, List
 import logging
-from pymongo import ASCENDING, DESCENDING, TEXT
 
 logger = logging.getLogger(__name__)
+
+# Sort-direction constants — same values as pymongo so existing index specs
+# (which use ASCENDING/DESCENDING) keep working against the msdb SQL layer.
+ASCENDING = 1
+DESCENDING = -1
+TEXT = "text"
 
 # ─────────────────── Collection descriptors (documentation) ───────────────
 # Each entry: name -> {"description": str, "fields": {name: type}}
