@@ -3,7 +3,7 @@ import { View, Text, Image, StyleSheet } from "react-native";
 import { COLORS, FONTS } from "@/src/theme";
 
 // Local asset — resized responsively via the `size` prop.
-const LOGO = require("../../assets/images/logo.jpeg");
+const LOGO = require("../../assets/images/logo.png");
 
 export function Logo({ size = 32, tagline = false, showText = true, tint }: { size?: number; tagline?: boolean; showText?: boolean; tint?: string }) {
   return (
