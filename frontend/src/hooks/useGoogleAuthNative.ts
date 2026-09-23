@@ -1,33 +1,23 @@
-// Native Google Sign-In — Android-only. Bypasses the Emergent auth portal
-// entirely: the device Google SDK returns an ID token which we exchange
-// directly with our own backend (`POST /api/auth/google`).
+// Native Google Sign-In — Android-only, direct via Google Play Services.
+// The device Google SDK returns an ID token which we exchange with our own
+// backend (`POST /api/auth/google`). No browser, no redirect flow.
 //
 // Usage (mirrors useAppleAuth):
 //   const { startGoogle, googleBusy } = useGoogleAuthNative({ onSuccess });
 //   if (Platform.OS === "android") <GoogleButton onPress={startGoogle} ... />
 //
 // ⚠️ The native module (@react-native-google-signin/google-signin) does NOT
-// exist inside Expo Go or on web. Importing it at module scope crashes the
-// whole bundle with "RNGoogleSignin could not be found" — which then breaks
-// every screen that imports this hook. So it is loaded lazily, only when the
-// user actually taps "Continue with Google" on a real Android build.
-//
-// Expo Go fallback: when the native module is unavailable, we run a
-// backend-mediated OAuth flow in an in-app browser instead:
-//   app → GET /api/auth/google/oauth/start → Google consent →
-//   /api/auth/google/oauth/callback → deep link back with our app JWT.
+// exist inside Expo Go — it only works in an installed dev/production build.
+// The import stays lazy so Expo Go / web can still load this screen without
+// crashing ("RNGoogleSignin could not be found").
 import { Platform, Alert } from "react-native";
 import { useCallback, useState } from "react";
-import * as Linking from "expo-linking";
-import * as WebBrowser from "expo-web-browser";
 import { api } from "@/src/api";
 import { useAuth } from "@/src/auth";
 
-WebBrowser.maybeCompleteAuthSession();
-
-// Configure once, lazily. EXPO_PUBLIC_* is inlined at build time.
+// webClientId = the Web (client_type 3) entry in google-services.json — that is
+// what makes Google return an ID token our backend can verify.
 const WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || "";
-const BASE = process.env.EXPO_PUBLIC_BACKEND_URL || "";
 
 let _gs: any = null;
 let _statusCodes: any = null;
@@ -75,48 +65,14 @@ export function useGoogleAuthNative({ onSuccess, onError }: UseGoogleAuthNativeO
   const { applySession } = useAuth();
   const [googleBusy, setGoogleBusy] = useState(false);
 
-  /** Browser OAuth fallback (Expo Go / no native module). Opens an in-app
-   * browser, completes Google consent, and comes back with our app JWT. */
-  const startBrowserGoogle = useCallback(async () => {
-    try {
-      setGoogleBusy(true);
-      const returnTo = Linking.createURL("oauth/callback");
-      const startUrl = `${BASE}/api/auth/google/oauth/start?return_to=${encodeURIComponent(returnTo)}`;
-      const result = await WebBrowser.openAuthSessionAsync(startUrl, returnTo);
-      if (result.type !== "success" || !(result as any).url) {
-        return; // user dismissed the browser — silent
-      }
-      const url = (result as any).url as string;
-      // The app JWT arrives in the URL fragment: oauth/callback#token=...
-      const m = url.match(/[#&?]token=([^&#]+)/);
-      if (!m) {
-        if (url.includes("error=google_denied")) return; // user denied consent
-        throw new Error("Google sign-in did not return a session");
-      }
-      const token = decodeURIComponent(m[1]);
-      // Fetch the full profile so AuthContext has a complete user object.
-      const res = await fetch(`${BASE}/api/auth/me`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error("Could not load your profile after Google sign-in");
-      const user = await res.json();
-      await applySession(token, user);
-      onSuccess({ token, user, is_new: false } as GoogleAuthResult);
-    } catch (e: any) {
-      const msg = e?.message || "Could not sign in with Google. Please try again.";
-      if (onError) onError(msg);
-      else Alert.alert("Sign in failed", msg);
-    } finally {
-      setGoogleBusy(false);
-    }
-  }, [applySession, onError, onSuccess]);
-
   const startGoogle = useCallback(async () => {
     if (Platform.OS !== "android") return;
 
-    // Expo Go / builds without the native module → browser OAuth fallback.
     if (!loadGoogleSignin()) {
-      await startBrowserGoogle();
+      // Only reachable in Expo Go / web — the installed APK always has the module.
+      const msg = "Google Sign-In works in the installed VaidyaJi app build.";
+      if (onError) onError(msg);
+      else Alert.alert("Google Sign-In", msg);
       return;
     }
 
@@ -140,25 +96,16 @@ export function useGoogleAuthNative({ onSuccess, onError }: UseGoogleAuthNativeO
       onSuccess(res as GoogleAuthResult);
     } catch (e: any) {
       const code = e?.code;
-      // Silently ignore user-cancelled + in-progress.
-      if (isCancel(code) || code === _statusCodes?.PLAY_SERVICES_NOT_AVAILABLE) {
-        return;
+      // Silently ignore user-cancelled + in-progress. Show real failures.
+      if (!isCancel(code) && code !== _statusCodes?.PLAY_SERVICES_NOT_AVAILABLE) {
+        const msg = e?.message || "Could not sign in with Google. Please try again.";
+        if (onError) onError(msg);
+        else Alert.alert("Sign in failed", msg);
       }
-      // DEVELOPER_ERROR / SIGN_IN_REQUIRED = signing-key SHA-1 not yet
-      // registered in Firebase (or stale google-services.json). Instead of a
-      // dead-end error, transparently fall back to the browser OAuth flow so
-      // users can still sign in while the fingerprint is being whitelisted.
-      if (code === _statusCodes?.SIGN_IN_REQUIRED || String(code) === "10" || /DEVELOPER_ERROR/i.test(e?.message || "")) {
-        await startBrowserGoogle();
-        return;
-      }
-      const msg = e?.message || "Could not sign in with Google. Please try again.";
-      if (onError) onError(msg);
-      else Alert.alert("Sign in failed", msg);
     } finally {
       setGoogleBusy(false);
     }
-  }, [applySession, onError, onSuccess, startBrowserGoogle]);
+  }, [applySession, onError, onSuccess]);
 
   return { startGoogle, googleBusy };
 }
