@@ -18,7 +18,7 @@ from PIL import Image
 from collections import deque
 
 BASE = r"/app/frontend/assets/images/"
-SRC = BASE + r"\_backup_originals\adaptive-icon.png"
+SRC = BASE + r"\adaptive-icon.png"
 OUT = BASE + r"\adaptive-icon.png"
 
 CANVAS = 1024
