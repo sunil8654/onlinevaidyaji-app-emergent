@@ -5,16 +5,37 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { api } from "@/src/api";
+import type { Doctor } from "@/src/api";
 import Feather from "@react-native-vector-icons/feather";
+import DoctorRating, { realRating } from "@/src/components/DoctorRating";
+import { formatINR } from "@/src/utils/currency";
+
+/**
+ * A doctor belongs on this screen only if they are genuinely reachable:
+ *   - `is_available_online` is the capability flag ("offers online consult") and
+ *     is what the booking endpoint enforces; it is set for nearly every doctor,
+ *     so it proves nothing about the present moment.
+ *   - `is_online` is the real signal - the backend computes it from the
+ *     doctor's `last_seen_at` heartbeat (POST /doctors/heartbeat).
+ * The old version listed every approved doctor and drew a green ONLINE dot on
+ * all of them, which told patients they could join a call that was not there.
+ */
+function isReachableNow(d: Doctor): boolean {
+  return !!(d.is_available_online && d.is_online);
+}
 
 export default function InstantConsult() {
   const router = useRouter();
-  const [doctors, setDoctors] = useState<any[]>([]);
+  const [doctors, setDoctors] = useState<Doctor[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
-      try { setDoctors(await api.listDoctors()); } catch {}
+      try {
+        // Approved, non-restricted doctors only - enforced in the backend.
+        const res = await api.listDoctors({ page_size: 50 });
+        setDoctors(res.items.filter(isReachableNow));
+      } catch {}
       setLoading(false);
     })();
   }, []);
@@ -27,7 +48,8 @@ export default function InstantConsult() {
         </TouchableOpacity>
         <View>
           <Text style={styles.eyebrow}>Instant · Video</Text>
-          <Text style={styles.title}>Consult in 30 min</Text>
+          {/* No "in 30 min" promise: nothing measures or guarantees a wait. */}
+          <Text style={styles.title}>Talk to a Vaidya now</Text>
         </View>
       </View>
 
@@ -37,7 +59,10 @@ export default function InstantConsult() {
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.heroTitle}>Vaidyas online right now</Text>
-          <Text style={styles.heroSub}>Skip the wait — connect with a verified AYUSH doctor in under 30 minutes.</Text>
+          <Text style={styles.heroSub}>
+            Connect with a verified AYUSH doctor who is available for a video
+            consult at this moment.
+          </Text>
         </View>
         <View style={styles.count}>
           <Text style={styles.countNum}>{doctors.length}</Text>
@@ -61,11 +86,11 @@ export default function InstantConsult() {
               <Text style={styles.docName}>{item.name}</Text>
               <Text style={styles.docMeta}>{item.specialty} · {item.experience_years} yrs</Text>
               <View style={styles.metaRow}>
-                <View style={styles.ratePill}>
-                  <Feather name="star" size={10} color={COLORS.accent} />
-                  <Text style={styles.rateText}>{item.rating || 4.6}</Text>
-                </View>
-                <Text style={styles.wait}>~5-15 min wait</Text>
+                {realRating(item.rating, item.review_count) !== null ? (
+                  <View style={styles.ratePill}>
+                    <DoctorRating rating={item.rating} reviewCount={item.review_count} size={10} />
+                  </View>
+                ) : null}
               </View>
             </View>
             <TouchableOpacity
@@ -74,7 +99,7 @@ export default function InstantConsult() {
               testID={`ic-call-${item.id}`}
             >
               <Feather name="video" size={14} color={COLORS.surface} />
-              <Text style={styles.callText}>Call ₹{item.consultation_fee}</Text>
+              <Text style={styles.callText}>Call {formatINR(item.consultation_fee) || "Free"}</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -102,9 +127,7 @@ const styles = StyleSheet.create({
   docMeta: { color: COLORS.textSecondary, fontSize: 12, marginTop: 2 },
   metaRow: { flexDirection: "row", gap: 8, marginTop: 6, alignItems: "center" },
   ratePill: { flexDirection: "row", gap: 3, alignItems: "center", backgroundColor: COLORS.accentSoft, paddingHorizontal: 6, paddingVertical: 2, borderRadius: RADIUS.pill },
-  rateText: { color: COLORS.accent, fontSize: 10, fontWeight: "700" },
-  wait: { color: COLORS.success, fontSize: 10, fontWeight: "700", letterSpacing: 1 },
-  callBtn: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: COLORS.accent, paddingHorizontal: 12, paddingVertical: 10, borderRadius: RADIUS.pill },
-  callText: { color: COLORS.surface, fontWeight: "700", fontSize: 12 },
+  callBtn: { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: COLORS.brand, paddingHorizontal: 12, paddingVertical: 8, borderRadius: RADIUS.pill },
+  callText: { fontFamily: FONTS.money, color: COLORS.surface, fontWeight: "700", fontSize: 12 },
   empty: { color: COLORS.textSecondary, textAlign: "center", marginTop: 40 },
 });

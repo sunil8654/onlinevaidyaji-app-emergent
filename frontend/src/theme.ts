@@ -23,7 +23,21 @@ export const FONTS = {
   heading: "serif",
   body: "System",
   mono: "monospace",
+  /**
+   * Money must NEVER use the serif family.
+   *
+   * The rupee sign is U+20B9, added to Unicode in 2010. Several platform serif
+   * faces (Noto Serif / Droid Serif on older Android, some OEM skins) predate
+   * it, so a `₹` drawn in `FONTS.heading` falls back to a `.notdef` box or a
+   * literal "?" - which is exactly what customers saw on fees and totals while
+   * the API was returning a perfectly valid U+20B9.
+   *
+   * Route every currency string through the system face plus
+   * `src/utils/currency.ts` (`formatINR`) and this cannot regress.
+   */
+  money: "System",
 } as const;
+
 
 export const RADIUS = {
   sm: 8,

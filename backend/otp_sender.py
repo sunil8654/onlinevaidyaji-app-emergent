@@ -1,13 +1,19 @@
-"""OTP delivery module — Fast2SMS ➜ Twilio ➜ Mock, with automatic fallback.
+"""OTP delivery module — WhatsApp ➜ Fast2SMS ➜ Twilio ➜ Mock, with automatic fallback.
 
-The API surface (`send_otp_sms(phone, otp) -> {ok, provider, error?}`) hides
-which provider actually delivered the SMS, so the rest of the app doesn't
-have to care.
+Use `send_otp(phone, otp)`: it tries WhatsApp first and transparently falls back
+to SMS when the recipient has no WhatsApp (or WhatsApp is disabled/misconfigured/
+rate-limited). It returns the underlying provider result plus a `channel` field
+(`whatsapp` | `sms` | `mock`) so callers can report how the code was delivered.
 
-Provider order (first configured provider wins; on failure we cascade):
+`send_otp_sms(phone, otp)` remains the SMS-only entry point used as the fallback.
+
+SMS provider order (first configured provider wins; on failure we cascade):
 1. **Fast2SMS** (India-only, Quick SMS route) — set FAST2SMS_API_KEY
 2. **Twilio**   (global)                       — set TWILIO_* trio
 3. **Mock**     (dev only, returns dev_hint)   — OTP_MOCK_ENABLED=true
+
+WhatsApp-first is opt-in via WHATSAPP_ENABLED_OTP=true plus a
+WHATSAPP_PROVIDER (meta | twilio | fast2sms) with its credentials.
 
 Env vars (all optional — missing any just skips that provider):
 - FAST2SMS_API_KEY       Dev-API key from fast2sms.com dashboard
@@ -20,12 +26,14 @@ Env vars (all optional — missing any just skips that provider):
 import os
 import re
 import logging
+from pathlib import Path
 from typing import Optional, Dict, Any
 
 import httpx
 from dotenv import load_dotenv
 
-load_dotenv()
+# Resolve backend/.env explicitly rather than relying on the process CWD.
+load_dotenv(Path(__file__).parent / ".env")
 
 logger = logging.getLogger(__name__)
 
@@ -223,5 +231,229 @@ async def send_otp_sms(phone: str, otp: str, *, template: Optional[str] = None) 
     return {
         "ok": False,
         "provider": "none",
-        "error": "OTP delivery is not configured on the server.",
+        "error": "OTP delivery is not configured on this server.",
     }
+# --- WhatsApp-first OTP -----------------------------------------------------
+# Delivery order for a login OTP: WhatsApp ➜ SMS ➜ (dev) mock. See `send_otp()`.
+#
+# There is NO way to ask "is this number on WhatsApp?" — no provider exposes a
+# pre-flight check. Meta Cloud API in particular has no such endpoint. So the
+# only reliable strategy is: attempt WhatsApp, and fall back to SMS on *any*
+# failure (network error, undeliverable recipient, out-of-window template
+# rejection, misconfiguration). That is what `send_otp()` does.
+#
+# WHATSAPP_ENABLED_OTP: opt-in switch for WhatsApp-first. Default follows
+# WHATSAPP_ENABLED so operators only ever set one flag.
+# WHATSAPP_PROVIDER:    'meta' (Cloud API) | 'twilio' | 'fast2sms' | 'none'
+# META_WHATSAPP_OTP_TEMPLATE: strongly recommended. Meta rejects free-form text
+#   for business-initiated messages (error 131047) unless the user messaged the
+#   business in the last 24h. An approved *authentication* template makes OTP
+#   delivery reliable. Without it, most first-time logins silently fall back to
+#   SMS — correct, but WhatsApp-first will look like it "never works".
+WHATSAPP_ENABLED_OTP = os.environ.get(
+    "WHATSAPP_ENABLED_OTP", os.environ.get("WHATSAPP_ENABLED", "false")
+).strip().lower() in ("1", "true", "yes")
+WHATSAPP_PROVIDER = (os.environ.get("WHATSAPP_PROVIDER") or "none").strip().lower()
+META_WHATSAPP_TOKEN = os.environ.get("META_WHATSAPP_TOKEN", "").strip()
+META_PHONE_NUMBER_ID = os.environ.get("META_PHONE_NUMBER_ID", "").strip()
+META_WHATSAPP_OTP_TEMPLATE = os.environ.get("META_WHATSAPP_OTP_TEMPLATE", "").strip()
+META_WHATSAPP_OTP_LANG = os.environ.get("META_WHATSAPP_OTP_LANG", "en_US").strip()
+TWILIO_WHATSAPP_FROM = os.environ.get("TWILIO_WHATSAPP_FROM", "").strip()
+_WHATSAPP_META_URL = "https://graph.facebook.com/v20.0/{sid}/messages"
+
+# Meta error codes worth distinguishing in logs (delivery falls back either way).
+_META_ERR_UNDELIVERABLE = 131026   # recipient not on WhatsApp / not opted in
+_META_ERR_OUT_OF_WINDOW = 131047   # free-form text outside the 24h service window
+
+
+def whatsapp_otp_configured() -> bool:
+    """True iff WhatsApp-first OTP is enabled *and* the chosen provider is fully
+    configured. A half-configured provider returns False so we skip straight to
+    SMS instead of burning an API call on a guaranteed failure."""
+    if not WHATSAPP_ENABLED_OTP:
+        return False
+    if WHATSAPP_PROVIDER == "meta":
+        return bool(META_WHATSAPP_TOKEN and META_PHONE_NUMBER_ID)
+    if WHATSAPP_PROVIDER == "twilio":
+        return bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_WHATSAPP_FROM)
+    if WHATSAPP_PROVIDER == "fast2sms":
+        return bool(FAST2SMS_API_KEY)
+    return False
+
+
+def _meta_error_code(err: Any) -> Optional[int]:
+    """Pull the numeric error code out of a Graph API error body, if present."""
+    if isinstance(err, dict):
+        inner = err.get("error")
+        if isinstance(inner, dict):
+            try:
+                return int(inner.get("code"))
+            except (TypeError, ValueError):
+                return None
+        try:
+            return int(err.get("code"))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+async def _send_otp_via_whatsapp(*, to: str, otp: str, body: str) -> Dict[str, Any]:
+    """Try to deliver the OTP over WhatsApp. Never raises.
+
+    Returns `{ok: True, provider: ...}` or `{ok: False, provider: ..., error: ...}`.
+    """
+    numbers = re.sub(r"\D", "", to or "")
+
+    if WHATSAPP_PROVIDER == "meta":
+        if not (META_WHATSAPP_TOKEN and META_PHONE_NUMBER_ID):
+            return {"ok": False, "provider": "meta", "error": "missing config"}
+        url = _WHATSAPP_META_URL.format(sid=META_PHONE_NUMBER_ID)
+        headers = {"Authorization": f"Bearer {META_WHATSAPP_TOKEN}"}
+        if META_WHATSAPP_OTP_TEMPLATE:
+            payload: Dict[str, Any] = {
+                "messaging_product": "whatsapp",
+                "to": numbers,
+                "type": "template",
+                "template": {
+                    "name": META_WHATSAPP_OTP_TEMPLATE,
+                    "language": {"code": META_WHATSAPP_OTP_LANG or "en_US"},
+                    "components": [
+                        {
+                            "type": "body",
+                            "parameters": [{"type": "text", "text": otp}],
+                        }
+                    ],
+                },
+            }
+        else:
+            payload = {
+                "messaging_product": "whatsapp",
+                "to": numbers,
+                "type": "text",
+                "text": {"body": body},
+            }
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(url, json=payload, headers=headers)
+        except Exception as e:
+            logger.error("WhatsApp(Meta) network error for %s: %s", _mask_phone(to), e)
+            return {"ok": False, "provider": "meta", "error": "Network error"}
+        if resp.status_code >= 400:
+            try:
+                err = resp.json()
+            except Exception:
+                err = {}
+            code = _meta_error_code(err)
+            if code == _META_ERR_UNDELIVERABLE:
+                logger.info("WhatsApp(Meta) %s not deliverable — no WhatsApp", _mask_phone(to))
+            elif code == _META_ERR_OUT_OF_WINDOW:
+                logger.warning(
+                    "WhatsApp(Meta) rejected free-form text for %s (code %s). "
+                    "Set META_WHATSAPP_OTP_TEMPLATE to an approved authentication "
+                    "template or WhatsApp-first will always fall back to SMS.",
+                    _mask_phone(to), code,
+                )
+            else:
+                logger.warning(
+                    "WhatsApp(Meta) send failed %s for %s: code=%s",
+                    resp.status_code, _mask_phone(to), code,
+                )
+            return {"ok": False, "provider": "meta",
+                    "error": f"Meta send failed (code {code})"}
+        logger.info("WhatsApp(Meta) OTP sent to %s", _mask_phone(to))
+        return {"ok": True, "provider": "meta"}
+
+    if WHATSAPP_PROVIDER == "twilio":
+        if not (TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_WHATSAPP_FROM):
+            return {"ok": False, "provider": "twilio", "error": "missing config"}
+        url = _TWILIO_URL.format(sid=TWILIO_ACCOUNT_SID)
+        data = {
+            "From": TWILIO_WHATSAPP_FROM,
+            "To": f"whatsapp:{to}",
+            "Body": body,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(
+                    url, data=data,
+                    auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+                )
+        except Exception as e:
+            logger.error("WhatsApp(Twilio) network error for %s: %s", _mask_phone(to), e)
+            return {"ok": False, "provider": "twilio", "error": "Network error"}
+        if resp.status_code >= 400:
+            try:
+                err = resp.json()
+            except Exception:
+                err = {}
+            logger.warning(
+                "WhatsApp(Twilio) send failed %s for %s: code=%s",
+                resp.status_code, _mask_phone(to), err.get("code"),
+            )
+            return {"ok": False, "provider": "twilio",
+                    "error": "Twilio WhatsApp send failed"}
+        logger.info("WhatsApp(Twilio) OTP sent to %s", _mask_phone(to))
+        return {"ok": True, "provider": "twilio"}
+
+    if WHATSAPP_PROVIDER == "fast2sms":
+        if not FAST2SMS_API_KEY:
+            return {"ok": False, "provider": "fast2sms", "error": "missing key"}
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(
+                    _FAST2SMS_URL,
+                    data={
+                        "route": "q",
+                        "message": body,
+                        "language": "english",
+                        "flash": 0,
+                        "numbers": numbers[2:] if numbers.startswith("91") else numbers,
+                    },
+                    headers={"authorization": FAST2SMS_API_KEY},
+                )
+        except Exception as e:
+            logger.error("WhatsApp(Fast2SMS) network error for %s: %s", _mask_phone(to), e)
+            return {"ok": False, "provider": "fast2sms", "error": "Network error"}
+        if resp.status_code >= 400:
+            return {"ok": False, "provider": "fast2sms", "error": "send failed"}
+        logger.info("WhatsApp(Fast2SMS) OTP sent to %s", _mask_phone(to))
+        return {"ok": True, "provider": "fast2sms"}
+
+    return {"ok": False, "provider": "none", "error": "no provider"}
+
+
+async def send_otp(phone: str, otp: str, *, template: Optional[str] = None) -> Dict[str, Any]:
+    """Deliver a login OTP: WhatsApp first, SMS fallback.
+
+    WhatsApp is attempted only when enabled and fully configured. Any WhatsApp
+    failure — recipient has no WhatsApp, undeliverable number, template window
+    rejection, network blip — falls through to `send_otp_sms()` so the user
+    always gets their code.
+
+    Returns the provider result plus a `channel` field so callers/telemetry can
+    see how the code was actually delivered:
+    - `{ok: True,  channel: "whatsapp", provider: "meta"|"twilio"|"fast2sms"}`
+    - `{ok: True,  channel: "sms",      provider: "fast2sms"|"twilio"}`
+    - `{ok: True,  channel: "mock",     provider: "mock", dev_hint: …}`
+    - `{ok: False, provider: …, error: …}`
+    """
+    to = _to_e164_india(phone)
+    body = template or (
+        f"Your {OTP_SENDER_NAME} OTP is {otp}. "
+        f"Valid for 5 minutes. Do not share it with anyone."
+    )
+
+    if whatsapp_otp_configured():
+        wa = await _send_otp_via_whatsapp(to=to, otp=otp, body=body)
+        if wa.get("ok"):
+            return {**wa, "channel": "whatsapp"}
+        logger.info(
+            "WhatsApp OTP failed for %s (%s: %s) — falling back to SMS",
+            _mask_phone(to), wa.get("provider"), wa.get("error"),
+        )
+
+    sms = await send_otp_sms(phone, otp, template=template)
+    if not sms.get("ok"):
+        return sms
+    channel = "mock" if sms.get("provider") == "mock" else "sms"
+    return {**sms, "channel": channel}

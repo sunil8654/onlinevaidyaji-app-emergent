@@ -10,6 +10,7 @@ import { useIconFonts } from "@/src/hooks/use-icon-fonts";
 import { AuthProvider, useAuth } from "@/src/auth";
 import { I18nProvider } from "@/src/i18n";
 import { registerForPush, getNotifications } from "@/src/push";
+import { ErrorBoundary } from "@/src/components/ErrorBoundary";
 
 LogBox.ignoreAllLogs(true);
 
@@ -96,7 +97,12 @@ export default function RootLayout() {
         <AuthProvider>
           <StatusBar style="dark" />
           <PushRegistrar />
-          <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#FFFDF3" } }} />
+          {/* Outermost guard: without it a render throw anywhere in the app is
+              fatal and the process simply exits, which is indistinguishable
+              from a native crash to whoever is holding the phone. */}
+          <ErrorBoundary>
+            <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#FFFDF3" } }} />
+          </ErrorBoundary>
         </AuthProvider>
       </I18nProvider>
     </SafeAreaProvider>

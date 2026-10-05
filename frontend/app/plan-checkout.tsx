@@ -7,6 +7,7 @@ import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import Feather from "@react-native-vector-icons/feather";
 import { RazorpayCheckout } from "@/src/components/RazorpayCheckout";
 import { useAuth } from "@/src/auth";
+import { formatINR } from "@/src/utils/currency";
 
 const PLANS: Record<string, { title: string; price: number; period: string; features: string[]; kicker: string; purpose: "diet_plan" | "custom" }> = {
   "weekly-diet": {
@@ -86,7 +87,7 @@ export default function PlanCheckout() {
           <Text style={styles.kicker}>{plan.kicker}</Text>
           <Text style={styles.big}>{plan.title}</Text>
           <View style={styles.priceRow}>
-            <Text style={styles.price}>₹{plan.price}</Text>
+            <Text style={styles.price}>{formatINR(plan.price)}</Text>
             <Text style={styles.period}>{plan.period}</Text>
           </View>
           {plan.features.map((f) => (
@@ -115,7 +116,7 @@ export default function PlanCheckout() {
           </View>
         ) : (
           <TouchableOpacity style={[styles.payBtn, authLoading && { opacity: 0.6 }]} disabled={authLoading} onPress={startPayment} testID="pc-pay">
-            <Text style={styles.payBtnText}>{authLoading ? "Loading…" : `Pay ₹${plan.price} securely`}</Text>
+            <Text style={styles.payBtnText}>{authLoading ? "Loading…" : `Pay ${formatINR(plan.price)} securely`}</Text>
             <Feather name="arrow-right" size={18} color={COLORS.surface} />
           </TouchableOpacity>
         )}
@@ -149,7 +150,7 @@ const styles = StyleSheet.create({
   kicker: { color: COLORS.accent, fontSize: 10, letterSpacing: 2, fontWeight: "700", textTransform: "uppercase" },
   big: { fontFamily: FONTS.heading, fontSize: 26, color: COLORS.textPrimary, marginTop: 6, letterSpacing: -0.5, lineHeight: 30 },
   priceRow: { flexDirection: "row", alignItems: "baseline", gap: 6, marginTop: 10 },
-  price: { fontFamily: FONTS.heading, fontSize: 40, color: COLORS.brand, letterSpacing: -1 },
+  price: { fontFamily: FONTS.money, fontSize: 40, color: COLORS.brand, letterSpacing: -1 },
   period: { color: COLORS.textSecondary, fontSize: 13 },
   featRow: { flexDirection: "row", alignItems: "flex-start", gap: 10, marginTop: 10 },
   check: { width: 20, height: 20, borderRadius: 10, backgroundColor: COLORS.brand, alignItems: "center", justifyContent: "center" },

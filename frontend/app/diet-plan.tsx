@@ -5,6 +5,7 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { api } from "@/src/api";
 import { useAuth } from "@/src/auth";
+import { RUPEE } from "@/src/utils/currency";
 import Feather from "@react-native-vector-icons/feather";
 
 const GOALS = ["Weight loss", "Boost immunity", "Better sleep", "Reduce acidity", "Increase energy", "PCOS support", "Diabetes-friendly"];
@@ -311,12 +312,12 @@ function PlanView({ plan, dayIdx, setDayIdx, onUpgrade }: { plan: any; dayIdx: n
         {/* Upgrade CTA */}
         <View style={styles.upgradeCard}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.upKicker}>UPGRADE · ₹200 only</Text>
+            <Text style={styles.upKicker}>UPGRADE · {RUPEE}200 only</Text>
             <Text style={styles.upTitle}>Dietitian-curated 7-day plan</Text>
             <Text style={styles.upBody}>Human-verified menus + WhatsApp support from a certified Ayurvedic dietitian.</Text>
           </View>
           <TouchableOpacity style={styles.upBtn} onPress={onUpgrade} testID="dp-upgrade">
-            <Text style={styles.upBtnText}>Buy ₹200</Text>
+            <Text style={styles.upBtnText}>Buy {RUPEE}200</Text>
             <Feather name="arrow-right" size={14} color={COLORS.surface} />
           </TouchableOpacity>
         </View>
@@ -337,12 +338,12 @@ function PlanView({ plan, dayIdx, setDayIdx, onUpgrade }: { plan: any; dayIdx: n
       <Text style={styles.planBody}>{plan.plan}</Text>
       <View style={styles.upgradeCard}>
         <View style={{ flex: 1 }}>
-          <Text style={styles.upKicker}>UPGRADE · ₹200 only</Text>
+          <Text style={styles.upKicker}>UPGRADE · {RUPEE}200 only</Text>
           <Text style={styles.upTitle}>Get a 7-day Weekly Plan</Text>
           <Text style={styles.upBody}>Certified Online VaidyaJi dietician · daily menus tailored to your dosha, symptoms & taste · WhatsApp support.</Text>
         </View>
         <TouchableOpacity style={styles.upBtn} onPress={onUpgrade} testID="dp-upgrade">
-          <Text style={styles.upBtnText}>Buy ₹200</Text>
+          <Text style={styles.upBtnText}>Buy {RUPEE}200</Text>
           <Feather name="arrow-right" size={14} color={COLORS.surface} />
         </TouchableOpacity>
       </View>

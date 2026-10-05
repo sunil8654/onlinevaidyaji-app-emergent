@@ -62,7 +62,17 @@ SMTP_USER = os.environ.get("SMTP_USER", "").strip()
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 SMTP_FROM = (os.environ.get("SMTP_FROM") or SMTP_USER or "").strip()
 SMTP_FROM_NAME = os.environ.get("SMTP_FROM_NAME", EMAIL_FROM_NAME)
-SMTP_STARTTLS = os.environ.get("SMTP_STARTTLS", "true").lower() in ("1", "true", "yes")
+# Implicit TLS (SMTP_SSL) — required by most providers on port 465. Hosts that
+# expose 465 without this hang during the plaintext greeting.
+# Accepts SMTP_SSL first, then the website's SMTP_SECURE name so both .env
+# layouts work.
+SMTP_SSL = os.environ.get("SMTP_SSL", os.environ.get("SMTP_SECURE", "")).strip().lower() in ("1", "true", "yes")
+# STARTTLS is meaningless on an implicit-TLS socket; disable it there so we
+# never try to negotiate inside an already-encrypted stream.
+SMTP_STARTTLS = os.environ.get("SMTP_STARTTLS", "true").strip().lower() in ("1", "true", "yes") and not SMTP_SSL
+if not SMTP_SSL and SMTP_PORT == 465:
+    SMTP_SSL = True
+    SMTP_STARTTLS = False
 
 # Where the welcome email's "Open the app" CTA points to.
 APP_HTTPS_URL = os.environ.get("APP_HTTPS_URL", "https://onlinevaidhyaji.emergent.host")
@@ -182,7 +192,11 @@ async def _send_email_smtp(*, to: str, subject: str, html: str,
 
     def _blocking_send():
         ctx = ssl.create_default_context()
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as srv:
+        if SMTP_SSL:
+            srv = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=30, context=ctx)
+        else:
+            srv = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30)
+        with srv:
             srv.ehlo()
             if SMTP_STARTTLS:
                 srv.starttls(context=ctx)

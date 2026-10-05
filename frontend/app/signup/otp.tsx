@@ -10,6 +10,7 @@ import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { useI18n } from "@/src/i18n";
 import { api } from "@/src/api";
 import { useAuth } from "@/src/auth";
+import { takeDevOtpHint } from "@/src/utils/devOtp";
 
 const COPY = {
   headTitle: { en: "Verify your number", hi: "Apna number verify karein" },
@@ -26,18 +27,19 @@ const COPY = {
   verifying: { en: "Verifying…", hi: "Verify kar rahe hain…" },
   resend: { en: "Resend OTP", hi: "OTP dobara bhejein" },
   resendIn: { en: (s: number) => `Resend in ${s}s`, hi: (s: number) => `${s}s mein dobara bhejein` },
+  // `free_consult_available` is a real entitlement set on the account at signup
+  // and cleared when an agent marks the consult done. Nothing is booked or
+  // held at this point, so the copy says "ready" rather than "reserved".
   freeConsult: {
-    en: "Your FREE consultation is reserved! 🎉",
-    hi: "Aapka FREE consultation reserve ho gaya! 🎉",
+    en: "Your free consultation is ready to book 🎉",
+    hi: "Aapka free consultation book karne ke liye taiyaar hai 🎉",
   },
   wrongNumber: { en: "Change number", hi: "Number badlein" },
-  devHint: {
-    en: "For testing use OTP: 123456",
-    hi: "Testing ke liye OTP: 123456",
-  },
 };
 
 const RESEND_COOLDOWN = 30;
+/** The server issues `f"{secrets.randbelow(1_000_000):06d}"` - always 6 digits. */
+const OTP_LENGTH = 6;
 
 export default function OtpVerify() {
   const router = useRouter();
@@ -49,6 +51,7 @@ export default function OtpVerify() {
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [cooldown, setCooldown] = useState(RESEND_COOLDOWN);
+  const [devHint, setDevHint] = useState<string | null>(takeDevOtpHint);
   const intervalRef = useRef<any>(null);
 
   useEffect(() => {
@@ -62,7 +65,9 @@ export default function OtpVerify() {
   }, []);
 
   async function verify() {
-    if (otp.length < 4) return;
+    // The server always issues 6 digits, so require all of them rather than
+    // letting a 4-digit prefix through on the off-chance it matches.
+    if (otp.length !== OTP_LENGTH) return;
     if (!name.trim()) {
       Alert.alert(lang === "hi" ? "Naam zaroori hai" : "Name required", lang === "hi" ? "Kripya apna naam daalein." : "Please enter your name.");
       return;
@@ -93,7 +98,10 @@ export default function OtpVerify() {
   async function resend() {
     if (cooldown > 0) return;
     try {
-      await api.sendPhoneOtp(phone as string);
+      const res = await api.sendPhoneOtp(phone as string);
+      // The server only returns a hint in non-production mock mode; the code
+      // itself is always a fresh random 6 digits.
+      setDevHint(res.dev_hint ?? null);
       setCooldown(RESEND_COOLDOWN);
       const iv = setInterval(() => setCooldown((c) => c <= 1 ? (clearInterval(iv), 0) : c - 1), 1000);
       intervalRef.current = iv;
@@ -121,14 +129,20 @@ export default function OtpVerify() {
           <TextInput
             style={styles.otpInput}
             value={otp}
-            onChangeText={(t) => setOtp(t.replace(/\D/g, "").slice(0, 6))}
+            onChangeText={(t) => setOtp(t.replace(/\D/g, "").slice(0, OTP_LENGTH))}
             placeholder="••••••"
             placeholderTextColor={COLORS.textMuted}
             keyboardType="number-pad"
-            maxLength={6}
+            maxLength={OTP_LENGTH}
             testID="otp-input"
           />
-          <Text style={styles.devHint}>{COPY.devHint[lang]}</Text>
+          <Text style={styles.hint}>
+            {devHint
+              ? devHint
+              : lang === "hi"
+                ? "Apne SMS mein 6-digit code daalein."
+                : "Enter the 6-digit code from your SMS."}
+          </Text>
 
           <Text style={styles.label}>{COPY.nameLabel[lang]}</Text>
           <TextInput
@@ -155,8 +169,8 @@ export default function OtpVerify() {
 
           <TouchableOpacity
             onPress={verify}
-            disabled={otp.length < 4 || !name.trim() || busy}
-            style={[styles.cta, (otp.length < 4 || !name.trim() || busy) && { opacity: 0.55 }]}
+          disabled={otp.length !== OTP_LENGTH || !name.trim() || busy}
+          style={[styles.cta, (otp.length !== OTP_LENGTH || !name.trim() || busy) && { opacity: 0.55 }]}
             testID="otp-verify"
           >
             {busy ? <ActivityIndicator size="small" color={COLORS.surface} /> : <Text style={styles.ctaText}>{COPY.verify[lang]}</Text>}
@@ -188,6 +202,7 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary, fontSize: 24, letterSpacing: 12, textAlign: "center", fontWeight: "800",
   },
   devHint: { color: COLORS.textMuted, fontSize: 11, textAlign: "center", marginTop: 6, fontStyle: "italic" },
+  hint: { color: COLORS.textMuted, fontSize: 11, textAlign: "center", marginTop: 6 },
   textInput: {
     backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border,
     borderRadius: RADIUS.md, paddingHorizontal: SPACING.md, paddingVertical: 14,

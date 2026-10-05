@@ -189,6 +189,21 @@ INDEX_SPEC: Dict[str, List[Any]] = {
         ([("id", ASCENDING)], {"unique": True, "name": "id_unique"}),
         ([("patient_id", ASCENDING), ("slot", DESCENDING)], {"name": "patient_slot"}),
         ([("doctor_id", ASCENDING), ("slot", DESCENDING)], {"name": "doctor_slot"}),
+        # `slot` only lives in the `data` JSON blob, so the two indexes above are
+        # silently skipped by msdb.create_index (a non-column key aborts the
+        # whole statement) and the patient history query had no index at all.
+        # These use the real DATE/TIME columns the listing now sorts on.
+        ([("patient_id", ASCENDING), ("appointment_date", DESCENDING), ("appointment_time", DESCENDING)], {"name": "patient_date_time"}),
+        ([("doctor_id", ASCENDING), ("appointment_date", DESCENDING), ("appointment_time", DESCENDING)], {"name": "doctor_date_time"}),
+        ([("doctor_id", ASCENDING), ("appointment_date", ASCENDING)], {"name": "doctor_date"}),
+    ],
+    # Every authenticated patient request resolves the profile through
+    # patient_profiles.user_id; without this it is a full scan of the table.
+    "patient_profiles": [
+        ([("user_id", ASCENDING)], {"unique": True, "name": "user_id"}),
+    ],
+    "appointment_slots": [
+        ([("doctor_id", ASCENDING), ("date", ASCENDING), ("start_time", ASCENDING)], {"name": "doctor_date_start"}),
     ],
     "quiz_results": [
         ([("id", ASCENDING)], {"unique": True, "name": "id_unique"}),

@@ -36,7 +36,7 @@ export default function Login() {
     } else if (res.user?.is_admin) {
       router.replace("/admin/dashboard");
     } else if (res.user?.role === "doctor") {
-      router.replace("/doctor/home");
+      router.replace("/(tabs)/home");
     } else {
       router.replace("/(tabs)/home");
     }
@@ -66,7 +66,7 @@ export default function Login() {
       } else if (res.user?.is_admin) {
         router.replace("/admin/dashboard");
       } else if (res.user?.role === "doctor") {
-        router.replace("/doctor/home");
+        router.replace("/(tabs)/home");
       } else {
         router.replace("/(tabs)/home");
       }
@@ -88,7 +88,7 @@ export default function Login() {
       } else if (user?.is_admin) {
         router.replace("/admin/dashboard");
       } else if (user?.role === "doctor") {
-        router.replace("/doctor/home");
+        router.replace("/(tabs)/home");
       } else {
         router.replace("/(tabs)/home");
       }
@@ -181,9 +181,27 @@ export default function Login() {
 
             {err ? <Text style={styles.err} testID="login-error">{err}</Text> : null}
 
-            <TouchableOpacity style={[styles.cta, busy && { opacity: 0.6 }]} onPress={submit} disabled={busy} testID="login-submit">
+            <TouchableOpacity
+              style={[styles.cta, busy && { opacity: 0.6 }]} onPress={submit} disabled={busy} testID="login-submit">
               <Text style={styles.ctaText}>{busy ? "Signing in…" : "Sign in"}</Text>
               <Feather name="arrow-right" size={18} color={COLORS.surface} />
+            </TouchableOpacity>
+
+            <View style={styles.divider}>
+              <View style={styles.line} />
+              <Text style={styles.dividerText}>PHONE</Text>
+              <View style={styles.line} />
+            </View>
+
+            {/* No `phone` param: the OTP screen collects the number itself and
+                only then calls POST /auth/phone/send-otp. */}
+            <TouchableOpacity
+              style={styles.phoneBtn}
+              onPress={() => router.push("/auth/otp")}
+              testID="login-phone-otp"
+            >
+              <Feather name="smartphone" size={16} color={COLORS.brand} />
+              <Text style={styles.phoneBtnText}>Sign in with mobile OTP</Text>
             </TouchableOpacity>
 
             <TouchableOpacity onPress={() => router.push("/auth/role")} style={{ alignSelf: "center", marginTop: SPACING.md }} testID="login-register-link">
@@ -248,4 +266,16 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   ctaText: { color: COLORS.surface, fontWeight: "700", fontSize: 16 },
+  phoneBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 14,
+    borderRadius: RADIUS.pill,
+    borderWidth: 1,
+    borderColor: COLORS.brand,
+    backgroundColor: COLORS.surface,
+  },
+  phoneBtnText: { color: COLORS.brand, fontWeight: "700", fontSize: 14 },
 });

@@ -9,6 +9,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { api } from "@/src/api";
+import { RUPEE } from "@/src/utils/currency";
 import Feather from "@react-native-vector-icons/feather";
 
 export default function AiYoga() {
@@ -148,9 +149,9 @@ export default function AiYoga() {
             {/* Subscription upsell */}
             <View style={styles.priceCard}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.priceKicker}>WEEKLY YOGACHARYA · ₹500/mo</Text>
+                <Text style={styles.priceKicker}>WEEKLY YOGACHARYA · {RUPEE}500/mo</Text>
                 <View style={{ flexDirection: "row", alignItems: "baseline", gap: 4, marginTop: 6 }}>
-                  <Text style={styles.priceBig}>₹500</Text>
+                  <Text style={styles.priceBig}>{RUPEE}500</Text>
                   <Text style={styles.pricePer}>/ month</Text>
                 </View>
                 <Text style={styles.priceNote}>Video library is free · pay only for weekly 1:1 check-in with a real teacher.</Text>
@@ -230,7 +231,7 @@ const styles = StyleSheet.create({
 
   priceCard: { margin: SPACING.lg, backgroundColor: COLORS.brand, borderRadius: RADIUS.lg, padding: SPACING.md, flexDirection: "row", alignItems: "center", gap: 12 },
   priceKicker: { color: COLORS.accentSoft, fontSize: 10, letterSpacing: 2, fontWeight: "700" },
-  priceBig: { fontFamily: FONTS.heading, fontSize: 28, color: COLORS.surface, letterSpacing: -1 },
+  priceBig: { fontFamily: FONTS.money, fontSize: 28, color: COLORS.surface, letterSpacing: -1 },
   pricePer: { color: COLORS.accentSoft, fontSize: 12 },
   priceNote: { color: "#FFFDF3", fontSize: 11, marginTop: 4, lineHeight: 15 },
   subBtn: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: COLORS.accent, paddingHorizontal: 12, paddingVertical: 10, borderRadius: RADIUS.pill },

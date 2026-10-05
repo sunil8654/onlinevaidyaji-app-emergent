@@ -20,11 +20,22 @@ export type AuthUser = {
   profile_photo?: string | null;
 };
 
+export type RegisterInput = {
+  name: string;
+  email: string;
+  password: string;
+  /** Admins are provisioned server-side; self-signup is patient/doctor only. */
+  role: Exclude<Role, "admin">;
+  phone?: string;
+  registration_number?: string;
+};
+
 type AuthContextValue = {
   user: AuthUser | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<{ user: AuthUser; must_change_password: boolean }>;
-  register: (data: { name: string; email: string; password: string; role: Role; phone?: string; registration_number?: string }) => Promise<void>;
+  /** Resolves with the created account so the caller can route on its role. */
+  register: (data: RegisterInput) => Promise<AuthUser>;
   applySession: (token: string, user: AuthUser) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -63,16 +74,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { user: res.user as AuthUser, must_change_password: !!res.must_change_password };
   }, []);
 
-  const register = useCallback(
-    async (data: { name: string; email: string; password: string; role: Role; phone?: string; registration_number?: string }) => {
-      const res = await api.register(data);
-      await storage.secureSet(TOKEN_KEY, res.token);
-      setUser(res.user);
-      registerForPush(res.user.id).catch(() => {});
-      return res.user as AuthUser;
-    },
-    []
-  );
+  const register = useCallback(async (data: RegisterInput) => {
+    const res = await api.register(data);
+    await storage.secureSet(TOKEN_KEY, res.token);
+    setUser(res.user);
+    registerForPush(res.user.id).catch(() => {});
+    return res.user as AuthUser;
+  }, []);
 
   const logout = useCallback(async () => {
     await storage.secureRemove(TOKEN_KEY);

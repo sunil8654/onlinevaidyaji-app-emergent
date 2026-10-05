@@ -1,11 +1,12 @@
 // Doctor earnings dashboard.
 // Aggregates paid appointments from the backend and shows summary + 30-day trend.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, ActivityIndicator } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, Stack } from "expo-router";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { api } from "@/src/api";
+import { useFocusRefresh } from "@/src/hooks/useFocusRefresh";
 import Feather from "@react-native-vector-icons/feather";
 
 const rupees = (paise: number) =>
@@ -30,7 +31,10 @@ export default function DoctorEarnings() {
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  // Refresh on mount, on focus and on returning to the foreground: a payment
+  // captured while the doctor was on a consultation now shows up without a
+  // manual pull-to-refresh.
+  useFocusRefresh(load);
 
   const maxDaily = useMemo(() => {
     if (!data?.daily?.length) return 1;

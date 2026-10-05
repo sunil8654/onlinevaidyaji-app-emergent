@@ -6,6 +6,7 @@ import Feather from "@react-native-vector-icons/feather";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { useAuth } from "@/src/auth";
 import { api } from "@/src/api";
+import { appointmentDate, isUpcoming } from "@/src/utils/appointments";
 import { useI18n } from "@/src/i18n";
 import DoctorHome from "@/app/doctor/home";
 import { Logo } from "@/src/components/Logo";
@@ -30,11 +31,13 @@ function PatientHome() {
       const [t, c, a] = await Promise.all([
         api.dailyTip(),
         api.listChallenges().catch(() => []),
-        api.listAppointments().catch(() => []),
+        // Only the next few upcoming rows are needed for the home card; the
+        // full history lives on the Appointments screen.
+        api.listAppointmentsPaged({ page: 1, limit: 5, scope: "upcoming" }).catch(() => null),
       ]);
       setTip(t);
       setChallenges(c || []);
-      setAppts(a || []);
+      setAppts(a?.items || []);
     } catch {}
   }, []);
 
@@ -48,7 +51,7 @@ function PatientHome() {
 
   const hour = new Date().getHours();
   const greet = hour < 12 ? t("good_morning") : hour < 17 ? t("good_afternoon") : t("good_evening");
-  const upcoming = appts.find((a) => new Date(a.slot) > new Date());
+  const upcoming = appts.find((a) => isUpcoming(a)) ?? null;
 
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
@@ -255,7 +258,16 @@ function PatientHome() {
             <View style={{ flex: 1 }}>
               <Text style={styles.upcomingKicker}>{t("upcoming_consultation")}</Text>
               <Text style={styles.upcomingTitle}>{upcoming.doctor_name}</Text>
-              <Text style={styles.upcomingSub}>{upcoming.doctor_specialty} · {new Date(upcoming.slot).toLocaleString()}</Text>
+              <Text style={styles.upcomingSub}>
+                {upcoming.doctor_specialty} ·{" "}
+                {appointmentDate(upcoming)?.toLocaleString([], {
+                  weekday: "short",
+                  day: "numeric",
+                  month: "short",
+                  hour: "numeric",
+                  minute: "2-digit",
+                }) ?? "Time to be confirmed"}
+              </Text>
             </View>
             <View style={styles.upcomingIcon}>
               <Feather name="video" size={18} color={COLORS.surface} />

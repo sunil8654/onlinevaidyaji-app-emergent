@@ -4,31 +4,371 @@ import { storage } from "@/src/utils/storage";
 const BASE = process.env.EXPO_PUBLIC_BACKEND_URL;
 export const TOKEN_KEY = "vaidyaji.token";
 
-type Method = "GET" | "POST" | "PUT" | "DELETE";
+type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
+/** Public doctor as rendered by the Book Consultation cards and the
+ *  Doctor Full Profile screen. Every field is a real column on `doctors` or a
+ *  real join; `null`/absent means "not recorded", never a placeholder. */
+export type Doctor = {
+  id: string;
+  name: string;
+  slug?: string | null;
+  specialty?: string;
+  specialization?: { id: number | null; name: string } | null;
+  specializations?: { id: number; name: string; icon?: string | null }[];
+  qualification?: string | null;
+  experience?: number | null;
+  experience_years?: number | null;
+  languages?: string[];
+  consultation_fee?: number | null;
+  about?: string | null;
+  bio?: string | null;
+  gender?: string | null;
+  avatar_url?: string;
+  image?: string;
+  rating?: number | null;
+  reviews?: number | null;
+  review_count?: number | null;
+  verified?: boolean;
+  is_available?: boolean;
+  is_available_online?: boolean;
+  is_available_offline?: boolean;
+  consultation_mode?: string;
+  system?: string;
+  city?: string | null;
+  is_online?: boolean;
+  status?: string;
+};
+
+export type ConsultationMode = "online" | "offline" | "both" | "none";
+
+/** Taxonomy for the profile editor, mirroring the website's public endpoints. */
+export type SpecializationOption = { id: number; name: string; icon?: string | null };
+export type CityOption = { id: number; name: string; state?: string | null };
+
+export type ProfileTaxonomy = {
+  specializations: SpecializationOption[];
+  systems: string[];
+};
+
+/**
+ * The signed-in doctor's own record, as returned by GET /doctor/me.
+ *
+ * These are the website's real MySQL columns (`users.*` + `doctors.*`), so the
+ * edit screen renders exactly what the public profile page shows and every save
+ * round-trips through the shared database.
+ */
+export type DoctorOwnProfile = {
+  id: string;
+  user_id: string;
+  slug: string | null;
+  // users table
+  name: string;
+  email: string;
+  phone: string;
+  image: string | null;
+  avatar_url: string | null;
+  // doctors table
+  specialization_id: number | null;
+  specialty: string | null;
+  specializations: { id: number; name: string; icon?: string | null }[];
+  system: string | null;
+  gender: string | null;
+  qualification: string | null;
+  experience: number;
+  experience_years: number;
+  consultation_fee: number | null;
+  about: string | null;
+  bio: string | null;
+  /** Comma-separated, as stored in `doctors.languages`. */
+  languages: string | null;
+  city: string | null;
+  is_available_online: boolean;
+  is_available_offline: boolean;
+  consultation_mode: ConsultationMode;
+  // admin-owned, read-only here
+  is_approved: boolean;
+  verified: boolean;
+  is_restricted: boolean;
+  restriction_reason: string | null;
+  rating: number;
+  review_count: number;
+  status: string;
+  last_seen: string | null;
+  // app-only extras with no website column
+  clinic_name: string | null;
+  clinic_address: string | null;
+  registration_number: string | null;
+  onboarded_at: string | null;
+  documents_uploaded: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+/** Fields the doctor may change. Admin-owned columns are deliberately absent. */
+export type DoctorProfilePayload = {
+  name?: string;
+  phone?: string;
+  image?: string;
+  avatar_base64?: string;
+  about?: string;
+  bio?: string;
+  qualification?: string;
+  experience?: number;
+  consultation_fee?: number;
+  /** Accepts a list or a comma-separated string. */
+  languages?: string[] | string;
+  city?: string;
+  gender?: "male" | "female";
+  system?: string;
+  specialization_id?: number;
+  specializations?: number[];
+  is_available_online?: boolean;
+  is_available_offline?: boolean;
+  clinic_name?: string;
+  clinic_address?: string;
+  registration_number?: string;
+};
+
+/** One bookable slot, mirroring the website's `generateTimeSlots` output. */
+export type DoctorSlot = {
+  /** "HH:MM:SS" - matches `appointments.appointment_time`. */
+  time: string;
+  /** "9:00 AM" - website's 12-hour format, no leading zero. */
+  label: string;
+  /** Local ISO datetime for the chosen day. */
+  iso: string;
+  is_booked: boolean;
+};
+
+export type DoctorSlotDay = {
+  doctor_id: string;
+  date: string;
+  slots: DoctorSlot[];
+  total: number;
+  available: number;
+};
+
+/** Paginated envelope returned by GET /doctors. */
+export type DoctorPage = {
+  items: Doctor[];
+  total: number;
+  page: number;
+  page_size: number;
+  has_more: boolean;
+};
+
+/**
+ * The signed-in patient's own record: the `users` row plus their
+ * `patient_profiles` health row. Every field here is a real column - there is
+ * deliberately no DOB/city/state because `patient_profiles` has no such
+ * columns, and inventing them would mean the screen silently discards saves.
+ */
+export type PatientProfile = {
+  id: string;
+  user_id?: string;
+  name: string;
+  email?: string | null;
+  phone?: string | null;
+  /** Raw `users.image`, either a relative /uploads path or an absolute URL. */
+  image?: string | null;
+  /** `image` resolved to something an <Image> can load. */
+  photo_url?: string | null;
+  role?: string;
+  is_verified?: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+  address?: string | null;
+  age?: number | null;
+  gender?: string | null;
+  dosha?: string | null;
+  conditions?: string[] | null;
+  lifestyle?: string | null;
+};
+
+export type PatientProfilePayload = {
+  age?: number | null;
+  gender?: string | null;
+  dosha?: string | null;
+  conditions?: string | null;
+  lifestyle?: string | null;
+  address?: string | null;
+};
+
+/** Identity fields, changed through PATCH /patient/account. */
+export type PatientAccount = {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  image: string | null;
+  avatar_url?: string | null;
+  address?: string | null;
+};
+
+/** One appointment row as rendered by the Appointments tab. */
+export type Appointment = {
+  id: string;
+  doctor_id?: string;
+  doctor_name?: string;
+  doctor_specialty?: string;
+  doctor_image?: string | null;
+  /** `appointments.patient_id` is an INT column, so this arrives as a number. */
+  patient_id?: string | number;
+  /** Live `users.name`, preferred over the booking-time snapshot. */
+  patient_name?: string;
+  appointment_date: string;
+  appointment_time: string;
+  type?: string;
+  status?: string;
+  reason?: string | null;
+  fee?: number | null;
+  payment_status?: string | null;
+  /** Real payment state, resolved server-side from the `payments` table. */
+  paid?: boolean;
+  amount_paise?: number;
+  has_prescription?: boolean;
+  prescription?: string | null;
+};
+
+/** Envelope returned by GET /appointments when `page` is supplied. */
+export type AppointmentPage = {
+  items: Appointment[];
+  total: number;
+  page: number;
+  limit: number;
+  has_more: boolean;
+};
+
+/** One unique patient in GET /doctor/my-patients. */
+export type DoctorPatientRow = {
+  patient_id: string;
+  patient_name: string;
+  total_visits: number;
+  /** "YYYY-MM-DD HH:MM:SS" derived from the indexed date/time columns. */
+  last_visit: string | null;
+  has_rx: boolean;
+};
+
+/** Envelope returned by GET /doctor/my-patients. */
+export type DoctorPatientPage = {
+  items: DoctorPatientRow[];
+  total: number;
+  page: number;
+  limit: number;
+  has_more: boolean;
+};
+
+/** Real AYUSH pharmacy catalogue row (`pharmacy_products` + `product_reviews`). */
+export type Medicine = {
+  id: string;
+  name: string;
+  brand?: string | null;
+  unit?: string | null;
+  price?: number | null;
+  mrp?: number | null;
+  image_url?: string | null;
+  avg_rating?: number | null;
+  total_ratings?: number | null;
+  stock_quantity?: number | null;
+  description?: string | null;
+};
+
+/** Real diagnostic catalogue row (`lab_tests`). */
+export type LabTest = {
+  id: string;
+  name: string;
+  category?: string | null;
+  price?: number | null;
+  description?: string | null;
+  turnaround?: string | null;
+  fasting?: boolean | null;
+  preparation?: string | null;
+};
+
+/** A request that never settles leaves a spinner up forever. */
+const DEFAULT_TIMEOUT_MS = 20000;
+
+/**
+ * In-flight GET deduplication.
+ *
+ * Several screens fetch the same endpoint from more than one effect (a first
+ * load plus a refresh, a tab plus a header badge), and React does not cancel
+ * the superseded request. Keying by method+path+token lets the later caller
+ * await the promise already in the air instead of opening a second socket.
+ */
+const inFlight = new Map<string, Promise<unknown>>();
 
 async function request<T = any>(
   path: string,
   method: Method = "GET",
   body?: any,
-  auth: boolean = true
+  auth: boolean = true,
+  opts: { timeoutMs?: number; dedupe?: boolean } = {}
 ): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
+  let token = "";
   if (auth) {
-    const token = await storage.secureGet<string>(TOKEN_KEY, "");
+    token = (await storage.secureGet<string>(TOKEN_KEY, "")) || "";
     if (token) headers.Authorization = `Bearer ${token}`;
   }
-  const res = await fetch(`${BASE}/api${path}`, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const raw = await res.text();
-  const data = raw ? JSON.parse(raw) : null;
-  if (!res.ok) {
-    const msg = (data && (data.detail || data.message)) || `HTTP ${res.status}`;
-    throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
-  }
-  return data as T;
+
+  const dedupe = opts.dedupe ?? method === "GET";
+  // Keyed by the actual token, not a bare "auth" flag: if a logout/login swap
+  // happens while a request is still in the air, the new patient must not be
+  // handed the previous patient's response for the same path. A bare flag
+  // collapsed every authenticated user into one key. The token is only ever a
+  // transient in-memory key (entries are deleted in `finally`), never logged.
+  const authKey = token ? token : "anon";
+  const key = dedupe ? `${method} ${path} ${authKey}` : "";
+  const existing = key ? inFlight.get(key) : undefined;
+  if (existing) return existing as Promise<T>;
+
+  const run = (async () => {
+    // React Native's fetch has no timeout of its own; without this a dropped
+    // connection on a hospital wifi leaves the UI spinning indefinitely.
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(),
+      opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
+    );
+    try {
+      const res = await fetch(`${BASE}/api${path}`, {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      });
+      const raw = await res.text();
+      let data: any = null;
+      if (raw) {
+        try {
+          data = JSON.parse(raw);
+        } catch {
+          // A proxy or an HTML error page can reach us instead of JSON.
+          throw new Error(
+            `Unexpected response from server (HTTP ${res.status}). Please try again.`
+          );
+        }
+      }
+      if (!res.ok) {
+        const msg = data?.detail || data?.message || `HTTP ${res.status}`;
+        throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+      }
+      return data as T;
+    } catch (e: any) {
+      if (e?.name === "AbortError") {
+        throw new Error("The request timed out. Please check your connection.");
+      }
+      throw e;
+    } finally {
+      clearTimeout(timer);
+      if (key) inFlight.delete(key);
+    }
+  })();
+
+  if (key) inFlight.set(key, run);
+  return run;
 }
 
 export const api = {
@@ -60,7 +400,16 @@ export const api = {
   }>("/onboarding/config", "GET", undefined, false),
 
   sendPhoneOtp: (phone: string) =>
-    request<{ ok: boolean; message: string; dev_hint?: string }>("/auth/phone/send-otp", "POST", { phone }, false),
+    request<{
+      ok: boolean;
+      message: string;
+      provider?: string;
+      /** How the OTP was actually delivered. Absent only on hard failure. */
+      channel?: "whatsapp" | "sms" | "mock";
+      /** Present only in non-production mock mode; the code is always random. */
+      dev_hint?: string;
+      warning?: string;
+    }>("/auth/phone/send-otp", "POST", { phone }, false),
   verifyPhoneOtp: (payload: { phone: string; otp: string; name?: string; email?: string; role?: "patient" | "doctor" }) =>
     request<{ token: string; user: any; is_new: boolean }>("/auth/phone/verify-otp", "POST", payload, false),
   appleAuth: (identity_token: string, full_name?: string | null, email?: string | null) =>
@@ -164,20 +513,85 @@ export const api = {
   adminRejectPasswordReset: (reset_id: string) =>
     request<{ ok: boolean }>(`/admin/password-resets/${reset_id}/reject`, "POST"),
 
-  getPatientProfile: () => request("/patient/profile"),
-  savePatientProfile: (body: any) => request("/patient/profile", "PUT", body),
+  getPatientProfile: () => request<PatientProfile>("/patient/profile"),
+  savePatientProfile: (body: PatientProfilePayload) =>
+    request<PatientProfile>("/patient/profile", "PUT", body),
+  /** Account-level fields. `email` is only editable while still unset. */
+  updatePatientAccount: (body: {
+    name?: string; phone?: string; email?: string; address?: string;
+    image_base64?: string; remove_photo?: boolean;
+  }) => request<PatientAccount>("/patient/account", "PATCH", body),
 
-  listDoctors: (specialty?: string) =>
-    request(`/doctors${specialty && specialty !== "All" ? `?specialty=${specialty}` : ""}`, "GET", undefined, false),
-  getDoctor: (id: string) => request(`/doctors/${id}`, "GET", undefined, false),
+  // Book Consultation directory. The backend filters by medical system / city
+  // in SQL and only returns approved, non-restricted doctors, so the app never
+  // downloads the whole table. `system` accepts the legacy `specialty` value so
+  // older builds keep filtering correctly.
+  listDoctors: (params?: {
+    system?: string;
+    specialty?: string;
+    city?: string;
+    q?: string;
+    page?: number;
+    page_size?: number;
+  }) => {
+    const p = new URLSearchParams();
+    const system = params?.system ?? params?.specialty;
+    if (system && system !== "All") p.set("system", system);
+    if (params?.city && params.city !== "All Cities") p.set("city", params.city);
+    if (params?.q) p.set("q", params.q);
+    if (params?.page) p.set("page", String(params.page));
+    if (params?.page_size) p.set("page_size", String(params.page_size));
+    const qs = p.toString();
+    return request<DoctorPage>(`/doctors${qs ? `?${qs}` : ""}`, "GET", undefined, false);
+  },
+
+  // Distinct systems + cities for the filter chips, so the UI never hardcodes a
+  // list that drifts from the database.
+  listDoctorFilters: () =>
+    request<{ systems: string[]; cities: string[] }>("/doctors/filters", "GET", undefined, false),
+  getDoctor: (id: string) => request<Doctor>(`/doctors/${id}`, "GET", undefined, false),
+  /** Real bookable slots for one day, straight from `appointment_slots`. */
+  getDoctorSlots: (id: string, date: string) =>
+    request<DoctorSlotDay>(
+      `/doctors/${encodeURIComponent(id)}/slots?date=${encodeURIComponent(date)}`,
+      "GET", undefined, false,
+    ),
   doctorHeartbeat: () =>
     request<{ ok: boolean; last_seen_at: string; window_seconds: number }>(
       "/doctors/heartbeat", "POST",
     ),
 
-  bookAppointment: (body: { doctor_id: string; slot: string; reason?: string }) =>
-    request("/appointments", "POST", body),
-  listAppointments: () => request("/appointments"),
+  bookAppointment: (body: {
+    doctor_id: string;
+    /** "YYYY-MM-DD HH:MM" - a slot the doctor actually published. */
+    slot: string;
+    type?: "online" | "offline";
+    symptoms?: string;
+    reason?: string;
+  }) => request("/appointments", "POST", body),
+  /**
+   * Paginated appointment history.
+   *
+   * The bare `/appointments` call returns a plain array (kept for older builds)
+   * but it is capped server-side, so a patient with a long history silently
+   * lost the tail of their own records. Sending `page` switches the endpoint to
+   * the `{items, total, page, limit, has_more}` envelope; `scope` is resolved in
+   * SQL by the server, not by downloading everything and filtering on device.
+   */
+  listAppointmentsPaged: (params: {
+    page?: number;
+    limit?: number;
+    /** "all" = past + future. Omit to keep the legacy mixed ordering. */
+    scope?: "all" | "upcoming" | "past";
+    status?: string;
+  } = {}) => {
+    const p = new URLSearchParams();
+    p.set("page", String(params.page ?? 1));
+    p.set("limit", String(params.limit ?? 20));
+    if (params.scope) p.set("scope", params.scope);
+    if (params.status) p.set("status", params.status);
+    return request<AppointmentPage>(`/appointments?${p.toString()}`);
+  },
 
   createReminder: (body: any) => request("/reminders", "POST", body),
   listReminders: () => request("/reminders"),
@@ -238,19 +652,18 @@ export const api = {
   createLead: (body: { name: string; contact: string; goal?: string }) =>
     request("/support/lead", "POST", body, false),
 
-  // Medicines shop
-  listMedicines: (category?: string) => request(`/medicines${category && category !== "all" ? `?category=${category}` : ""}`, "GET", undefined, false),
-  getMedicine: (id: string) => request(`/medicines/${id}`, "GET", undefined, false),
-  orderMedicines: (items: { medicine_id: string; qty: number }[], address?: string) =>
-    request("/medicines/order", "POST", { items, address }),
-  myMedicineOrders: () => request("/medicines/orders/mine"),
+  // AYUSH pharmacy. The catalogue is real website inventory, so browsing is
+  // honest; ordering is deliberately NOT exposed here. `orderMedicines` used to
+  // write an app document straight into the website's `orders` table with a
+  // placeholder order_id and status='pending' - no payment, no dispatch - so the
+  // bag is browse-only until a real fulfilment partner is wired up.
+  listMedicines: (category?: string) => request<Medicine[]>(`/medicines${category && category !== "all" ? `?category=${category}` : ""}`, "GET", undefined, false),
+  getMedicine: (id: string) => request<Medicine>(`/medicines/${id}`, "GET", undefined, false),
 
-  // Lab tests
-  listLabTests: () => request("/lab-tests", "GET", undefined, false),
-  getLabTest: (id: string) => request(`/lab-tests/${id}`, "GET", undefined, false),
-  bookLabTest: (body: { lab_test_id: string; slot: string; address?: string }) =>
-    request("/lab-tests/book", "POST", body),
-  myLabBookings: () => request("/lab-tests/bookings/mine"),
+  // Lab tests. Same rule as the pharmacy: the catalogue is real, booking is not.
+  listLabTests: (category?: string) =>
+    request<LabTest[]>(`/lab-tests${category && category !== "all" ? `?category=${category}` : ""}`, "GET", undefined, false),
+  getLabTest: (id: string) => request<LabTest>(`/lab-tests/${id}`, "GET", undefined, false),
 
   // Blogs
   listBlogs: () => request("/blogs", "GET", undefined, false),
@@ -304,14 +717,14 @@ export const api = {
     total_sessions: number;
   }>("/yoga/mine"),
 
-  // Doctor workspace
-  doctorMe: () => request("/doctor/me"),
+  listSpecializations: () => request<ProfileTaxonomy>("/specializations"),
+  listCities: () => request<{ cities: CityOption[] }>("/cities"),
+
+// Doctor workspace
+  doctorMe: () => request<DoctorOwnProfile>("/doctor/me"),
   doctorOnboard: (body: any) => request("/doctor/onboard", "PUT", body),
-  updateDoctorProfile: (body: {
-    specialty?: string; qualification?: string; experience_years?: number;
-    languages?: string[]; consultation_fee?: number; bio?: string;
-    clinic_name?: string; clinic_address?: string; avatar_base64?: string;
-  }) => request<any>("/doctor/profile", "PUT", body),
+  updateDoctorProfile: (body: DoctorProfilePayload) =>
+    request<DoctorOwnProfile>("/doctor/profile", "PUT", body),
   doctorGetAvailability: () => request<{
     is_available: boolean;
     consultation_mode: "online" | "offline" | "both";
@@ -326,8 +739,28 @@ export const api = {
     slot_duration_min?: number;
     notes?: string;
   }) => request<any>("/doctor/availability", "PUT", body),
-  doctorMyAppointments: () => request("/doctor/my-appointments"),
-  doctorMyPatients: () => request("/doctor/my-patients"),
+  doctorMyAppointments: (params: {
+    page?: number;
+    limit?: number;
+    scope?: "all" | "upcoming" | "past" | "today";
+    status?: string;
+    /** "asc" = soonest first (upcoming lists). Defaults per `scope` server-side. */
+    order?: "asc" | "desc";
+  } = {}) => {
+    const p = new URLSearchParams();
+    p.set("page", String(params.page ?? 1));
+    p.set("limit", String(params.limit ?? 20));
+    if (params.scope) p.set("scope", params.scope);
+    if (params.status) p.set("status", params.status);
+    if (params.order) p.set("order", params.order);
+    return request<AppointmentPage>(`/doctor/my-appointments?${p.toString()}`);
+  },
+  doctorMyPatients: (params: { page?: number; limit?: number } = {}) => {
+    const p = new URLSearchParams();
+    p.set("page", String(params.page ?? 1));
+    p.set("limit", String(params.limit ?? 20));
+    return request<DoctorPatientPage>(`/doctor/my-patients?${p.toString()}`);
+  },
   doctorEarnings: () => request<{
     total_paise: number;
     month_paise: number;

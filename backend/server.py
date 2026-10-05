@@ -1,17 +1,20 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Query
 from fastapi.responses import HTMLResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.concurrency import run_in_threadpool
+from starlette.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 import os
+import re
+import base64
 import json
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr, validator
 from typing import List, Optional, Literal, Dict, Any, Tuple
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time
 from collections import defaultdict, deque
 import asyncio
 import time
@@ -28,6 +31,23 @@ import httpx
 from emails import (
     send_welcome_email_bg,
     send_prakriti_report_email_bg,
+)
+from notif_emails import (
+    admin_email_addresses,
+    doctor_email,
+    send_appointment_cancelled_emails,
+    send_booking_paid_emails,
+    send_doctor_submitted_emails,
+    send_doctor_verified_email,
+    send_prescription_email,
+    user_email,
+)
+from notif_whatsapp import (
+    wa_appointment_cancelled,
+    wa_booking_paid,
+    wa_doctor_submitted,
+    wa_doctor_verified,
+    wa_prescription_ready,
 )  # Phase 1c: welcome + Prakriti report emails
 
 ROOT_DIR = Path(__file__).parent
@@ -39,6 +59,9 @@ load_dotenv(ROOT_DIR / '.env')
 # database used by the website backend — one database for web + app.
 # Server code below keeps its `db.<collection>...` calls unchanged.
 from msdb import db
+from msdb import _as_date, _as_time
+from msdb import _query as _sql_query
+from msdb import _columns, _table_exists
 
 # Auth
 JWT_SECRET = os.environ['JWT_SECRET']
@@ -65,6 +88,47 @@ if len(ADMIN_PASSWORD) < 12 or ADMIN_PASSWORD.lower() in _WEAK_ADMIN_PWDS:
         "Use at least 12 characters with mixed case, numbers and symbols."
     )
 
+# --- Shared profile media -------------------------------------------------
+# The website (Node/Express) owns the canonical profile photos and stores a
+# RELATIVE path in `users.image` (e.g. "/uploads/profiles/p1-1712.webp").
+# Those files are served by the website backend, not by this FastAPI app, so we
+# absolutise the path here instead of duplicating the upload. Users that signed
+# up via Google already hold an absolute URL, which is passed through as-is.
+PROFILE_MEDIA_BASE_URL = os.environ.get(
+    "PROFILE_MEDIA_BASE_URL", "https://api.onlinevaidyaji.com"
+).rstrip("/")
+# Where the APP itself is reachable. Photos the app uploads are written to the
+# app's own uploads/ dir, so they must be stored as an absolute URL pointing
+# here - the website and the app share the database but NOT the filesystem, so
+# a bare /uploads/... path would resolve against the wrong host.
+PROFILE_UPLOAD_BASE_URL = os.environ.get("PROFILE_UPLOAD_BASE_URL", "").rstrip("/")
+# Optional: the website backend (Node/Express on Hostinger) is the only process
+# with filesystem access to the shared uploads folder. When these are set the
+# app forwards the photo there so BOTH products end up with one copy on disk.
+# Leave unset to keep photos on the app server instead.
+PROFILE_UPLOAD_REMOTE_URL = os.environ.get("PROFILE_UPLOAD_REMOTE_URL", "").rstrip("/")
+PROFILE_UPLOAD_SECRET = os.environ.get("PROFILE_UPLOAD_SECRET", "")
+
+
+def _profile_photo_url(raw):
+    """Turn a stored `users.image` value into something an <Image> can load.
+
+    - absolute http(s) URL (Google avatar, CDN)  -> returned unchanged
+    - relative "/uploads/..." path               -> prefixed with the web origin
+    - anything else (base64 blob, junk, empty)   -> None so the UI can fall back
+    """
+    if not raw or not isinstance(raw, str):
+        return None
+    value = raw.strip()
+    if value.startswith("http://") or value.startswith("https://"):
+        return value
+    if value.startswith("data:"):
+        return None  # legacy inline blob: too large for a list/header render
+    if value.startswith("/"):
+        return f"{PROFILE_MEDIA_BASE_URL}{value}"
+    return None
+
+
 # Push
 PUSH_BASE_URL = "https://integrations.emergentagent.com"
 PUSH_KEY = os.environ.get("EMERGENT_PUSH_KEY", "placeholder")
@@ -81,6 +145,14 @@ bearer = HTTPBearer(auto_error=False)
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# Serve profile photos the app itself writes, using the SAME URL shape as the
+# website (/uploads/profiles/...) so the stored path stays interchangeable
+# between the two backends.
+_UPLOADS_ROOT = Path(__file__).resolve().parent / "uploads"
+_UPLOADS_ROOT.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(_UPLOADS_ROOT)), name="uploads")
+app.mount("/api/uploads", StaticFiles(directory=str(_UPLOADS_ROOT)), name="api-uploads")
 
 
 # ----------------- Rate Limiter (in-memory, per-IP) -----------------
@@ -185,6 +257,17 @@ class HealthProfileInput(BaseModel):
     dosha: Optional[str] = None  # Vata, Pitta, Kapha
     conditions: List[str] = []
     lifestyle: Optional[str] = None
+    address: Optional[str] = None
+
+
+class PatientAccountInput(BaseModel):
+    """Account-level edits the website also owns (mirrored into `users`)."""
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    address: Optional[str] = None
+    image_base64: Optional[str] = None
+    remove_photo: bool = False
 
 
 class DoctorProfileInput(BaseModel):
@@ -201,6 +284,10 @@ class AppointmentInput(BaseModel):
     doctor_id: str
     slot: str  # ISO datetime string
     reason: Optional[str] = None
+    # The website lets the patient pick Online vs Visit and describe symptoms.
+    # Both have real columns on `appointments`, so accept them here too.
+    type: Optional[Literal["online", "offline"]] = None
+    symptoms: Optional[str] = None
 
 
 class ReminderInput(BaseModel):
@@ -277,6 +364,14 @@ async def current_user(cred: HTTPAuthorizationCredentials = Depends(bearer)) -> 
     user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password": 0})
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    # The JWT carries `sub` as a string, so `user["id"]` came back as "11" while
+    # every patient_id/user_id column is an int. Every `x == user["id"]` ACL check
+    # downstream silently failed (patients were refused their own prescriptions).
+    # Normalise once, here, so all call sites compare int-to-int.
+    try:
+        user["id"] = int(user["id"])
+    except (TypeError, ValueError):
+        pass
     return user
 
 
@@ -573,12 +668,43 @@ async def change_password(body: ChangePasswordIn, request: Request, user: dict =
 
 
 # ----------------- Patient Profile -----------------
+# Identity + photo come from `users` (the website's canonical source); the
+# health/demographic extras come from `patient_profiles`. We merge them so the
+# app never shows a half-empty profile for someone who registered on the web.
 @api_router.get("/patient/profile")
 async def get_patient_profile(user: dict = Depends(current_user)):
     if user["role"] != "patient":
         raise HTTPException(status_code=403, detail="Only patients")
-    profile = await db.patient_profiles.find_one({"user_id": user["id"]}, {"_id": 0})
-    return profile or {}
+
+    # `user` IS the freshly-read `users` row that current_user just loaded for
+    # this request, so re-reading it here was a second identical query per call
+    # (and every Profile screen-open, refresh and post-save did it again).
+    account = user
+    health = await db.patient_profiles.find_one({"user_id": user["id"]}, {"_id": 0}) or {}
+
+    raw_image = account.get("image") or user.get("image")
+    return {
+        # identity (users) - the same values the website shows
+        "id": user["id"],
+        "name": account.get("name") or user.get("name"),
+        "email": account.get("email") or user.get("email"),
+        "phone": account.get("phone") or user.get("phone"),
+        "image": raw_image,
+        "photo_url": _profile_photo_url(raw_image),
+        "role": user["role"],
+        "is_verified": bool(account.get("is_verified", user.get("is_verified", False))),
+        "created_at": account.get("created_at") or user.get("created_at"),
+        # demographics (patient_profiles)
+        # NOTE: schema stores `age`, there is no date_of_birth column.
+        "age": health.get("age"),
+        "gender": health.get("gender"),
+        "address": health.get("address"),
+        # ayurveda extras
+        "dosha": health.get("dosha"),
+        "conditions": health.get("conditions") or [],
+        "lifestyle": health.get("lifestyle"),
+        "updated_at": health.get("updated_at"),
+    }
 
 
 @api_router.put("/patient/profile")
@@ -591,7 +717,148 @@ async def upsert_patient_profile(body: HealthProfileInput, user: dict = Depends(
     await db.patient_profiles.update_one(
         {"user_id": user["id"]}, {"$set": doc}, upsert=True
     )
-    return doc
+    return await get_patient_profile(user)
+
+
+@api_router.patch("/patient/account")
+async def update_patient_account(
+    body: PatientAccountInput,
+    request: Request,
+    user: dict = Depends(current_user),
+):
+    """Edit the fields the website also owns, so changes show up on the web.
+
+    Mirrors name/phone/email/photo into `users`. The photo is written as a
+    relative /uploads/profiles/... path exactly like the website does, and is
+    only ever overwritten when a new one is supplied - a web-uploaded photo is
+    never clobbered by a null coming from the app.
+    """
+    if user["role"] != "patient":
+        raise HTTPException(status_code=403, detail="Only patients")
+
+    account_set = {}
+    for field in ("name", "phone", "email"):
+        value = getattr(body, field, None)
+        if value is None:
+            continue
+        value = str(value).strip()
+        if not value:
+            continue
+        if field == "email" and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", value):
+            raise HTTPException(status_code=400, detail="Invalid email address")
+        if field == "phone" and not re.match(r"^[+0-9][0-9\s\-]{5,19}$", value):
+            raise HTTPException(status_code=400, detail="Invalid mobile number")
+        account_set[field] = value
+
+    if body.remove_photo:
+        account_set["image"] = None
+    elif body.image_base64:
+        account_set["image"] = await _store_profile_photo(
+            body.image_base64, user["id"], _upload_base(request)
+        )
+
+    if account_set:
+        account_set["updated_at"] = now_iso()
+        await db.users.update_one({"id": user["id"]}, {"$set": account_set})
+
+    if body.address is not None:
+        await db.patient_profiles.update_one(
+            {"user_id": user["id"]},
+            {"$set": {"address": str(body.address).strip(), "updated_at": now_iso()}},
+            upsert=True,
+        )
+
+    fresh = await db.users.find_one({"id": user["id"]}) or {}
+    if account_set:
+        # keep the live session in step so /auth/me stops serving stale values
+        for field in ("name", "phone", "email"):
+            if field in account_set:
+                user[field] = account_set[field]
+    return await get_patient_profile(user)
+
+
+async def _store_profile_photo(image_base64: str, user_id: int, base: str) -> str:
+    """Persist an uploaded photo and return the value to store in `users.image`.
+
+    If PROFILE_UPLOAD_REMOTE_URL is configured the file is handed to the website
+    backend, which is the only process that can write to the shared Hostinger
+    uploads folder; it returns the same relative /uploads/profiles/... path the
+    website itself uses, so one file serves both products.
+
+    A remote failure is surfaced as 502 rather than silently falling back,
+    because a silent fallback is exactly how two copies end up diverging again.
+    """
+    if PROFILE_UPLOAD_REMOTE_URL:
+        return await _store_profile_photo_remote(image_base64, user_id)
+    return await _store_profile_photo_local(image_base64, user_id, base)
+
+
+async def _store_profile_photo_remote(image_base64: str, user_id: int) -> str:
+    if not PROFILE_UPLOAD_SECRET:
+        raise HTTPException(
+            status_code=500,
+            detail="PROFILE_UPLOAD_SECRET is not set on this server",
+        )
+    url = f"{PROFILE_UPLOAD_REMOTE_URL}/api/upload/profile-image"
+    try:
+        resp = await httpx.AsyncClient(timeout=60).post(
+            url,
+            json={"user_id": str(user_id), "image_base64": image_base64},
+            headers={"X-Upload-Secret": PROFILE_UPLOAD_SECRET},
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Upload host unreachable: {exc}")
+
+    if resp.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Upload host rejected the photo ({resp.status_code})",
+        )
+    payload = resp.json()
+    image = payload.get("image") or payload.get("url") or ""
+    if not image:
+        raise HTTPException(status_code=502, detail="Upload host returned no image path")
+    return image
+
+
+async def _store_profile_photo_local(image_base64: str, user_id: int, base: str) -> str:
+    """Write the photo to the APP server's uploads dir (fallback mode).
+
+    Stores an ABSOLUTE url (base + /uploads/profiles/...) because the file lives
+    on the app server, while photos uploaded on the website stay relative and
+    resolve through PROFILE_MEDIA_BASE_URL. Both forms coexist in one column.
+    """
+    header, _, encoded = image_base64.partition(",")
+    if not encoded:
+        encoded = image_base64
+        content_type = "image/jpeg"
+    else:
+        content_type = header.split(";")[0].replace("data:", "") or "image/jpeg"
+
+    ext = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}.get(
+        content_type, "jpg"
+    )
+    try:
+        blob = base64.b64decode(encoded, validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Malformed image data")
+    if not blob or len(blob) > 2_000_000:
+        raise HTTPException(status_code=400, detail="Photo must be under 2 MB")
+
+    # Mirror the website's layout so the two backends stay interchangeable
+    target_dir = Path(__file__).resolve().parent / "uploads" / "profiles"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"user{user_id}-{int(time.time())}.{ext}"
+    (target_dir / filename).write_bytes(blob)
+
+    return f"{base}/uploads/profiles/{filename}"
+
+
+def _upload_base(request: Request) -> str:
+    """Absolute origin the app is reachable on, for freshly uploaded photos."""
+    if PROFILE_UPLOAD_BASE_URL:
+        return PROFILE_UPLOAD_BASE_URL
+    return str(request.base_url).rstrip("/")
 
 
 # ----------------- Doctors -----------------
@@ -630,21 +897,561 @@ def _decorate_doctor(d: Dict[str, Any]) -> Dict[str, Any]:
     return d
 
 
+async def _doctor_dir_where(
+    system: Optional[str],
+    city: Optional[str],
+    search: Optional[str],
+) -> tuple:
+    """Build the SQL WHERE for the public doctor directory.
+
+    Filters are applied by MySQL, NOT in Python. The previous implementation
+    did `SELECT *` on `doctors`, merged every row, ran the read-side join over
+    all of them, and only then filtered in Python - so the Book Consultation
+    screen paid for the whole table on every filter tap.
+
+    Only admin-approved doctors are ever visible, and restricted doctors are
+    never listed - approval alone is not enough.
+    """
+    where = ["d.is_approved = 1", "COALESCE(d.is_restricted, 0) = 0"]
+    params: List[Any] = []
+
+    if system and system.strip() and system.strip().lower() != "all":
+        # `system` holds the medical system (Ayurveda / Homeopathy / Unani / ...).
+        # Plain equality is already case-insensitive here: the column collation
+        # is utf8mb4_general_ci. Wrapping it in LOWER() would force a full scan,
+        # so match the value directly and let idx_doctors_system do the work.
+        where.append("d.system = %s")
+        params.append(system.strip())
+
+    if city and city.strip() and city.strip().lower() != "all cities":
+        where.append("d.city = %s")
+        params.append(city.strip())
+
+    if search and search.strip():
+        # `doctors` has no `name` column. A doctor's name lives either in the
+        # `data` JSON blob (app-created) or in `users.name` (website-created,
+        # which is what the read-side join prefers), so search both. JSON_VALID
+        # guards the extract because `data` is longtext and older rows may not
+        # be valid JSON.
+        like = "%" + search.strip() + "%"
+        parts = ["d.city LIKE %s"]
+        params.append(like)
+        if await _table_exists("users"):
+            parts.append("EXISTS (SELECT 1 FROM `users` u WHERE u.id = d.user_id AND u.name LIKE %s)")
+            params.append(like)
+        if await _json_column_usable("doctors"):
+            parts.append("JSON_UNQUOTE(JSON_EXTRACT(d.data, '$.name')) LIKE %s")
+            params.append(like)
+        where.append("(" + " OR ".join(parts) + ")")
+
+    return " AND ".join(where), params
+
+
+async def _json_column_usable(table: str) -> bool:
+    """True when `table`.`data` exists and we can safely extract from it."""
+    try:
+        cols = await _columns(table)
+    except Exception:
+        return False
+    return "data" in (cols or {})
+
+
+async def _doctor_dir_page(
+    system: Optional[str],
+    city: Optional[str],
+    search: Optional[str],
+    page: int,
+    page_size: int,
+) -> Dict[str, Any]:
+    """One page of the public doctor directory, filtered + enriched in SQL."""
+    where, params = await _doctor_dir_where(system, city, search)
+
+    count_row = await _sql_query(
+        "SELECT COUNT(*) AS n FROM `doctors` d WHERE " + where, params
+    )
+    total = int((count_row[0] or {}).get("n", 0) if count_row else 0)
+
+    page = max(1, int(page or 1))
+    page_size = max(1, min(int(page_size or 20), 50))
+    offset = (page - 1) * page_size
+
+    rows = await _sql_query(
+        "SELECT d.* FROM `doctors` d WHERE "
+        + where
+        # ORDER BY d.id alone is deliberate: idx_doctors_approved is
+        # (is_approved, is_restricted, id), so equality on the first two columns
+        # leaves MySQL already walking ids in order - no filesort. Sorting by
+        # is_available_online here looked smarter but it is a capability flag
+        # (almost always 1) and the real "online now" dot is a heartbeat that
+        # can only be computed after the join, so it never sorted correctly.
+        + " ORDER BY d.id LIMIT %s OFFSET %s",
+        params + [page_size, offset],
+    )
+
+    # Only this page gets the blob merged + the users/specializations join.
+    coll = db.doctors
+    docs = [coll._db.row_to_doc(r, "doctors") for r in rows]
+    docs = await coll.enrich_docs(docs)
+
+    # One batched prefetch (3 queries for the whole page) instead of 3 per
+    # doctor, so the directory stays a constant number of round trips.
+    ctx = await _prefetch_doctor_context([d.get("id") for d in docs])
+    items = [await serialize_doctor_public(d, ctx) for d in docs]
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "has_more": offset + len(items) < total,
+    }
+
+
+def _apply_public_projection(d: Dict[str, Any]) -> Dict[str, Any]:
+    """Strip anything not explicitly whitelisted in _PUBLIC_DOCTOR_PROJECTION."""
+    out: Dict[str, Any] = {}
+    for field, keep in _PUBLIC_DOCTOR_PROJECTION.items():
+        if field == "_id" or not keep:
+            continue
+        if field in d:
+            out[field] = d[field]
+    # `city` / `system` drive the filter chips; never expose contact details.
+    for extra in ("city", "system"):
+        if extra in d:
+            out[extra] = d[extra]
+    return out
+
+
 @api_router.get("/doctors")
-async def list_doctors(specialty: Optional[str] = None):
-    q = {"verified": True}
-    if specialty and specialty.lower() != "all":
-        q["specialty"] = specialty
-    docs = await db.doctors.find(q, _PUBLIC_DOCTOR_PROJECTION).to_list(200)
-    return [_decorate_doctor(d) for d in docs]
+async def list_doctors(
+    system: Optional[str] = None,
+    city: Optional[str] = None,
+    q: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 20,
+    specialty: Optional[str] = None,
+):
+    """Public doctor directory for Book Consultation.
+
+    - Admin-approved, non-restricted doctors only.
+    - Filtered by medical system / city / free text in the database.
+    - Paginated so the client never downloads the whole table.
+    """
+    # `specialty` is the legacy param name; the chips now filter on `system`
+    # (the real column). Accept both so existing builds keep working.
+    effective_system = system if system is not None else specialty
+    return await _doctor_dir_page(effective_system, city, q, page, page_size)
+
+
+@api_router.get("/doctors/filters")
+async def doctor_directory_filters():
+    """Distinct filter values for the Book Consultation chips.
+
+    Sourced from the data so the UI never hardcodes a list that drifts from the
+    database. Systems come from the doctors that are actually visible; cities
+    fall back to the `cities` reference table so the patient can still search
+    for a city nobody has joined yet.
+    """
+    systems = await _sql_query(
+        "SELECT DISTINCT d.system AS v FROM `doctors` d "
+        "WHERE d.is_approved = 1 AND COALESCE(d.is_restricted, 0) = 0 "
+        "AND d.system IS NOT NULL AND TRIM(d.system) <> ''"
+    )
+    cities = await _sql_query(
+        "SELECT DISTINCT d.city AS v FROM `doctors` d "
+        "WHERE d.is_approved = 1 AND COALESCE(d.is_restricted, 0) = 0 "
+        "AND d.city IS NOT NULL AND TRIM(d.city) <> ''"
+    )
+    # Reference list (Delhi, Mumbai, ...) so search works before anyone joins.
+    try:
+        ref = await _sql_query("SELECT name FROM `cities` ORDER BY name")
+        ref_names = [str(r["name"]) for r in ref if r.get("name")]
+    except Exception:
+        ref_names = []
+
+    seen = {str(r["v"]).strip() for r in cities if r.get("v")}
+    all_cities = ref_names + [c for c in sorted(seen) if c not in set(ref_names)]
+    return {
+        "systems": sorted({str(r["v"]).strip() for r in systems if r.get("v")}),
+        "cities": all_cities,
+    }
 
 
 @api_router.get("/doctors/{doctor_id}")
 async def get_doctor(doctor_id: str):
-    doc = await db.doctors.find_one({"id": doctor_id}, _PUBLIC_DOCTOR_PROJECTION)
+    doc = await _load_doctor_public(doctor_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Doctor not found")
-    return _decorate_doctor(doc)
+    return await serialize_doctor_public(doc)
+
+
+# ----------------- Doctor profile serialisation -----------------
+# The website (OnlineVaidhyaJi.com/backend/routes/doctors.js) reads these
+# straight off the real `doctors` columns. The app used to read only a handful
+# of app-only keys that live in the `data` JSON mirror, so anything the website
+# wrote (about, city, experience, languages, availability) never reached the
+# app. These helpers read the real columns and normalise the ones that are
+# stored differently from how the app used to expect them.
+
+
+def _normalize_languages(raw: Any) -> List[str]:
+    """`doctors.languages` is a comma-separated varchar on the website, but the
+    app historically wrote a JSON array into the `data` mirror. Accept both."""
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        parts: List[Any] = raw
+    else:
+        s = str(raw).strip()
+        if s.startswith("["):
+            try:
+                parsed = json.loads(s)
+                parts = parsed if isinstance(parsed, list) else [s]
+            except Exception:
+                parts = s.split(",")
+        else:
+            parts = s.split(",")
+    return [str(p).strip() for p in parts if str(p).strip()]
+
+
+def _to_int(raw: Any, default: Optional[int] = None) -> Optional[int]:
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(float(raw))
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_float(raw: Any, default: Optional[float] = None) -> Optional[float]:
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+async def _doctor_ratings(doctor_id: str):
+    """Approved review count + average, matching the website.
+
+    Returns None when there are no approved reviews, so the caller falls back to
+    the denormalised `doctors.rating` / `review_count` columns. (Returning
+    `(None, None)` would be a truthy tuple and silently skip that fallback.)
+    """
+    try:
+        rows = await _sql_query(
+            "SELECT COUNT(*) AS c, COALESCE(AVG(rating), 0) AS avg_rating "
+            "FROM `reviews` WHERE doctor_id = %s AND is_approved = 1",
+            [doctor_id],
+        )
+        count = int((rows[0] or {}).get("c") or 0) if rows else 0
+        if count:
+            avg = _to_float((rows[0] or {}).get("avg_rating"), 0.0) or 0.0
+            return count, float(avg)
+    except Exception:
+        pass
+    return None
+
+
+async def _prefetch_doctor_context(doctor_ids: List[Any]) -> Dict[str, Any]:
+    """Batch the per-doctor lookups for a whole page in 3 queries.
+
+    Without this the directory endpoint would issue 3 extra round trips per
+    doctor (specializations, reviews, status), which is exactly the N+1 pattern
+    that made the list slow to begin with.
+    """
+    ids = [str(i) for i in doctor_ids if i is not None]
+    ctx: Dict[str, Any] = {"specs": {}, "reviews": {}, "status": {}}
+    if not ids:
+        return ctx
+    qs = ",".join(["%s"] * len(ids))
+
+    try:
+        rows = await _sql_query(
+            "SELECT ds.doctor_id, s.id, s.name, s.icon "
+            "FROM `doctor_specializations` ds "
+            "JOIN `specializations` s ON s.id = ds.specialization_id "
+            "WHERE ds.doctor_id IN (%s)" % qs, ids,
+        )
+        for r in rows:
+            ctx["specs"].setdefault(str(r.get("doctor_id")), []).append(
+                {"id": r.get("id"), "name": r.get("name"), "icon": r.get("icon")}
+            )
+    except Exception:
+        pass
+
+    try:
+        rows = await _sql_query(
+            "SELECT doctor_id, COUNT(*) AS c, COALESCE(AVG(rating), 0) AS avg_rating "
+            "FROM `reviews` WHERE is_approved = 1 AND doctor_id IN (%s) "
+            "GROUP BY doctor_id" % qs, ids,
+        )
+        for r in rows:
+            ctx["reviews"][str(r.get("doctor_id"))] = (
+                int(r.get("c") or 0), _to_float(r.get("avg_rating"), 0.0) or 0.0
+            )
+    except Exception:
+        pass
+
+    try:
+        rows = await _sql_query(
+            "SELECT doctor_id, status FROM `doctor_status` WHERE doctor_id IN (%s)" % qs, ids
+        )
+        for r in rows:
+            ctx["status"].setdefault(str(r.get("doctor_id")), r.get("status") or "offline")
+    except Exception:
+        pass
+
+    return ctx
+
+
+async def _load_doctor_public(doctor_id: str) -> Optional[Dict[str, Any]]:
+    """Load one doctor with the read-side join (users + specializations)."""
+    coll = db.doctors
+    d = _to_int(doctor_id)
+    # `row_to_doc` needs the real column metadata to lift website-written
+    # columns into the doc. It reads that from msdb's table cache, which only
+    # the collection API fills in. Selecting rows with raw SQL bypasses that,
+    # so on a cold cache every real field silently vanished and the profile
+    # rendered empty. Warm it here before converting.
+    try:
+        await _columns("doctors")
+    except Exception:
+        pass
+    doc = None
+    if d is not None:
+        rows = await _sql_query("SELECT * FROM `doctors` WHERE id = %s", [d])
+        if rows:
+            doc = coll._db.row_to_doc(rows[0], "doctors")
+    if not doc:
+        # Fall back to the slug so website-style /doctors/<slug> links resolve.
+        rows = await _sql_query("SELECT * FROM `doctors` WHERE slug = %s", [doctor_id])
+        if rows:
+            doc = coll._db.row_to_doc(rows[0], "doctors")
+    if not doc:
+        return None
+    enriched = await coll.enrich_docs([doc])
+    return enriched[0] if enriched else None
+
+
+async def serialize_doctor_public(
+    d: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """Public doctor shape for the app, matching what the website displays.
+
+    Reads only real columns; nothing here is invented. `about` and `bio` are
+    genuinely separate fields on the website, so they stay separate here too.
+    `ctx` is the batched prefetch from `_prefetch_doctor_context` (list
+    endpoints); when omitted the lookups run for this one doctor.
+    """
+    doctor_id = str(d.get("id"))
+
+    if ctx is not None:
+        specs = ctx.get("specs", {}).get(doctor_id, [])
+        review_pair = ctx.get("reviews", {}).get(doctor_id)
+        status = ctx.get("status", {}).get(doctor_id) or "offline"
+    else:
+        specs = []
+        try:
+            rows = await _sql_query(
+                "SELECT s.id, s.name, s.icon FROM `doctor_specializations` ds "
+                "JOIN `specializations` s ON s.id = ds.specialization_id "
+                "WHERE ds.doctor_id = %s",
+                [doctor_id],
+            )
+            specs = [{"id": r.get("id"), "name": r.get("name"), "icon": r.get("icon")} for r in rows]
+        except Exception:
+            specs = []
+        review_pair = await _doctor_ratings(doctor_id)
+        status = "offline"
+        try:
+            r = await _sql_query(
+                "SELECT status FROM `doctor_status` WHERE doctor_id = %s ORDER BY updated_at DESC",
+                [doctor_id],
+            )
+            if r:
+                status = r[0].get("status") or "offline"
+        except Exception:
+            pass
+
+    primary = d.get("specialty")
+    try:
+        if d.get("specialization_id"):
+            r = await _sql_query(
+                "SELECT id, name, icon FROM `specializations` WHERE id = %s",
+                [d.get("specialization_id")],
+            )
+            if r:
+                primary = r[0].get("name")
+    except Exception:
+        pass
+    if not primary and d.get("system"):
+        primary = str(d.get("system")).title()
+
+    if review_pair:
+        review_count, avg_rating = review_pair
+    else:
+        review_count = _to_int(d.get("review_count"), 0) or 0
+        avg_rating = _to_float(d.get("rating"), 0.0) or 0.0
+
+    online = bool(_to_int(d.get("is_available_online"), 0))
+    offline = bool(_to_int(d.get("is_available_offline"), 0))
+    experience = _to_int(d.get("experience"), 0) or 0
+
+    return {
+        "id": doctor_id,
+        # No `user_id` / email / phone: this payload is public, and the doctor
+        # id is all the app needs to address bookings.
+        "slug": d.get("slug"),
+        "name": d.get("name"),
+        "avatar_url": d.get("avatar_url") or d.get("image"),
+        "image": d.get("avatar_url") or d.get("image"),
+        "gender": d.get("gender"),
+        "qualification": d.get("qualification"),
+        "experience": experience,
+        "experience_years": experience,
+        "about": d.get("about"),
+        "bio": d.get("bio"),
+        "languages": _normalize_languages(d.get("languages")),
+        "city": d.get("city"),
+        "system": d.get("system"),
+        "consultation_fee": _to_float(d.get("consultation_fee")),
+        "is_available_online": online,
+        "is_available_offline": offline,
+        # Legacy aliases older app builds still read.
+        "is_available": online or offline,
+        "consultation_mode": (
+            "both" if (online and offline) else ("online" if online else ("offline" if offline else "none"))
+        ),
+        "rating": avg_rating,
+        "review_count": review_count,
+        "reviews": review_count,
+        "verified": bool(_to_int(d.get("verified"), 0)) or bool(_to_int(d.get("is_approved"), 0)),
+        "specialty": primary,
+        "specialization": {"id": d.get("specialization_id"), "name": primary},
+        "specializations": specs,
+        "status": status,
+        "is_online": _compute_is_online(d.get("last_seen_at")),
+    }
+
+
+def _as_time_obj(value: Any):
+    """Normalise a MySQL TIME column.
+
+    asyncmy hands TIME back as `datetime.time` on some paths and as
+    `datetime.timedelta` on others, so everything that reads `start_time` /
+    `end_time` / `appointment_time` has to cope with both.
+    """
+    if value is None:
+        return None
+    if isinstance(value, timedelta):
+        secs = int(value.total_seconds())
+        if secs < 0:
+            secs = 0
+        return (datetime.min + timedelta(seconds=secs)).time()
+    return value
+
+
+def _as_hhmm(value: Any) -> Optional[str]:
+    t = _as_time_obj(value)
+    if t is None:
+        return None
+    try:
+        return t.strftime("%H:%M")
+    except Exception:
+        return None
+
+
+@api_router.get("/doctors/{doctor_id}/slots")
+async def get_doctor_slots(doctor_id: str, date: str):
+    """Real bookable time slots for a doctor on a date.
+
+    Mirrors the website's `GET /slots/available`
+    (OnlineVaidhyaJi.com/backend/routes/slots.js) exactly:
+
+      * `day_of_week` is JS `Date.getDay()` order, i.e. 0 = Sunday
+        (see the website's getDayNames()), so `isoweekday() % 7` is correct.
+      * Date-specific rows win outright; recurring rows are only used when the
+        date has no explicit schedule (`dateSpecific.length ? ... : recurring`).
+      * Each window is expanded into 30-minute starts, keeping only starts where
+        `start + 30min <= end`, and each slot is `"HH:MM:00"` with a 12-hour label.
+      * Booked = an `appointments` row on that date whose status is not cancelled.
+
+    Nothing is invented here: no window in the DB means no slot.
+    """
+    try:
+        target = datetime.strptime(date, "%Y-%m-%d").date()
+    except Exception:
+        raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+
+    did = _to_int(doctor_id)
+    if did is None:
+        raise HTTPException(status_code=400, detail="bad doctor id")
+
+    exists = await _sql_query("SELECT id FROM `doctors` WHERE id = %s LIMIT 1", [did])
+    if not exists:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+
+    rows = await _sql_query(
+        "SELECT id, day_of_week, date, start_time, end_time, is_available "
+        "FROM `appointment_slots` WHERE doctor_id = %s AND is_available = 1 "
+        "AND ((day_of_week = %s AND date IS NULL) OR date = %s) "
+        "ORDER BY start_time",
+        [did, target.isoweekday() % 7, target],
+    )
+
+    # A date with explicit rows ignores the weekly template, as on the website.
+    date_specific = [r for r in rows if r.get("date")]
+    recurring = [r for r in rows if r.get("date") is None and r.get("day_of_week") is not None]
+    active = date_specific if date_specific else recurring
+
+    booked = set()
+    try:
+        b = await _sql_query(
+            "SELECT appointment_time FROM `appointments` "
+            "WHERE doctor_id = %s AND appointment_date = %s "
+            "AND status <> 'cancelled'",
+            [did, target],
+        )
+        for r in b:
+            hhmm = _as_hhmm(r.get("appointment_time"))
+            if hhmm:
+                booked.add(hhmm)
+    except Exception:
+        booked = set()
+
+    now = datetime.now()
+    slots: List[Dict[str, Any]] = []
+    seen = set()
+    for r in active:
+        start, end = _as_time_obj(r.get("start_time")), _as_time_obj(r.get("end_time"))
+        if not start or not end:
+            continue
+        # Website: `while (current + interval <= end)` -> start is inclusive of
+        # the last `end - interval` mark, never `end` itself.
+        cur = datetime.combine(target, start)
+        stop = datetime.combine(target, end)
+        while cur + timedelta(minutes=30) <= stop:
+            hhmm = cur.strftime("%H:%M")
+            if hhmm not in seen:
+                seen.add(hhmm)
+                hour12 = cur.hour % 12 or 12
+                slots.append({
+                    "time": "%s:00" % hhmm,
+                    "label": "%d:%02d %s" % (hour12, cur.minute, "AM" if cur.hour < 12 else "PM"),
+                    "iso": cur.isoformat(),
+                    "is_booked": hhmm in booked or (target == now.date() and cur <= now),
+                })
+            cur += timedelta(minutes=30)
+
+    slots.sort(key=lambda s: s["time"])
+    return {
+        "doctor_id": str(doctor_id),
+        "date": target.isoformat(),
+        "slots": slots,
+        "total": len(slots),
+        "available": len([s for s in slots if not s["is_booked"]]),
+    }
 
 
 @api_router.post("/doctors/heartbeat")
@@ -664,27 +1471,115 @@ async def doctor_heartbeat(request: Request, user: dict = Depends(current_user))
 
 
 # ----------------- Appointments -----------------
+async def _is_slot_bookable(doctor_id: Any, slot: str) -> bool:
+    """True only if `slot` is a real, free slot from the doctor's schedule.
+
+    Mirrors the same rules as `GET /doctors/{id}/slots` (date-specific rows
+    override recurring ones, 30-minute starts where start+30 <= end) and then
+    subtracts anything already booked. Used at booking time so a client cannot
+    invent a time the doctor never offered, or re-take one that is taken.
+    """
+    try:
+        target = datetime.strptime(slot, "%Y-%m-%d %H:%M")
+    except Exception:
+        try:
+            target = datetime.fromisoformat(slot)
+        except Exception:
+            return False
+    target = target.replace(second=0, microsecond=0)
+
+    rows = await _sql_query(
+        "SELECT day_of_week, date, start_time, end_time FROM `appointment_slots` "
+        "WHERE doctor_id = %s AND is_available = 1 "
+        "AND ((day_of_week = %s AND date IS NULL) OR date = %s)",
+        [doctor_id, target.isoweekday() % 7, target.date()],
+    )
+    date_specific = [r for r in rows if r.get("date")]
+    recurring = [r for r in rows if r.get("date") is None and r.get("day_of_week") is not None]
+    active = date_specific if date_specific else recurring
+
+    published = False
+    for r in active:
+        start, end = _as_time_obj(r.get("start_time")), _as_time_obj(r.get("end_time"))
+        if not start or not end:
+            continue
+        cur = datetime.combine(target.date(), start)
+        stop = datetime.combine(target.date(), end)
+        while cur + timedelta(minutes=30) <= stop:
+            if cur == target:
+                published = True
+                break
+            cur += timedelta(minutes=30)
+        if published:
+            break
+    if not published:
+        return False
+
+    taken = await _sql_query(
+        "SELECT id FROM `appointments` WHERE doctor_id = %s AND appointment_date = %s "
+        "AND appointment_time = %s AND status <> 'cancelled' LIMIT 1",
+        [doctor_id, target.date(), target.time()],
+    )
+    return not taken
+
+
 @api_router.post("/appointments")
 async def create_appointment(body: AppointmentInput, user: dict = Depends(current_user)):
     doctor = await db.doctors.find_one({"id": body.doctor_id}, {"_id": 0})
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
+    # `appointment_date`/`appointment_time` are NOT NULL DATE/TIME columns. They
+    # were never populated, so every booking landed on 1970-01-01 00:00 and broke
+    # every date-filtered view. Split the requested slot into them.
+    slot_date = _as_date(body.slot)
+    slot_time = _as_time(body.slot)
+    if slot_date is None:
+        raise HTTPException(status_code=400, detail="Invalid slot: expected 'YYYY-MM-DD HH:MM'")
+    fee = doctor.get("consultation_fee")
+    try:
+        fee = float(fee) if fee is not None else 0.0
+    except (TypeError, ValueError):
+        fee = 0.0
+
+    # Honour the mode the patient actually picked (Online / Visit), but never
+    # let them book a mode the doctor does not offer.
+    requested = body.type
+    if requested == "online" and not _to_int(doctor.get("is_available_online"), 0):
+        raise HTTPException(status_code=400, detail="This doctor does not offer online consultation")
+    if requested == "offline" and not _to_int(doctor.get("is_available_offline"), 0):
+        raise HTTPException(status_code=400, detail="This doctor does not offer offline visits")
+    appt_type = requested or ("online" if _to_int(doctor.get("is_available_online"), 0) else "offline")
+
+    # The slot must be one the doctor actually published. This closes the
+    # double-booking hole the old endpoint had (it trusted `slot` blindly).
+    if not await _is_slot_bookable(doctor["id"], body.slot):
+        raise HTTPException(status_code=400, detail="That time is no longer available. Please pick another slot.")
+
     appt = {
-        "id": str(uuid.uuid4()),
         "patient_id": user["id"],
         "patient_name": user["name"],
         "doctor_id": doctor["id"],
         "doctor_name": doctor["name"],
         "doctor_specialty": doctor["specialty"],
         "slot": body.slot,
+        "appointment_date": slot_date,
+        "appointment_time": slot_time or time(0, 0),
+        "type": appt_type,
+        "symptoms": (body.symptoms or "").strip() or None,
         "reason": body.reason,
         "status": "confirmed",
         "paid": False,
-        "amount": doctor.get("consultation_fee", 500),
+        # `amount` has no real column, so it round-trips via the data blob only.
+        # Never invent a price: if the doctor has no fee on file it stays null.
+        "amount": fee if fee > 0 else None,
         "prescription": None,
         "created_at": now_iso(),
     }
-    await db.appointments.insert_one(appt)
+    # `appointments.id` is INT AUTO_INCREMENT (as are prescriptions.appointment_id,
+    # payments.appointment_id, video_sessions.appointment_id), so a uuid was being
+    # discarded by MySQL. Let the column assign the id and report the real one.
+    res = await db.appointments.insert_one(appt)
+    appt["id"] = res.inserted_id
     appt.pop("_id", None)
     await log_activity("appointment_booked", actor=user, meta={
         "doctor_name": doctor["name"], "specialty": doctor["specialty"], "slot": body.slot,
@@ -705,18 +1600,258 @@ async def create_appointment(body: AppointmentInput, user: dict = Depends(curren
     return appt
 
 
+def _as_hms(value: Any) -> Optional[str]:
+    """MySQL TIME -> "HH:MM:SS" (a driver `timedelta` becomes a readable clock)."""
+    t = _as_time_obj(value)
+    if t is None:
+        return None
+    try:
+        return t.strftime("%H:%M:%S")
+    except Exception:
+        return None
+
+
+APPT_SCOPES = {"upcoming", "past", "all"}
+
+# `appointment_date`/`appointment_time`/`id` are all real indexed columns. `id`
+# is the tiebreaker so two appointments at the same clock time cannot swap
+# places between pages (which would make a patient see one twice and skip one).
+APPT_ORDER = [("appointment_date", "desc"), ("appointment_time", "desc"), ("id", "desc")]
+
+# Upcoming lists want the *soonest* consult first, which is the reverse of the
+# default history ordering. `id` stays the tiebreaker in the same direction so
+# two appointments at one clock time cannot swap places between pages.
+APPT_ORDER_ASC = [("appointment_date", "asc"), ("appointment_time", "asc"), ("id", "asc")]
+
+# A page of history is never bigger than this, so one extra join query per page
+# is bounded regardless of how many appointments a patient has.
+APPT_PAGE_MAX = 100
+
+
+def _appt_scope_clause(scope: str) -> tuple:
+    """SQL range for an appointment window.
+
+    `appointment_date` + `appointment_time` are real indexed columns; the
+    Python-side `slot` string the old sort relied on is not, which is why the
+    listing had to load every matching row to sort it.
+    """
+    if scope == "upcoming":
+        # (date, time) >= now, compared as a single concatenated string so a
+        # boundary appointment is not split across the two comparisons.
+        return (
+            "CONCAT(IFNULL(`appointment_date`, '1000-01-01'), ' ', "
+            "IFNULL(`appointment_time`, '00:00:00')) >= %s",
+            [datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
+        )
+    if scope == "today":
+        # Indexed equality on the real date column.
+        return "`appointment_date` = %s", [datetime.now().strftime("%Y-%m-%d")]
+    if scope == "past":
+        return (
+            "CONCAT(IFNULL(`appointment_date`, '1000-01-01'), ' ', "
+            "IFNULL(`appointment_time`, '00:00:00')) < %s",
+            [datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
+        )
+    return "", []
+
+
+async def _enrich_appt_doctors(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Replace the booking-time `doctor_name` snapshot with the live record.
+
+    `appointments.doctor_id` points at `doctors.id`, and the doctor's name and
+    specialty live on `users.name` + `specializations.name`. The JSON blob kept
+    whatever the name was when the booking was made, so a patient saw stale
+    (and lower-cased) names like "sunil singh" forever. One bounded query per
+    page fixes it.
+    """
+    doc_ids = {str(r.get("doctor_id")) for r in rows if r.get("doctor_id") is not None}
+    if not doc_ids:
+        return rows
+    by_id: Dict[str, Dict[str, Any]] = {}
+    try:
+        if await _table_exists("doctors") and await _table_exists("users"):
+            qs = ",".join(["%s"] * len(doc_ids))
+            dr = await _sql_query(
+                # `doctors` has no `specialty` column - it is synthesised from
+                # specialization_id (or `system`) on the read side, so select
+                # the real columns only and let the specializations join fill it.
+                "SELECT d.id, d.user_id, d.system, d.specialization_id, "
+                "d.consultation_fee, u.name, u.image "
+                "FROM `doctors` d LEFT JOIN `users` u ON u.id = d.user_id "
+                "WHERE d.id IN (%s)" % qs,
+                list(doc_ids),
+            )
+            spec_ids = {str(r["specialization_id"]) for r in dr if r.get("specialization_id")}
+            spec_by_id: Dict[str, str] = {}
+            if spec_ids and await _table_exists("specializations"):
+                qs2 = ",".join(["%s"] * len(spec_ids))
+                srows = await _sql_query(
+                    "SELECT id, name FROM `specializations` WHERE id IN (%s)" % qs2,
+                    list(spec_ids),
+                )
+                spec_by_id = {str(r["id"]): r["name"] for r in srows}
+            by_id = {str(r["id"]): r for r in dr}
+        elif await _table_exists("users"):
+            # No doctors table: fall back to treating doctor_id as a users.id.
+            qs = ",".join(["%s"] * len(doc_ids))
+            ur = await _sql_query(
+                "SELECT id, name, image FROM `users` WHERE id IN (%s)" % qs,
+                list(doc_ids),
+            )
+            by_id = {str(r["id"]): r for r in ur}
+    except Exception as e:  # enrichment is cosmetic - never fail the listing
+        logger.warning(f"appointment doctor enrichment failed: {e}")
+        return rows
+
+    for r in rows:
+        d = by_id.get(str(r.get("doctor_id")))
+        if not d:
+            continue
+        name = d.get("name")
+        if name:
+            r["doctor_name"] = name
+        specialty = spec_by_id.get(str(d.get("specialization_id"))) or d.get("system")
+        if specialty:
+            r["doctor_specialty"] = specialty
+        if d.get("image"):
+            r["doctor_image"] = d["image"]
+        if d.get("consultation_fee") is not None and not r.get("amount"):
+            # Never overwrite a fee that was actually captured at booking time.
+            r["doctor_fee"] = d["consultation_fee"]
+    return rows
+
+
+async def _enrich_appt_people(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Attach live patient names, prescription state and real payment state.
+
+    Bounded to the rows on the current page (one query each for names,
+    prescriptions and payments), so a doctor's whole history is never pulled
+    just to render a list.
+
+    `patient_name` prefers the live `users.name`. The blob keeps whatever the
+    name was at booking time, which is stale and lower-cased for rows the
+    website created.
+    """
+    if not rows:
+        return rows
+
+    # Live patient names.
+    pids = {str(r.get("patient_id")) for r in rows if r.get("patient_id") is not None}
+    if pids and await _table_exists("users"):
+        try:
+            qs = ",".join(["%s"] * len(pids))
+            ur = await _sql_query(
+                "SELECT id, name FROM `users` WHERE id IN (%s)" % qs, list(pids))
+            for u in ur:
+                nm = u.get("name")
+                if not nm:
+                    continue
+                for r in rows:
+                    if str(r.get("patient_id")) == str(u["id"]):
+                        r["patient_name"] = nm
+        except Exception as e:  # cosmetic - keep the blob snapshot if it fails
+            logger.warning(f"appointment patient enrichment failed: {e}")
+
+    appt_ids = [str(r["id"]) for r in rows if r.get("id") is not None]
+    if not appt_ids:
+        return rows
+
+    # Prescription state comes from the real `prescriptions` table (indexed on
+    # appointment_id) rather than the blob's `prescription` string.
+    rx_ids: set = set()
+    if await _table_exists("prescriptions"):
+        try:
+            qs = ",".join(["%s"] * len(appt_ids))
+            pr = await _sql_query(
+                "SELECT DISTINCT appointment_id FROM `prescriptions` "
+                "WHERE appointment_id IN (%s)" % qs, list(appt_ids))
+            rx_ids = {str(x["appointment_id"]) for x in pr}
+        except Exception as e:
+            logger.warning(f"prescription lookup failed: {e}")
+
+    # Real captured amount per appointment, when a payment row exists.
+    paid_amt: Dict[str, int] = {}
+    if await _table_exists("payments"):
+        try:
+            qs = ",".join(["%s"] * len(appt_ids))
+            pr = await _sql_query(
+                "SELECT appointment_id, MAX(amount) AS amount FROM `payments` "
+                "WHERE appointment_id IN (%s) AND status IN ('captured','paid') "
+                "GROUP BY appointment_id" % qs, list(appt_ids))
+            # `payments.amount` is DECIMAL(10,2) - rupees. The app contract is
+            # paise, so scale on the way out.
+            for x in pr:
+                paid_amt[str(x["appointment_id"])] = int(
+                    round(_to_float(x.get("amount")) * 100))
+        except Exception as e:
+            logger.warning(f"appointment payment lookup failed: {e}")
+
+    for r in rows:
+        rid = str(r.get("id"))
+        r["has_prescription"] = rid in rx_ids or bool(r.get("prescription"))
+        if rid in paid_amt:
+            r["paid"] = True
+            r["amount_paise"] = paid_amt[rid]
+        else:
+            r["paid"] = bool(r.get("paid"))
+            amt = _to_int(r.get("amount"), 0)
+            r["amount_paise"] = amt or 0
+    return rows
+
+
 @api_router.get("/appointments")
-async def list_appointments(user: dict = Depends(current_user)):
+async def list_appointments(
+    page: Optional[int] = None,
+    limit: Optional[int] = None,
+    scope: str = "all",
+    status: Optional[str] = None,
+    user: dict = Depends(current_user),
+):
+    """Patient/doctor appointment history.
+
+    Without `page`/`limit` this keeps returning a plain array for older clients,
+    still capped at 200 rows (they have no way to ask for page 2). With them it
+    returns {items, total, page, limit, has_more} and is never truncated, which
+    is what the app uses - the previous implementation took the first 200 rows
+    of a `slot`-blob sort, so old bookings beyond that were unreachable.
+    """
     if user["role"] == "patient":
         q = {"patient_id": user["id"]}
     else:
         # For doctors, appointments store doctor_id = doctors.id (not users.id)
         _, doc_id = await _appt_actor_ids(user)
         if not doc_id:
-            return []
+            return [] if page is None else {"items": [], "total": 0, "page": 1, "limit": 20, "has_more": False}
         q = {"doctor_id": doc_id}
-    items = await db.appointments.find(q, {"_id": 0}).sort("slot", 1).to_list(200)
-    return items
+
+    extra_sql, extra_params = _appt_scope_clause(scope if scope in APPT_SCOPES else "all")
+    if status:
+        extra_sql = (extra_sql + " AND " if extra_sql else "") + "`status` = %s"
+        extra_params = extra_params + [status]
+
+    if page is None and limit is None:
+        rows, _ = await db.find_paged(
+            "appointments", q, limit=200, offset=0,
+            extra_where=extra_sql, extra_params=extra_params,
+            order_by=APPT_ORDER,
+        )
+        return await _enrich_appt_doctors(rows)
+
+    size = max(1, min(int(limit or 20), APPT_PAGE_MAX))
+    start = max(0, (int(page or 1) - 1) * size)
+    rows, total = await db.find_paged(
+        "appointments", q, limit=size, offset=start,
+        extra_where=extra_sql, extra_params=extra_params,
+        order_by=APPT_ORDER,
+    )
+    return {
+        "items": await _enrich_appt_doctors(rows),
+        "total": total,
+        "page": int(page or 1),
+        "limit": size,
+        "has_more": start + len(rows) < total,
+    }
+
 
 
 @api_router.post("/appointments/{appt_id}/pay", deprecated=True)
@@ -777,6 +1912,31 @@ async def add_prescription(appt_id: str, body: PrescriptionInput, user: dict = D
             )
         except Exception as e:
             logger.warning(f"rx push failed (non-blocking): {e}")
+    # Email the patient (non-blocking)
+    try:
+        pemail = await user_email(appt.get("patient_id"))
+        def _fmt(dt=None, tm=None):
+            parts = []
+            if dt:
+                try:
+                    parts.append(str(dt)[:10])
+                except Exception:
+                    pass
+            if tm:
+                try:
+                    parts.append(str(tm)[:5])
+                except Exception:
+                    pass
+            return " ".join(parts) or "the scheduled time"
+        when = _fmt(appt.get("appointment_date"), appt.get("appointment_time"))
+        send_prescription_email(
+            patient_email=pemail,
+            patient_name=appt.get("patient_name"),
+            doctor_name=user.get("name"),
+            when=when,
+        )
+    except Exception as e:
+        logger.warning(f"prescription email failed (non-blocking): {e}")
     return prescription
 
 
@@ -817,10 +1977,19 @@ async def prescription_pdf(appt_id: str, download: int = 0, user: dict = Depends
         doctor = await db.doctors.find_one({"id": appt["doctor_id"]}, _PUBLIC_DOCTOR_PROJECTION)
     patient = None
     if appt.get("patient_id"):
+        # `users` has no age/gender column - demographics live in
+        # `patient_profiles`. Querying them off `users` raised MySQL 1054 and
+        # took the whole PDF render down with it.
         patient = await db.users.find_one(
             {"id": appt["patient_id"]},
-            {"_id": 0, "id": 1, "name": 1, "age": 1, "gender": 1},
+            {"_id": 0, "id": 1, "name": 1},
         )
+        if patient:
+            prof = await db.patient_profiles.find_one(
+                {"user_id": appt["patient_id"]}, {"_id": 0, "age": 1, "gender": 1},
+            ) or {}
+            patient["age"] = prof.get("age")
+            patient["gender"] = prof.get("gender")
 
     try:
         from prescription_pdf import render_prescription_pdf
@@ -844,6 +2013,200 @@ async def prescription_pdf(appt_id: str, download: int = 0, user: dict = Depends
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+# ----------------- Appointment Status & Consultation Rooms -----------------
+class AppointmentStatusUpdate(BaseModel):
+    status: str  # pending|confirmed|completed|cancelled
+
+
+@api_router.put("/appointments/{appt_id}/status")
+async def update_appointment_status(
+    appt_id: str,
+    body: AppointmentStatusUpdate,
+    user: dict = Depends(current_user),
+):
+    appt = await db.appointments.find_one({"id": appt_id}, {"_id": 0})
+    if not appt:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+
+    _, doc_id = await _appt_actor_ids(user)
+    is_patient = appt.get("patient_id") == user["id"]
+    is_doctor = bool(doc_id and appt.get("doctor_id") == doc_id)
+    if not (is_doctor or is_patient or user.get("is_admin")):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    status = body.status.lower()
+    if status not in ("pending", "confirmed", "completed", "cancelled"):
+        raise HTTPException(status_code=400, detail="Invalid status")
+
+    await db.appointments.update_one({"id": appt_id}, {"$set": {"status": status}})
+
+    # Auto-create consultation room on confirm
+    if status == "confirmed":
+        exists = await db.consultation_rooms.find_one(
+            {"appointment_id": appt_id}, {"_id": 0, "id": 1}
+        )
+        if not exists:
+            room_id = f"consult_{uuid.uuid4().hex[:10]}"
+            # `consultation_rooms.id` is INT AUTO_INCREMENT, so let the column
+            # assign it rather than handing MySQL a uuid it would coerce to 0.
+            await db.consultation_rooms.insert_one(
+                {
+                    "appointment_id": appt_id,
+                    "room_id": room_id,
+                    "doctor_id": appt.get("doctor_id"),
+                    "patient_id": appt.get("patient_id"),
+                    "type": "both",
+                    "status": "active",
+                    "created_at": now_iso(),
+                }
+            )
+
+    # Transactional email: when an appointment is cancelled, notify both sides.
+    # Fire-and-forget so the request cannot fail due to mail configuration.
+    if status == "cancelled":
+        try:
+            _, doc_id_cancel = await _appt_actor_ids(user)
+            actor = "patient" if (appt.get("patient_id") == user["id"]) else (
+                "doctor" if (doc_id_cancel and appt.get("doctor_id") == doc_id_cancel) else "system"
+            )
+            pemail = await user_email(appt.get("patient_id"))
+            demail = await doctor_email(appt.get("doctor_id")) if appt.get("doctor_id") else None
+
+            def _fmt(dt=None, tm=None):
+                parts = []
+                if dt:
+                    try:
+                        parts.append(str(dt)[:10])
+                    except Exception:
+                        pass
+                if tm:
+                    try:
+                        parts.append(str(tm)[:5])
+                    except Exception:
+                        pass
+                return " ".join(parts) or "the scheduled time"
+
+            when = _fmt(appt.get("appointment_date"), appt.get("appointment_time"))
+            send_appointment_cancelled_emails(
+                patient_email=pemail,
+                patient_name=appt.get("patient_name"),
+                doctor_email=demail,
+                doctor_name=appt.get("doctor_name"),
+                when=when,
+                cancelled_by=actor,
+            )
+        except Exception as e:
+            logger.warning(f"appt cancel emails failed (non-blocking): {e}")
+
+    return {"ok": True, "status": status}
+
+
+@api_router.get("/consultation-rooms")
+async def list_consultation_rooms(user: dict = Depends(current_user)):
+    _, doc_id = await _appt_actor_ids(user)
+    q = {"$or": [{"patient_id": user["id"]}]}
+    if doc_id:
+        q["$or"].append({"doctor_id": doc_id})
+    rooms = (
+        await db.consultation_rooms.find(q, {"_id": 0})
+        .sort("created_at", -1)
+        .to_list(200)
+    )
+    return rooms
+
+
+@api_router.get("/consultation-rooms/{room_id}/messages")
+async def get_consultation_room_messages(room_id: str, user: dict = Depends(current_user)):
+    room = await db.consultation_rooms.find_one({"room_id": room_id}, {"_id": 0})
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    _, doc_id = await _appt_actor_ids(user)
+    if room.get("patient_id") != user["id"] and (
+        not doc_id or room.get("doctor_id") != doc_id
+    ):
+        raise HTTPException(status_code=403, detail="Not part of this room")
+
+    msgs = (
+        await db.messages.find({"room_id": room_id}, {"_id": 0})
+        .sort("created_at", 1)
+        .to_list(500)
+    )
+    return msgs
+
+
+class ConsultationMessageIn(BaseModel):
+    content: str = ""
+    message_type: Optional[str] = "text"
+    file_url: Optional[str] = None
+    file_name: Optional[str] = None
+    file_size: Optional[int] = None
+
+
+@api_router.post("/consultation-rooms/{room_id}/messages")
+async def send_consultation_room_message(
+    room_id: str, body: ConsultationMessageIn, user: dict = Depends(current_user)
+):
+    room = await db.consultation_rooms.find_one({"room_id": room_id}, {"_id": 0})
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    _, doc_id = await _appt_actor_ids(user)
+    if room.get("patient_id") != user["id"] and (
+        not doc_id or room.get("doctor_id") != doc_id
+    ):
+        raise HTTPException(status_code=403, detail="Not part of this room")
+
+    sender_role = "doctor" if (doc_id and room.get("doctor_id") == doc_id) else "patient"
+    msg = {
+        "room_id": room_id,
+        "sender_id": user["id"],
+        "sender_role": sender_role,
+        "message_type": body.message_type or "text",
+        "content": (body.content or "").strip(),
+        "file_url": body.file_url,
+        "file_name": body.file_name,
+        "file_size": body.file_size,
+        "is_read": False,
+        "read_at": None,
+        "created_at": now_iso(),
+    }
+    # `messages.id` is INT AUTO_INCREMENT; read back the real id.
+    res = await db.messages.insert_one(msg)
+    return {"ok": True, "id": res.inserted_id}
+
+
+@api_router.put("/consultation-rooms/{room_id}/messages/read")
+async def mark_consultation_messages_read(room_id: str, user: dict = Depends(current_user)):
+    room = await db.consultation_rooms.find_one({"room_id": room_id}, {"_id": 0})
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    _, doc_id = await _appt_actor_ids(user)
+    if room.get("patient_id") != user["id"] and (
+        not doc_id or room.get("doctor_id") != doc_id
+    ):
+        raise HTTPException(status_code=403, detail="Not part of this room")
+
+    await db.messages.update_many(
+        {"room_id": room_id, "sender_id": {"$ne": user["id"]}, "is_read": False},
+        {"$set": {"is_read": True, "read_at": now_iso()}},
+    )
+    return {"ok": True}
+
+
+@api_router.get("/video/history/{appointment_id}")
+async def video_history(appointment_id: str, user: dict = Depends(current_user)):
+    appt = await db.appointments.find_one({"id": appointment_id}, {"_id": 0})
+    if not appt:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+    if not await _is_appt_participant(user, appt):
+        raise HTTPException(status_code=403, detail="Not part of this appointment")
+    sessions = (
+        await db.video_sessions.find({"appointment_id": appointment_id}, {"_id": 0})
+        .sort("created_at", -1)
+        .to_list(200)
+    )
+    return sessions
 
 
 # ----------------- Daily.co Video Consultation -----------------
@@ -1159,8 +2522,24 @@ async def _resolve_server_price(purpose: str, reference_id: Optional[str], user:
             raise HTTPException(status_code=404, detail="Appointment not found or not yours")
         if appt.get("paid"):
             raise HTTPException(status_code=409, detail="Appointment already paid")
-        fee_rs = int(appt.get("amount") or 500)
-        return max(100, fee_rs * 100)
+        # Never invent a price. `amount` is captured from the doctor's real
+        # consultation_fee at booking time and is null when they have none on
+        # file. Falling back to a hardcoded figure here would take real money
+        # for a fee nobody quoted, so refuse instead.
+        fee_raw = appt.get("amount")
+        try:
+            fee_rs = float(fee_raw) if fee_raw is not None else 0.0
+        except (TypeError, ValueError):
+            fee_rs = 0.0
+        if fee_rs <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="This doctor has not set a consultation fee yet. "
+                       "Contact the clinic to book.",
+            )
+        # Round after scaling, never before: `int(499.50) * 100` would charge
+        # Rs 499.00 for a Rs 499.50 consultation and quietly keep the change.
+        return max(100, int(round(fee_rs * 100)))
     if purpose == "diet_plan":
         return _FIXED_PRICES_PAISE["diet_plan"]
     if purpose == "ai_yoga":
@@ -1360,6 +2739,40 @@ async def verify_payment(body: PaymentVerifyInput, user: dict = Depends(current_
         )
     except Exception as e:
         logger.warning(f"pay-verify push failed (non-blocking): {e}")
+
+    # Transactional emails after payment verified (non-blocking)
+    if purpose == "appointment" and ref_id:
+        try:
+            appt_paid = await db.appointments.find_one({"id": ref_id}, {"_id": 0})
+            if appt_paid:
+                pemail = await user_email(appt_paid.get("patient_id"))
+                demail = await doctor_email(appt_paid.get("doctor_id"))
+                def _fmt(dt=None, tm=None):
+                    parts = []
+                    if dt:
+                        try:
+                            parts.append(str(dt)[:10])
+                        except Exception:
+                            pass
+                    if tm:
+                        try:
+                            parts.append(str(tm)[:5])
+                        except Exception:
+                            pass
+                    return " ".join(parts) or "the scheduled time"
+                when = _fmt(appt_paid.get("appointment_date"), appt_paid.get("appointment_time"))
+                send_booking_paid_emails(
+                    patient_email=pemail,
+                    patient_name=appt_paid.get("patient_name"),
+                    doctor_email=demail,
+                    doctor_name=appt_paid.get("doctor_name"),
+                    when=when,
+                    amount_rs=amount_rs,
+                    mode=(appt_paid.get("type") or "online"),
+                    admin_emails=await admin_email_addresses(),
+                )
+        except Exception as e:
+            logger.warning(f"payment email notify failed (non-blocking): {e}")
 
     return {
         "success": True,
@@ -2424,6 +3837,16 @@ async def admin_approve_doctor(doctor_id: str, admin: dict = Depends(require_adm
             )
         except Exception as e:
             logger.warning(f"doc-approved push failed (non-blocking): {e}")
+    # Email the doctor (non-blocking)
+    try:
+        demail = await user_email(d.get("user_id"))
+        send_doctor_verified_email(
+            doctor_email=demail,
+            doctor_name=d.get("name"),
+            approved=True,
+        )
+    except Exception as e:
+        logger.warning(f"doc-approved email failed (non-blocking): {e}")
     return {"ok": True}
 
 
@@ -2434,6 +3857,16 @@ async def admin_reject_doctor(doctor_id: str, admin: dict = Depends(require_admi
         raise HTTPException(status_code=404, detail="Doctor not found")
     await db.doctors.update_one({"id": doctor_id}, {"$set": {"verified": False, "rejected_at": now_iso()}})
     await log_activity("admin_doctor_rejected", actor=admin, meta={"doctor_id": doctor_id})
+    # Email the doctor (non-blocking)
+    try:
+        demail = await user_email(d.get("user_id"))
+        send_doctor_verified_email(
+            doctor_email=demail,
+            doctor_name=d.get("name"),
+            approved=False,
+        )
+    except Exception as e:
+        logger.warning(f"doc-rejected email failed (non-blocking): {e}")
     return {"ok": True}
 
 
@@ -3160,16 +4593,44 @@ class DoctorOnboardInput(BaseModel):
 
 
 class DoctorProfileUpdate(BaseModel):
-    """Fields a doctor is allowed to edit after onboarding."""
-    specialty: Optional[str] = Field(None, max_length=100)
-    qualification: Optional[str] = Field(None, max_length=200)
-    experience_years: Optional[int] = Field(None, ge=0, le=80)
-    languages: Optional[List[str]] = None
-    consultation_fee: Optional[int] = Field(None, ge=0, le=100000)
-    bio: Optional[str] = Field(None, max_length=1000)
+    """Every field the website's "dashboard/profile" form can write, plus the
+    app-only extras it already had.
+
+    The website is a plain MySQL client: it reads `users.name/phone/image` and
+    the real `doctors` columns (about, city, gender, system, specialization_id,
+    experience, languages, is_available_online/offline, ...). Those are what the
+    public profile renders, so the app must write the very same columns or a
+    doctor editing in the app would see no change on the site.
+    """
+    # --- users table (identity + photo) ---
+    name: Optional[str] = Field(None, max_length=120)
+    phone: Optional[str] = Field(None, max_length=25)
+    image: Optional[str] = Field(None, max_length=2000)
+    avatar_base64: Optional[str] = Field(None, max_length=4_000_000)
+
+    # --- doctors table (the website's real columns) ---
+    about: Optional[str] = Field(None, max_length=4000)
+    bio: Optional[str] = Field(None, max_length=4000)
+    qualification: Optional[str] = Field(None, max_length=500)
+    experience: Optional[int] = Field(None, ge=0, le=80)
+    consultation_fee: Optional[float] = Field(None, ge=0, le=1000000)
+    languages: Optional[Any] = None  # list[str] or "Hindi, English"
+    city: Optional[str] = Field(None, max_length=100)
+    gender: Optional[Literal["male", "female"]] = None
+    system: Optional[str] = Field(None, max_length=50)
+    specialization_id: Optional[int] = None
+    specializations: Optional[List[int]] = None
+    is_available_online: Optional[bool] = None
+    is_available_offline: Optional[bool] = None
+
+    # --- legacy app aliases, still accepted so older app builds keep working ---
+    specialty: Optional[str] = Field(None, max_length=100)      # -> doctors.system
+    experience_years: Optional[int] = Field(None, ge=0, le=80)  # -> doctors.experience
+
+    # --- app-only fields (no website column; kept in the data blob) ---
     clinic_name: Optional[str] = Field(None, max_length=200)
     clinic_address: Optional[str] = Field(None, max_length=500)
-    avatar_base64: Optional[str] = Field(None, max_length=4_000_000)
+    registration_number: Optional[str] = Field(None, max_length=100)
 
 
 # ── Doctor Availability (calendar / schedule) ────────────────────────────
@@ -3184,12 +4645,197 @@ class DoctorAvailabilityInput(BaseModel):
     notes: Optional[str] = Field(None, max_length=300)
 
 
+@api_router.get("/specializations")
+async def list_specializations():
+    """Taxonomy for the doctor profile editor.
+
+    Mirrors the website's public `GET /specializations`
+    (OnlineVaidhyaJi.com/backend/routes/public.js) so both surfaces offer the
+    same choices. `systems` is the website's "Type of Medicine" list.
+    """
+    try:
+        rows = await _sql_query(
+            "SELECT id, name, icon, description FROM `specializations` ORDER BY name")
+    except Exception:
+        rows = []
+    return {"specializations": rows, "systems": list(DOCTOR_SYSTEMS)}
+
+
+@api_router.get("/cities")
+async def list_cities():
+    """Mirrors the website's public `GET /cities`."""
+    try:
+        rows = await _sql_query("SELECT id, name, state FROM `cities` ORDER BY name")
+    except Exception:
+        rows = []
+    return {"cities": rows}
+
+
+# ---- Doctor self-service profile -------------------------------------------
+# The website is the source of truth for doctor profiles: it reads and writes
+# plain MySQL columns. The app used to keep its own copy inside the `data`
+# blob (experience_years, specialty, avatar_url), so a doctor editing their
+# profile in the app changed nothing on the site. Everything below writes the
+# real columns instead, and mirrors the website's slug rules.
+
+# The exact system list the website offers in its profile form.
+DOCTOR_SYSTEMS = [
+    "ayurveda", "yoga", "naturopathy", "unani", "siddha",
+    "homeopathy", "retreat-hills", "dietician", "therapist",
+]
+
+# Columns a doctor must never set for themselves (is_approved, rating, ...) are
+# simply absent from DoctorProfileUpdate, so Pydantic drops them on input.
+
+
+def _slugify_doctor(name: Optional[str], specialization: Optional[str]) -> str:
+    """Mirror of the website's generateDoctorSlug (backend/utils/slug.js)."""
+    raw = f"{name or ''} {specialization or ''}".lower()
+    raw = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
+    if raw.startswith("dr-"):
+        raw = raw[3:]
+    if raw == "dr":
+        raw = ""
+    # The website ends with `return `dr-${raw}``, so an empty `raw` still yields
+    # the literal 'dr-' (JS template literals do not drop a trailing separator).
+    # Returning bare 'dr' here made the app and website disagree on every
+    # doctor whose name reduces to nothing after normalisation.
+    return f"dr-{raw}"
+
+
+async def _unique_doctor_slug(name: Optional[str], spec: Optional[str], doctor_id: Any) -> str:
+    """Website behaviour: on a slug clash, suffix with the doctor id."""
+    base = _slugify_doctor(name, spec)
+    rows = await _sql_query(
+        "SELECT id FROM `doctors` WHERE slug = %s AND id <> %s", [base, doctor_id])
+    return f"{base}-{doctor_id}" if rows else base
+
+
+def _normalize_lang_csv(raw: Any) -> Optional[str]:
+    """`doctors.languages` is a comma-separated varchar; accept list or string."""
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        parts = [p.strip() for p in raw.split(",")]
+    else:
+        parts = [str(p).strip() for p in raw]
+    seen, out = set(), []
+    for p in parts:
+        if p and p.lower() not in seen:
+            seen.add(p.lower())
+            out.append(p)
+    return ", ".join(out)
+
+
+async def _load_own_doctor_profile(user: dict) -> Optional[Dict[str, Any]]:
+    """The signed-in doctor's own record: every real column, nothing private.
+
+    Used by GET /doctor/me and echoed back by PUT /doctor/profile so the app
+    always shows exactly what the website stores.
+    """
+    try:
+        await _columns("doctors")
+    except Exception:
+        pass
+    doc = await db.doctors.find_one({"user_id": user["id"]})
+    if not doc:
+        return None
+    did = doc["id"]
+
+    specs: List[Dict[str, Any]] = []
+    try:
+        specs = [
+            {"id": r.get("id"), "name": r.get("name"), "icon": r.get("icon")}
+            for r in await _sql_query(
+                "SELECT s.id, s.name, s.icon FROM `doctor_specializations` ds "
+                "JOIN `specializations` s ON s.id = ds.specialization_id "
+                "WHERE ds.doctor_id = %s ORDER BY s.name", [did])
+        ]
+    except Exception:
+        specs = []
+
+    status, last_seen = "offline", None
+    try:
+        r = await _sql_query(
+            "SELECT status, last_seen FROM `doctor_status` WHERE doctor_id = %s", [did])
+        if r:
+            status = r[0].get("status") or "offline"
+            last_seen = r[0].get("last_seen")
+    except Exception:
+        pass
+
+    specialty = doc.get("specialty")
+    try:
+        if doc.get("specialization_id"):
+            r = await _sql_query(
+                "SELECT name FROM `specializations` WHERE id = %s", [doc["specialization_id"]])
+            if r:
+                specialty = r[0].get("name")
+    except Exception:
+        pass
+
+    online = bool(_to_int(doc.get("is_available_online"), 0))
+    offline = bool(_to_int(doc.get("is_available_offline"), 0))
+    experience = _to_int(doc.get("experience"), 0) or 0
+    fee = _to_float(doc.get("consultation_fee"))
+
+    return {
+        "id": str(did),
+        "user_id": str(doc.get("user_id")),
+        "slug": doc.get("slug"),
+        # identity lives on `users`
+        "name": doc.get("name") or user.get("name"),
+        "email": doc.get("email") or user.get("email"),
+        "phone": doc.get("phone") or user.get("phone"),
+        "image": doc.get("image") or doc.get("avatar_url"),
+        "avatar_url": doc.get("avatar_url") or doc.get("image"),
+        # professional columns
+        "specialization_id": _to_int(doc.get("specialization_id")),
+        "specialty": specialty,
+        "specializations": specs,
+        "system": doc.get("system"),
+        "gender": doc.get("gender"),
+        "qualification": doc.get("qualification"),
+        "experience": experience,
+        "experience_years": experience,
+        "consultation_fee": fee,
+        "about": doc.get("about"),
+        "bio": doc.get("bio"),
+        "languages": _normalize_lang_csv(doc.get("languages")),
+        "city": doc.get("city"),
+        "is_available_online": online,
+        "is_available_offline": offline,
+        "consultation_mode": (
+            "both" if (online and offline) else ("online" if online else ("offline" if offline else "none"))
+        ),
+        # admin-owned / read-only state
+        "is_approved": bool(_to_int(doc.get("is_approved"), 0)),
+        "verified": bool(_to_int(doc.get("verified"), 0)) or bool(_to_int(doc.get("is_approved"), 0)),
+        "is_restricted": bool(_to_int(doc.get("is_restricted"), 0)),
+        "restriction_reason": doc.get("restriction_reason"),
+        "rating": _to_float(doc.get("rating"), 0.0),
+        "review_count": _to_int(doc.get("review_count"), 0) or 0,
+        "status": status,
+        "last_seen": last_seen,
+        # app-only extras (no website column)
+        "clinic_name": doc.get("clinic_name"),
+        "clinic_address": doc.get("clinic_address"),
+        "registration_number": doc.get("registration_number"),
+        "onboarded_at": doc.get("onboarded_at"),
+        "documents_uploaded": doc.get("documents_uploaded"),
+        "created_at": doc.get("created_at"),
+        "updated_at": doc.get("updated_at"),
+    }
+
+
 @api_router.get("/doctor/me")
 async def doctor_me(user: dict = Depends(current_user)):
     if user["role"] != "doctor":
         raise HTTPException(status_code=403, detail="Doctors only")
-    d = await db.doctors.find_one({"user_id": user["id"]}, {"_id": 0})
-    return d or {}
+    profile = await _load_own_doctor_profile(user)
+    if not profile:
+        raise HTTPException(status_code=404, detail="No doctor profile found for this account")
+    return profile
 
 
 @api_router.put("/doctor/onboard")
@@ -3206,27 +4852,178 @@ async def doctor_onboard(body: DoctorOnboardInput, user: dict = Depends(current_
     r = await db.doctors.update_one({"user_id": user["id"]}, {"$set": upd}, upsert=True)
     d = await db.doctors.find_one({"user_id": user["id"]}, {"_id": 0})
     await log_activity("doctor_onboarded", actor=user, meta={"specialty": body.specialty})
+    # Email the doctor and notify admins (non-blocking) — matches website
+    try:
+        demail = await user_email(user.get("id"))
+        send_doctor_submitted_emails(
+            doctor_email=demail,
+            doctor_name=d.get("name") if d else user.get("name"),
+            admin_emails=await admin_email_addresses(),
+        )
+    except Exception as e:
+        logger.warning(f"doctor onboard emails failed (non-blocking): {e}")
     return d
 
 
 @api_router.put("/doctor/profile")
 async def doctor_update_profile(body: DoctorProfileUpdate, user: dict = Depends(current_user)):
-    """Doctor edits their own profile (bio, fee, avatar, etc.) after onboarding."""
+    """Doctor edits their own profile.
+
+    Writes the same MySQL columns the website writes, so the public profile,
+    the doctor list and the booking flow all reflect the change immediately.
+    Previously this only wrote app-internal keys (experience_years, specialty,
+    avatar_url) into the `data` blob and refused to run at all unless the
+    doctor had completed app onboarding - so a website-registered doctor could
+    not edit their profile from the app, and their edits never reached the site.
+    """
     if user["role"] != "doctor":
         raise HTTPException(status_code=403, detail="Doctors only")
-    upd = {k: v for k, v in body.dict().items() if v is not None}
-    avatar_b64 = upd.pop("avatar_base64", None)
-    if avatar_b64:
-        upd["avatar_url"] = avatar_b64 if avatar_b64.startswith("data:") else f"data:image/jpeg;base64,{avatar_b64}"
-    if not upd:
+
+    current = await db.doctors.find_one({"user_id": user["id"]})
+    if not current:
+        raise HTTPException(status_code=404, detail="No doctor profile found for this account")
+    did = current["id"]
+
+    doc_set: Dict[str, Any] = {}     # real `doctors` columns
+    user_set: Dict[str, Any] = {}    # real `users` columns
+    blob_set: Dict[str, Any] = {}    # app-only fields, no website column exists
+
+    # ---- users: name / phone / photo --------------------------------------
+    if body.name is not None:
+        nm = body.name.strip()
+        if not nm:
+            raise HTTPException(status_code=400, detail="Name cannot be empty")
+        user_set["name"] = nm
+        blob_set["name"] = nm
+
+    if body.phone is not None:
+        digits = re.sub(r"\D", "", body.phone)
+        if digits and not (10 <= len(digits) <= 15):
+            raise HTTPException(status_code=400, detail="Enter a valid phone number (10-15 digits)")
+        if digits:
+            # Compare digit-normalised values, not the raw strings: existing rows
+            # store phones as '+919999999999', '98765 43210', etc., so an exact
+            # `phone = %s` match misses them and lets a second account take the
+            # same number despite the UNIQUE index (which only sees the string).
+            clash = await _sql_query(
+                "SELECT id FROM `users` WHERE REGEXP_REPLACE(phone, '[^0-9]', '') = %s "
+                "AND id <> %s", [digits, user["id"]])
+            if clash:
+                raise HTTPException(status_code=409, detail="That phone number is already registered")
+            user_set["phone"] = digits
+            blob_set["phone"] = digits
+
+    photo: Optional[str] = None
+    if body.avatar_base64:
+        photo = (body.avatar_base64 if body.avatar_base64.startswith("data:")
+                 else f"data:image/jpeg;base64,{body.avatar_base64}")
+    elif body.image:
+        photo = body.image.strip() or None
+    if photo:
+        # The website reads users.image; the app renders avatar_url. Write both
+        # so the photo cannot drift between the two surfaces.
+        user_set["image"] = photo
+        blob_set["avatar_url"] = photo
+
+    # ---- doctors: the website's real columns ------------------------------
+    for col in ("about", "bio", "qualification", "city"):
+        val = getattr(body, col)
+        if val is not None:
+            doc_set[col] = val.strip() or None
+
+    if body.experience is not None:
+        doc_set["experience"] = body.experience
+    elif body.experience_years is not None:      # legacy alias
+        doc_set["experience"] = body.experience_years
+
+    if body.consultation_fee is not None:
+        doc_set["consultation_fee"] = body.consultation_fee
+
+    if body.gender is not None:
+        doc_set["gender"] = body.gender
+
+    if body.languages is not None:
+        doc_set["languages"] = _normalize_lang_csv(body.languages)
+
+    if body.is_available_online is not None:
+        doc_set["is_available_online"] = 1 if body.is_available_online else 0
+    if body.is_available_offline is not None:
+        doc_set["is_available_offline"] = 1 if body.is_available_offline else 0
+
+    # system: the website's "Type of Medicine". `specialty` is the legacy alias.
+    system = body.system or body.specialty
+    if system:
+        sys_slug = re.sub(r"[^a-z0-9\-]+", "-", system.strip().lower()).strip("-")
+        if not sys_slug:
+            raise HTTPException(status_code=400, detail="Invalid type of medicine")
+        doc_set["system"] = sys_slug
+
+    if body.specialization_id is not None:
+        found = await _sql_query(
+            "SELECT id FROM `specializations` WHERE id = %s", [body.specialization_id])
+        if not found:
+            raise HTTPException(status_code=400, detail="That specialization does not exist")
+        doc_set["specialization_id"] = body.specialization_id
+
+    # ---- doctors: app-only extras (kept in the blob) ----------------------
+    for col in ("clinic_name", "clinic_address", "registration_number"):
+        val = getattr(body, col)
+        if val is not None:
+            blob_set[col] = val.strip() or None
+
+    if not doc_set and not user_set and not blob_set and body.specializations is None:
         raise HTTPException(status_code=400, detail="No fields to update")
-    upd["updated_at"] = now_iso()
-    d = await db.doctors.find_one({"user_id": user["id"]})
-    if not d or not d.get("onboarded_at"):
-        raise HTTPException(status_code=404, detail="Complete onboarding first")
-    await db.doctors.update_one({"user_id": user["id"]}, {"$set": upd})
-    d = await db.doctors.find_one({"user_id": user["id"]}, {"_id": 0})
-    return d
+
+    # ---- multi-valued specializations -------------------------------------
+    if body.specializations is not None:
+        ids = sorted({int(i) for i in body.specializations})
+        if ids:
+            qs = ",".join(["%s"] * len(ids))
+            found = await _sql_query(
+                f"SELECT id FROM `specializations` WHERE id IN ({qs})", ids)
+            if len(found) != len(ids):
+                raise HTTPException(status_code=400, detail="Unknown specialization in selection")
+        await _sql_query("DELETE FROM `doctor_specializations` WHERE doctor_id = %s", [did])
+        for sid in ids:
+            await _sql_query(
+                "INSERT INTO `doctor_specializations` (doctor_id, specialization_id) VALUES (%s, %s)",
+                [did, sid])
+        # The website's public profile keys off the single `specialization_id`.
+        # If the doctor picked specialities but has no primary yet, adopt the
+        # first one so the profile renders a specialization instead of nothing.
+        if ids and not current.get("specialization_id"):
+            doc_set["specialization_id"] = ids[0]
+
+    # ---- slug follows the name, exactly like the website ------------------
+    new_name = user_set.get("name") or current.get("name") or user.get("name")
+    spec_name = None
+    if body.specialization_id is not None:
+        spec_name = None
+    elif current.get("specialization_id"):
+        r = await _sql_query(
+            "SELECT name FROM `specializations` WHERE id = %s", [current["specialization_id"]])
+        spec_name = r[0].get("name") if r else None
+    if new_name and new_name != current.get("name"):
+        doc_set["slug"] = await _unique_doctor_slug(new_name, spec_name, did)
+
+    # ---- write -------------------------------------------------------------
+    stamp = now_iso()
+    if doc_set:
+        doc_set["updated_at"] = stamp
+        await db.doctors.update_one({"user_id": user["id"]}, {"$set": doc_set})
+    if blob_set:
+        await db.doctors.update_one({"user_id": user["id"]}, {"$set": blob_set})
+    if user_set:
+        # `users.updated_at` is a real DATETIME column: now_iso() is tz-aware
+        # ISO-8601 and MySQL rejects the trailing offset, so send a naive value.
+        user_set["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        await _sql_query(
+            "UPDATE `users` SET " + ", ".join(f"`{c}` = %s" for c in user_set) + " WHERE id = %s",
+            list(user_set.values()) + [user["id"]])
+
+    await log_activity("doctor_profile_updated", actor=user,
+                       meta={"fields": sorted(set(doc_set) | set(user_set))})
+    return await _load_own_doctor_profile({**user, **(user_set or {})})
 
 
 @api_router.get("/doctor/availability")
@@ -3294,37 +5091,151 @@ async def doctor_set_availability(body: DoctorAvailabilityInput, user: dict = De
 
 
 @api_router.get("/doctor/my-appointments")
-async def doctor_my_appointments(user: dict = Depends(current_user)):
+async def doctor_my_appointments(
+    scope: str = Query("all"),
+    status: str = Query(""),
+    order: str = Query(""),
+    page: int = Query(1, ge=1),
+    limit: int = Query(APPT_PAGE_MAX, ge=1, le=APPT_PAGE_MAX),
+    user: dict = Depends(current_user),
+):
+    """A doctor's own appointment queue, paged on the real indexed columns.
+
+    This used to be `db.appointments.find(...).sort("slot", 1).to_list(500)`,
+    which was wrong in two independent ways:
+
+    1. `Cursor.sort()` sorts in Python (msdb.py), so MySQL had no ORDER BY to
+       satisfy - every matching row was loaded and sorted inside the request
+       before the 500 cap was applied. A doctor re-downloaded their entire
+       history each time the screen opened.
+    2. `slot` is a `data`-blob field with no index, and for rows the website
+       created it is a placeholder. Ordering by it was meaningless, and it is
+       not a date column the app should parse.
+
+    Ordering and filtering now run in MySQL on `appointment_date`,
+    `appointment_time` and `id`, so paging actually reaches older
+    consultations instead of stopping at an arbitrary 500.
+    """
     if user["role"] != "doctor":
         raise HTTPException(status_code=403, detail="Doctors only")
-    # Find the doctor record for this user, then their appointments
+    # Clamp here as well as in the Query() declaration: FastAPI only enforces
+    # `le` for HTTP callers, and this function is also called directly.
+    limit = max(1, min(int(limit), APPT_PAGE_MAX))
+    page = max(1, int(page))
+    did = None
     d = await db.doctors.find_one({"user_id": user["id"]})
-    if not d:
-        return []
-    items = await db.appointments.find({"doctor_id": d["id"]}, {"_id": 0}).sort("slot", 1).to_list(500)
-    return items
+    if d:
+        did = _to_int(d.get("id"), 0)
+    if not did:
+        return {"items": [], "total": 0, "page": page, "limit": limit, "has_more": False}
+
+    extra_where, extra_params = "", []
+    if scope in ("upcoming", "past", "today"):
+        w, p = _appt_scope_clause(scope)
+        if w:
+            extra_where, extra_params = w, p
+    if status:
+        # `status` is a real enum column, so this stays indexable.
+        extra_where = (extra_where + " AND " if extra_where else "") + "`status` = %s"
+        extra_params = list(extra_params) + [status]
+
+    # Default to soonest-first for upcoming lists, newest-first for history.
+    want_asc = order.lower() == "asc" or (not order and scope == "upcoming")
+    items, total = await db.find_paged(
+        "appointments",
+        {"doctor_id": did},
+        order_by=APPT_ORDER_ASC if want_asc else APPT_ORDER,
+        limit=limit,
+        offset=(page - 1) * limit,
+        extra_where=extra_where,
+        extra_params=extra_params,
+    )
+    await _enrich_appt_people(items)
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "has_more": page * limit < total,
+    }
 
 
 @api_router.get("/doctor/my-patients")
-async def doctor_my_patients(user: dict = Depends(current_user)):
+async def doctor_my_patients(
+    page: int = Query(1, ge=1),
+    limit: int = Query(APPT_PAGE_MAX, ge=1, le=APPT_PAGE_MAX),
+    user: dict = Depends(current_user),
+):
+    """Unique patients this doctor has actually treated, grouped in SQL.
+
+    Was `db.appointments.find(...).to_list(1000)` followed by a Python dedupe.
+    That loaded up to 1000 appointment rows into the request, so a patient whose
+    visits fell outside the newest 1000 rows vanished from the doctor's list
+    entirely, and it read `a["patient_name"]` / `a["slot"]` straight out of the
+    JSON blob with no default, raising KeyError on any website-created row.
+
+    The grouping is now a real `GROUP BY patient_id`, and `last_visit` is
+    derived from the indexed date/time columns concatenated into one sortable
+    value (taking MAX(date) and MAX(time) separately would mix two different
+    appointments).
+    """
     if user["role"] != "doctor":
         raise HTTPException(status_code=403, detail="Doctors only")
     d = await db.doctors.find_one({"user_id": user["id"]})
-    if not d:
-        return []
-    ap = await db.appointments.find({"doctor_id": d["id"]}, {"_id": 0}).to_list(1000)
-    # dedupe by patient_id
-    seen: dict = {}
-    for a in ap:
-        pid = a["patient_id"]
-        rec = seen.get(pid) or {"patient_id": pid, "patient_name": a["patient_name"], "visits": 0, "last_visit": None, "has_rx": False}
-        rec["visits"] += 1
-        if not rec["last_visit"] or a["slot"] > rec["last_visit"]:
-            rec["last_visit"] = a["slot"]
-        if a.get("prescription"):
-            rec["has_rx"] = True
-        seen[pid] = rec
-    return list(seen.values())
+    did = _to_int(d.get("id"), 0) if d else 0
+    empty = {"items": [], "total": 0, "page": page, "limit": limit, "has_more": False}
+    if not did or not await _table_exists("appointments"):
+        return empty
+
+    # `rx` is de-duplicated in a subquery first, otherwise a patient with two
+    # prescriptions for one visit would inflate their visit count.
+    rx_sub = (
+        "(SELECT DISTINCT appointment_id FROM `prescriptions`)"
+        if await _table_exists("prescriptions")
+        else "(SELECT CAST(NULL AS SIGNED) AS appointment_id WHERE 1=0)"
+    )
+    join_rx = "LEFT JOIN %s rx ON rx.appointment_id = a.id" % rx_sub if rx_sub else ""
+
+    rows = await _sql_query(
+        "SELECT a.patient_id AS pid, COUNT(DISTINCT a.id) AS visits, "
+        "MAX(CONCAT(IFNULL(a.appointment_date,'1000-01-01'),' ',"
+        "IFNULL(a.appointment_time,'00:00:00'))) AS last_visit, "
+        "MAX(CASE WHEN rx.appointment_id IS NOT NULL THEN 1 ELSE 0 END) AS has_rx "
+        "FROM `appointments` a " + join_rx + " "
+        "WHERE a.doctor_id = %s GROUP BY a.patient_id "
+        "ORDER BY last_visit DESC, pid DESC LIMIT %s OFFSET %s",
+        [did, int(limit), (page - 1) * limit])
+    total_row = await _sql_query(
+        "SELECT COUNT(DISTINCT patient_id) AS n FROM `appointments` "
+        "WHERE doctor_id = %s", [did])
+    total = int((total_row or [{"n": 0}])[0].get("n") or 0)
+
+    pids = [str(r.get("pid")) for r in rows if r.get("pid") is not None]
+    names: Dict[str, str] = {}
+    if pids and await _table_exists("users"):
+        qs = ",".join(["%s"] * len(pids))
+        ur = await _sql_query(
+            "SELECT id, name FROM `users` WHERE id IN (%s)" % qs, pids)
+        names = {str(u["id"]): u["name"] for u in ur if u.get("name")}
+
+    items = [
+        {
+            "patient_id": str(r.get("pid")),
+            # Live name, not the booking-time snapshot.
+            "patient_name": names.get(str(r.get("pid"))) or "Patient",
+            "total_visits": _to_int(r.get("visits"), 0),
+            "last_visit": r.get("last_visit"),
+            "has_rx": bool(_to_int(r.get("has_rx"), 0)),
+        }
+        for r in rows
+    ]
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "has_more": page * limit < total,
+    }
 
 
 @api_router.get("/doctor/patients/{patient_id}/history")
@@ -3388,100 +5299,130 @@ async def doctor_patient_history(patient_id: str, user: dict = Depends(current_u
 async def doctor_earnings(user: dict = Depends(current_user)):
     """Earnings summary for the currently logged-in doctor.
 
-    Aggregates from `payments` (source of truth for money) joined with
-    `appointments` on `reference_id`. All amounts are returned in paise.
+    Aggregates from `payments` (source of truth for money) joined to
+    `appointments` on the real `appointment_id` foreign key. All amounts are
+    returned in paise, which is the existing response contract.
+
+    This used to load up to 2000 appointments filtered on the blob `paid` flag
+    and then up to 2000 payments filtered on the blob `reference_id`/`purpose`,
+    summing them in Python. Neither filter names an indexed column, so MySQL
+    could not help, every screen open paid for the full scan, and any payment
+    past the 2000th silently disappeared from `total_paise` - the headline
+    number was quietly wrong for an established doctor. The same sum is now a
+    grouped query MySQL can serve from `idx_patient` on `payments`.
     """
     if user["role"] != "doctor":
         raise HTTPException(status_code=403, detail="Doctors only")
+
+    def _iso(v: Any) -> Optional[str]:
+        if v is None:
+            return None
+        if hasattr(v, "isoformat"):
+            return v.isoformat()
+        return str(v)
+
+    # The chart maps over `daily`, so it is always a dense 30-bucket list - even
+    # for a brand-new doctor with no payments, otherwise the trend graph silently
+    # renders empty instead of showing a flat zero line.
+    start_of_trend = datetime.now().date() - timedelta(days=29)
+    daily_skeleton = [
+        (start_of_trend + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(30)
+    ]
+
+    def _zero() -> Dict[str, Any]:
+        return {
+            "total_paise": 0,
+            "month_paise": 0,
+            "week_paise": 0,
+            "today_paise": 0,
+            "consultations": 0,
+            "daily": [{"date": k, "amount_paise": 0} for k in daily_skeleton],
+            "recent": [],
+        }
+
     d = await db.doctors.find_one({"user_id": user["id"]})
-    if not d:
-        return {
-            "total_paise": 0,
-            "month_paise": 0,
-            "week_paise": 0,
-            "today_paise": 0,
-            "consultations": 0,
-            "daily": [],
-            "recent": [],
-        }
+    did = _to_int(d.get("id"), 0) if d else 0
+    if not did or not (await _table_exists("payments") and await _table_exists("appointments")):
+        return _zero()
 
-    # Set of appointment ids that belong to this doctor
-    appts_cursor = db.appointments.find(
-        {"doctor_id": d["id"], "paid": True},
-        {"_id": 0, "id": 1, "patient_name": 1, "slot": 1, "paid_at": 1},
+    # `payments.status` is a real enum('pending','captured','failed','refunded').
+    # Older app writes stored 'paid', so accept both rather than dropping money.
+    # `payments.amount` is DECIMAL(10,2) (rupees); the app contract is paise, so
+    # scale on the way out.
+    join = (
+        "FROM `payments` p "
+        "JOIN `appointments` a ON a.id = p.appointment_id "
+        "WHERE a.doctor_id = %s AND p.status IN ('captured','paid')"
     )
-    appts = await appts_cursor.to_list(2000)
-    if not appts:
-        return {
-            "total_paise": 0,
-            "month_paise": 0,
-            "week_paise": 0,
-            "today_paise": 0,
-            "consultations": 0,
-            "daily": [],
-            "recent": [],
-        }
-    appt_index = {a["id"]: a for a in appts}
-    appt_ids = list(appt_index.keys())
+    paise = "CAST(COALESCE(p.amount,0) * 100 AS SIGNED)"
 
-    pays = await db.payments.find(
-        {"reference_id": {"$in": appt_ids}, "purpose": "appointment", "status": "paid"},
-        {"_id": 0},
-    ).sort("verified_at", -1).to_list(2000)
+    tot = await _sql_query(
+        "SELECT COALESCE(SUM(%s),0) AS total_amt, COUNT(*) AS n, "
+        "COALESCE(SUM(CASE WHEN p.created_at >= CURDATE() THEN %s ELSE 0 END),0) AS today_amt, "
+        "COALESCE(SUM(CASE WHEN p.created_at >= DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY) "
+        "THEN %s ELSE 0 END),0) AS week_amt, "
+        "COALESCE(SUM(CASE WHEN p.created_at >= DATE_SUB(CURDATE(), INTERVAL DAYOFMONTH(CURDATE())-1 DAY) "
+        "THEN %s ELSE 0 END),0) AS month_amt " % (paise, paise, paise, paise) + join,
+        [did])
+    t = (tot or [{}])[0]
 
-    now = datetime.now(timezone.utc)
-    start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    start_of_week = start_of_today - timedelta(days=start_of_today.weekday())
-    start_of_month = start_of_today.replace(day=1)
-    start_of_trend = start_of_today - timedelta(days=29)  # 30-day trend
+    # Dense 30-day trend, zero-filled in Python so the chart always has 30 bars.
+    trend = await _sql_query(
+        "SELECT DATE(p.created_at) AS d, COALESCE(SUM(%s),0) AS amt " % paise + join +
+        " AND p.created_at >= DATE_SUB(CURDATE(), INTERVAL 29 DAY) "
+        "GROUP BY DATE(p.created_at)", [did])
+    daily_map: Dict[str, int] = {}
+    for r in trend or []:
+        key = r.get("d")
+        if key is None:
+            continue
+        key = key.strftime("%Y-%m-%d") if hasattr(key, "strftime") else str(key)[:10]
+        daily_map[key] = _to_int(r.get("amt"), 0)
 
-    total = month = week = today = 0
-    daily_map: dict = {}
+    daily = [{"date": k, "amount_paise": daily_map.get(k, 0)} for k in daily_skeleton]
+
+    # Bounded: only the newest 20 payouts need to be itemised. `total_paise`
+    # above is computed over every captured payment, not over this page.
+    rec = await _sql_query(
+        "SELECT p.razorpay_payment_id AS rpid, %s AS amt, p.created_at AS created_at, "
+        "a.id AS aid, a.patient_id AS pid, "
+        "a.appointment_date AS adate, a.appointment_time AS atime "
+        % paise + join +
+        " ORDER BY p.created_at DESC, p.id DESC LIMIT 20", [did])
     recent: list = []
-    for p in pays:
-        amt = int(p.get("amount", 0))
-        total += amt
-        ts_raw = p.get("verified_at") or p.get("created_at")
-        try:
-            ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00")) if ts_raw else None
-        except Exception:
-            ts = None
-        if ts:
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
-            if ts >= start_of_today:
-                today += amt
-            if ts >= start_of_week:
-                week += amt
-            if ts >= start_of_month:
-                month += amt
-            if ts >= start_of_trend:
-                key = ts.strftime("%Y-%m-%d")
-                daily_map[key] = daily_map.get(key, 0) + amt
-        a = appt_index.get(p.get("reference_id")) or {}
+    for r in rec or []:
+        pid = str(r.get("pid")) if r.get("pid") is not None else ""
+        pname = None
+        if pid and await _table_exists("users"):
+            ur = await _sql_query("SELECT name FROM `users` WHERE id = %s LIMIT 1", [pid])
+            pname = (ur or [{}])[0].get("name")
+        adate = r.get("adate")
+        atime = r.get("atime")
+        if hasattr(atime, "total_seconds"):  # TIME comes back as a timedelta
+            secs = int(atime.total_seconds())
+            atime = "%02d:%02d:00" % (secs // 3600, (secs % 3600) // 60)
+        elif hasattr(atime, "strftime"):
+            atime = atime.strftime("%H:%M:%S")
+        slot = None
+        if adate is not None:
+            slot = "%s %s" % (str(adate)[:10], atime or "")
         recent.append({
-            "razorpay_payment_id": p.get("razorpay_payment_id"),
-            "amount_paise": amt,
-            "verified_at": p.get("verified_at"),
-            "patient_name": a.get("patient_name") or "Patient",
-            "appointment_id": p.get("reference_id"),
-            "appointment_slot": a.get("slot"),
+            "razorpay_payment_id": r.get("rpid"),
+            "amount_paise": _to_int(r.get("amt"), 0),
+            "verified_at": _iso(r.get("created_at")),
+            "patient_name": pname or "Patient",
+            "appointment_id": str(r.get("aid")) if r.get("aid") is not None else None,
+            "appointment_slot": slot,
         })
 
-    # Build a dense 30-day daily list (zero-fill missing days)
-    daily = []
-    for i in range(30):
-        d_key = (start_of_trend + timedelta(days=i)).strftime("%Y-%m-%d")
-        daily.append({"date": d_key, "amount_paise": daily_map.get(d_key, 0)})
-
     return {
-        "total_paise": total,
-        "month_paise": month,
-        "week_paise": week,
-        "today_paise": today,
-        "consultations": len(pays),
+        "total_paise": _to_int(t.get("total_amt"), 0),
+        "month_paise": _to_int(t.get("month_amt"), 0),
+        "week_paise": _to_int(t.get("week_amt"), 0),
+        "today_paise": _to_int(t.get("today_amt"), 0),
+        "consultations": _to_int(t.get("n"), 0),
         "daily": daily,
-        "recent": recent[:20],
+        "recent": recent,
     }
 
 
@@ -5956,7 +7897,6 @@ OTP_MOCK_ENABLED = (
     os.environ.get("OTP_MOCK_ENABLED", "true").lower() in ("1", "true", "yes")
     and not IS_PRODUCTION
 )
-MOCK_OTP_CODE = os.environ.get("MOCK_OTP_CODE", "123456")
 BRAND_TAGLINE = "Swasth Raho Hamesha"
 
 # In-memory OTP store. Fine for dev; production will swap to Redis/DB.
@@ -5965,6 +7905,29 @@ OTP_TTL_SECONDS = 300
 OTP_COOLDOWN_SECONDS = 30
 OTP_MAX_ATTEMPTS = 3
 OTP_LOCK_MINUTES = 10
+
+
+def _prune_otp_store() -> None:
+    """Drop entries that can no longer be used.
+
+    Without this the dict grows for the lifetime of the process - one leaked
+    entry per number ever texted - and every send/verify walks it.
+    """
+    now = datetime.utcnow()
+    for phone, row in list(_OTP_STORE.items()):
+        try:
+            exp = datetime.fromisoformat((row.get("expires_at") or "").replace("Z", ""))
+        except Exception:
+            exp = now
+        lock_raw = row.get("locked_until")
+        if lock_raw:
+            try:
+                if datetime.fromisoformat(lock_raw.replace("Z", "")) > now:
+                    continue          # still locked: keep it for the lock message
+            except Exception:
+                pass
+        if exp <= now:
+            _OTP_STORE.pop(phone, None)
 
 
 def _clean_indian_phone(p: str) -> str:
@@ -5994,11 +7957,16 @@ class PhoneOTPVerifyIn(BaseModel):
 
 @api_router.post("/auth/phone/send-otp")
 async def phone_send_otp(body: PhoneOTPSendIn, request: Request):
-    """Send an OTP over SMS via Twilio when configured, or fall back to the
-    dev mock code so testing keeps working. Enforces 30s cooldown +
-    3-attempt lock (10 min) matching the spec.
+    """Send a login OTP, preferring WhatsApp and falling back to SMS.
+
+    Delivery chain: WhatsApp (when enabled + configured) ➜ Fast2SMS ➜ Twilio ➜
+    dev mock. A recipient without WhatsApp is not an error — `send_otp` detects
+    the failed WhatsApp attempt and delivers by SMS instead. The code is always a
+    fresh random 6 digits - never a fixed value. Enforces 30s cooldown +
+    3-attempt lock (10 min).
     """
     await rate_limit(request, "auth:otp-send", max_calls=30, window_seconds=3600)
+    _prune_otp_store()
     phone = _clean_indian_phone(body.phone)
     now = datetime.utcnow()
     row = _OTP_STORE.get(phone) or {}
@@ -6019,16 +7987,15 @@ async def phone_send_otp(body: PhoneOTPSendIn, request: Request):
         if elapsed < OTP_COOLDOWN_SECONDS:
             raise HTTPException(status_code=429, detail=f"Please wait {int(OTP_COOLDOWN_SECONDS - elapsed)}s before requesting again.")
 
-    # Choose the OTP: fixed mock code when in mock mode + Twilio not configured,
-    # random 6-digit otherwise (real SMS path).
-    # Choose the OTP: fixed mock code only when no real provider exists AND mock is on.
-    # Otherwise generate a fresh random 6-digit code so no two OTPs ever match.
-    from otp_sender import twilio_configured, fast2sms_configured, send_otp_sms
-    if fast2sms_configured() or twilio_configured():
-        import secrets as _secrets
-        otp = f"{_secrets.randbelow(1_000_000):06d}"
-    else:
-        otp = MOCK_OTP_CODE
+    # Always generate a cryptographically-random 6-digit OTP. There is NO fixed
+    # fallback code: a hardcoded/shared value (e.g. "123456") would let anyone
+    # who guesses or sees it log in as that phone number. With a real SMS
+    # provider configured the random code is texted; in dev without a provider
+    # the mock provider still returns it (gated to non-production), but the
+    # value itself is random per request just like the real path.
+    from otp_sender import send_otp
+    import secrets as _secrets
+    otp = f"{_secrets.randbelow(1_000_000):06d}"
 
     _OTP_STORE[phone] = {
         "otp": otp,
@@ -6038,8 +8005,9 @@ async def phone_send_otp(body: PhoneOTPSendIn, request: Request):
         "last_sent_at": now.isoformat() + "Z",
     }
 
-    # Ship the OTP. `send_otp_sms` handles Twilio-vs-mock internally and never raises.
-    delivery = await send_otp_sms(phone, otp)
+    # Ship the OTP. `send_otp` tries WhatsApp first and cascades to
+    # Fast2SMS/Twilio/mock, and never raises.
+    delivery = await send_otp(phone, otp)
     if not delivery.get("ok"):
         # Delivery failed — clear the stored code so the user isn't stuck with an
         # unusable OTP they can't receive.
@@ -6050,6 +8018,13 @@ async def phone_send_otp(body: PhoneOTPSendIn, request: Request):
         )
 
     resp: Dict[str, Any] = {"ok": True, "message": "OTP sent.", "provider": delivery.get("provider")}
+    # Which channel actually carried the code. Useful for support ("did it arrive?")
+    # and for spotting a silently-broken WhatsApp provider.
+    if delivery.get("channel"):
+        resp["channel"] = delivery["channel"]
+        resp["message"] = (
+            "OTP sent on WhatsApp." if delivery["channel"] == "whatsapp" else "OTP sent."
+        )
     # SEC-001: only expose `dev_hint` in mock mode + dev env (never with real Twilio, never in prod).
     if OTP_MOCK_ENABLED and delivery.get("provider") == "mock" and not IS_PRODUCTION:
         resp["dev_hint"] = f"OTP is {otp} (mock mode — DO NOT enable in production)"
@@ -6063,6 +8038,7 @@ async def phone_send_otp(body: PhoneOTPSendIn, request: Request):
 async def phone_verify_otp(body: PhoneOTPVerifyIn, request: Request):
     """Verify OTP; if user with this phone exists → login; else create user."""
     await rate_limit(request, "auth:otp-verify", max_calls=60, window_seconds=3600)
+    _prune_otp_store()
     phone = _clean_indian_phone(body.phone)
     row = _OTP_STORE.get(phone)
     if not row:
@@ -6082,7 +8058,9 @@ async def phone_verify_otp(body: PhoneOTPVerifyIn, request: Request):
         exp = now
     if exp < now:
         raise HTTPException(status_code=400, detail="OTP expired. Please request a new one.")
-    if body.otp.strip() != row["otp"]:
+    # Constant-time compare: a plain != leaks the code one character at a time
+    # through response timing, which is enough to brute-force a 6-digit code.
+    if not hmac.compare_digest(str(body.otp).strip(), str(row["otp"])):
         row["attempts"] = int(row.get("attempts", 0)) + 1
         if row["attempts"] >= OTP_MAX_ATTEMPTS:
             row["locked_until"] = (now + timedelta(minutes=OTP_LOCK_MINUTES)).isoformat() + "Z"

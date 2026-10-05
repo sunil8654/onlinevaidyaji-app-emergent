@@ -10,6 +10,7 @@ import Feather from "@react-native-vector-icons/feather";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { useI18n } from "@/src/i18n";
 import { api } from "@/src/api";
+import { setDevOtpHint } from "@/src/utils/devOtp";
 import { useGoogleAuthWeb } from "@/src/hooks/useGoogleAuthWeb";
 import { useGoogleAuthNative } from "@/src/hooks/useGoogleAuthNative";
 import { GoogleButton } from "@/src/components/GoogleButton";
@@ -63,7 +64,7 @@ export default function Signup() {
   const routeAfterGoogle = (res: any) => {
     if (res.is_new || !res.user?.preferred_language) router.replace("/signup/language");
     else if (res.user?.is_admin) router.replace("/admin/dashboard");
-    else if (res.user?.role === "doctor") router.replace("/doctor/home");
+    else if (res.user?.role === "doctor") router.replace("/(tabs)/home");
     else router.replace("/");
   };
 
@@ -93,7 +94,10 @@ export default function Signup() {
     setSending(true);
     try {
       const res = await api.sendPhoneOtp(phone);
-      if (res.dev_hint) console.log(res.dev_hint);
+      // In mock mode the server cannot text the code, so hand the hint to the
+      // verify screen. It was console.logged before, which made first-time
+      // signup impossible without a debugger attached.
+      setDevOtpHint(res.dev_hint);
       router.push({ pathname: "/signup/otp", params: { phone } });
     } catch (e: any) {
       Alert.alert(lang === "hi" ? "Error" : "Error", e?.message || "Try again");

@@ -29,7 +29,7 @@ import os
 import re
 import uuid
 from contextlib import asynccontextmanager
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -83,6 +83,98 @@ def _join_langs(v: Any) -> Any:
     return v or ""
 
 
+def _enum_val(v: Any) -> Any:
+    """Coerce an ENUM write to a plain string; drop empties so MySQL uses its default."""
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s or None
+
+
+def _as_date(v: Any) -> Any:
+    """Accept date/datetime/ISO strings (and 'YYYY-MM-DD HH:MM' slots) -> date."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, date):
+        return v
+    s = str(v).strip().replace("T", " ")
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _int_val(v: Any) -> Any:
+    """Coerce to int for INT writes; drop empties so MySQL applies its default."""
+    if v is None or v == "" or isinstance(v, bool):
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _bool_val(v: Any) -> Any:
+    """Coerce a flag to 0/1 for TINYINT availability columns."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, str):
+        s = v.strip().lower()
+        if s in ("both", "online", "true", "1", "yes"):
+            return 1
+        if s in ("offline", "false", "0", "no"):
+            return 0
+        return None
+    return 1 if v else 0
+
+
+def _as_datetime(v: Any) -> Any:
+    """Accept date/datetime/ISO-8601 strings -> naive datetime for MySQL DATETIME.
+
+    now_iso() produces tz-aware ISO strings ('...T...+00:00'). MySQL rejects the
+    trailing offset on a DATETIME column, so strip it instead of losing the write.
+    """
+    if v is None or v == "":
+        return None
+    if isinstance(v, datetime):
+        return v.replace(tzinfo=None) if v.tzinfo else v
+    if isinstance(v, date):
+        return datetime(v.year, v.month, v.day)
+    s = str(v).strip().replace("T", " ")
+    if s.endswith("Z"):
+        s = s[:-1].strip()
+    m = re.search(r"[+-]\d{2}:\d{2}$", s)          # drop a trailing UTC offset
+    if m:
+        s = s[:m.start()].strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _as_time(v: Any) -> Any:
+    """Accept time/datetime/ISO strings (and 'YYYY-MM-DD HH:MM' slots) -> time."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, datetime):
+        return v.time()
+    if isinstance(v, time):
+        return v
+    s = str(v).strip().replace("T", " ")
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%H:%M:%S", "%H:%M", "%I:%M %p"):
+        try:
+            return datetime.strptime(s, fmt).time()
+        except ValueError:
+            continue
+    return None
+
+
 # Collection name -> {app document field: target column(s)}.
 # Values are mirrored into these columns (when scalar + mirrorable) so the website
 # backend sees meaningful rows, in addition to the full app document round-tripping
@@ -97,6 +189,64 @@ COLUMN_MAPS: Dict[str, Dict[str, Any]] = {
     "doc_com_dm_messages": {"thread_id": "room_id", "text": "content"},
     "doc_com_notifications": {"doctor_id": "user_id", "snippet": "message", "read": "is_read"},
     "medicines": {"price": ["sale_price", "mrp"]},
+    # appointments: the real columns are DATE / TIME / ENUM, and none of those
+    # base types are in _MIRROR_TYPES, so without these callable entries
+    # split_doc drops them into the JSON blob and every booking silently stored
+    # appointment_date=1970-01-01, appointment_time=00:00, status='pending'.
+    # The callable branch bypasses the _MIRROR_TYPES gate.
+    "appointments": {
+        "status": [("status", _enum_val)],
+        "type": [("type", _enum_val)],
+        "appointment_date": [("appointment_date", _as_date)],
+        "appointment_time": [("appointment_time", _as_time)],
+    },
+    # Doctor consultation surface. Same reason as `appointments`: these tables are
+    # almost entirely ENUM / TIMESTAMP / DATE columns, none of which are in
+    # _MIRROR_TYPES, so without callable entries split_doc drops every one of
+    # them into the JSON blob and the website reads NULL/empty rows.
+    "consultation_rooms": {
+        "type": [("type", _enum_val)],
+        "status": [("status", _enum_val)],
+        "created_at": [("created_at", _as_datetime)],
+        "ended_at": [("ended_at", _as_datetime)],
+    },
+    "messages": {
+        "sender_role": [("sender_role", _enum_val)],
+        "message_type": [("message_type", _enum_val)],
+        "is_read": [("is_read", _bool_val)],
+        "read_at": [("read_at", _as_datetime)],
+        "created_at": [("created_at", _as_datetime)],
+    },
+    "video_sessions": {
+        "status": [("status", _enum_val)],
+        "started_at": [("started_at", _as_datetime)],
+        "ended_at": [("ended_at", _as_datetime)],
+        "created_at": [("created_at", _as_datetime)],
+    },
+    "doctor_verifications": {
+        "status": [("status", _enum_val)],
+        "verified_at": [("verified_at", _as_datetime)],
+        "created_at": [("created_at", _as_datetime)],
+    },
+    "doctor_status": {
+        "status": [("status", _enum_val)],
+        "last_seen": [("last_seen", _as_datetime)],
+        "updated_at": [("updated_at", _as_datetime)],
+    },
+    "appointment_slots": {
+        "date": [("date", _as_date)],
+        "start_time": [("start_time", _as_time)],
+        "end_time": [("end_time", _as_time)],
+        "is_available": [("is_available", _bool_val)],
+        "day_of_week": [("day_of_week", _int_val)],
+        "created_at": [("created_at", _as_datetime)],
+    },
+    # notifications is reached through the doc_com_notifications alias above, but
+    # the general inbox writes it directly under its real name.
+    "notifications": {
+        "is_read": [("is_read", _bool_val)],
+        "created_at": [("created_at", _as_datetime)],
+    },
     # Bidirectional doctor sync — app field names -> website doctors columns.
     "doctors": {
         "experience_years": "experience",
@@ -107,6 +257,16 @@ COLUMN_MAPS: Dict[str, Dict[str, Any]] = {
             ("is_available_online", lambda v: 1 if v in ("both", "online") else 0),
             ("is_available_offline", lambda v: 1 if v in ("both", "offline") else 0),
         ],
+        # The doctor profile editor writes these real columns directly rather
+        # than through the aliases above, so they need explicit entries: ENUM and
+        # DATETIME base types are absent from _MIRROR_TYPES and would otherwise
+        # land in the JSON blob only, leaving the website unchanged.
+        "gender": [("gender", _enum_val)],
+        "experience": [("experience", _int_val)],
+        "is_available_online": [("is_available_online", _bool_val)],
+        "is_available_offline": [("is_available_offline", _bool_val)],
+        "updated_at": [("updated_at", _as_datetime)],
+        "created_at": [("created_at", _as_datetime)],
     },
 }
 
@@ -121,6 +281,29 @@ def _synth_medicine(doc: Dict[str, Any]) -> Dict[str, Any]:
                 doc["price"] = float(v)
                 break
     return doc
+
+
+def _lang_list(value: Any) -> List[str]:
+    """Normalise `doctors.languages` to a list of plain language names.
+
+    The website stores a comma-separated varchar, but the app has also written
+    a JSON array into the same column, so accept both. Splitting a JSON string
+    on commas leaves quote fragments behind, which is why this is not a bare
+    `split(",")`.
+    """
+    if not value:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [str(p).strip() for p in value if str(p).strip()]
+    s = str(value).strip()
+    if s.startswith("["):
+        try:
+            parsed = json.loads(s)
+        except (TypeError, ValueError):
+            parsed = None
+        if isinstance(parsed, list):
+            return [str(p).strip() for p in parsed if str(p).strip()]
+    return [x.strip() for x in s.split(",") if x.strip()]
 
 
 def _synth_doctor(doc: Dict[str, Any]) -> Dict[str, Any]:
@@ -144,24 +327,51 @@ def _synth_doctor(doc: Dict[str, Any]) -> Dict[str, Any]:
     doc.setdefault("bio", None)
     doc.setdefault("rating", 0.0)
     doc.setdefault("avatar_url", None)
-    if "languages" not in doc:
-        doc["languages"] = [] if doc.get("languages") is None else doc["languages"]
-    langs = doc.get("languages")
-    if isinstance(langs, str):
-        doc["languages"] = [x.strip() for x in langs.split(",") if x.strip()]
+    doc["languages"] = _lang_list(doc.get("languages"))
+    return doc
+
+
+def _synth_appointment(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """`appointments.appointment_time` is a MySQL TIME column.
+
+    The driver hands TIME back as a `datetime.timedelta`, which JSON-encodes to
+    a plain number of seconds - the app was rendering "36000.0" where it should
+    show 10:00 AM. Normalise once, here, so every read path (find / find_one /
+    raw SQL via row_to_doc) returns "HH:MM:SS".
+    """
+    t = doc.get("appointment_time")
+    if isinstance(t, timedelta):
+        secs = int(t.total_seconds())
+        if 0 <= secs < 86400:
+            doc["appointment_time"] = "%02d:%02d:%02d" % (
+                secs // 3600, (secs % 3600) // 60, secs % 60,
+            )
+    elif isinstance(t, time):
+        doc["appointment_time"] = t.strftime("%H:%M:%S")
     return doc
 
 
 POST_READ_SYNTH: Dict[str, Any] = {
     "pharmacy_products": _synth_medicine,
     "doctors": _synth_doctor,
+    "appointments": _synth_appointment,
 }
 
 _fill_re = re.compile(r"^([a-z]+)")
 
-_conn: Optional[asyncmy.connection.Connection] = None
-_lock = asyncio.Lock()
+_pool: Optional[asyncmy.Pool] = None
+_pool_loop: Optional[asyncio.AbstractEventLoop] = None
+_pool_lock = asyncio.Lock()
 _table_cache: Dict[str, Optional[Dict[str, Any]]] = {}
+# Pool sizing. The old code funnelled every statement through ONE connection
+# guarded by a global asyncio.Lock, so requests were executed strictly one at a
+# time and a single slow query blocked the whole app. DB_POOL_SIZE caps the
+# concurrent statement count; DB_POOL_MIN keeps warm connections so a burst
+# does not pay a TCP+auth handshake per request.
+DB_POOL_MIN = max(1, int(os.environ.get("DB_POOL_MIN", "4")))
+DB_POOL_MAX = max(DB_POOL_MIN, int(os.environ.get("DB_POOL_SIZE", "16")))
+# Fail fast instead of hanging a request thread forever if MySQL is down.
+DB_CONNECT_TIMEOUT = max(1, int(os.environ.get("DB_CONNECT_TIMEOUT", "10")))
 
 
 # --------------------------------------------------------------------------- #
@@ -186,6 +396,7 @@ async def _open_conn() -> asyncmy.connection.Connection:
         db=MYSQL_DATABASE,
         autocommit=True,
         charset="utf8mb4",
+        connect_timeout=DB_CONNECT_TIMEOUT,
     )
     try:
         async with conn.cursor() as cur:
@@ -196,41 +407,99 @@ async def _open_conn() -> asyncmy.connection.Connection:
     return conn
 
 
-async def _get_conn() -> asyncmy.connection.Connection:
-    global _conn
-    if _conn is None:
-        _conn = await _open_conn()
+async def _discard_pool() -> None:
+    """Drop the cached pool. Safe to call when it is already unusable."""
+    global _pool, _pool_loop
+    pool, _pool, _pool_loop = _pool, None, None
+    if pool is None:
+        return
     try:
-        await _conn.ping()
+        pool.close()
+        await pool.wait_closed()
     except Exception:
-        try:
-            await _conn.ensure_closed()
-        except Exception:
-            pass
-        _conn = await _open_conn()
-    return _conn
+        pass
+
+
+async def _get_pool() -> asyncmy.Pool:
+    """The shared connection pool, created on first use.
+
+    A pool is bound to the event loop that created it - asyncmy runs pool
+    housekeeping as tasks on that loop. If the running loop has changed (the
+    test suite gives each test a fresh loop) the cached pool is dead, so it is
+    discarded and rebuilt instead of handing back connections that can never be
+    used again.
+    """
+    global _pool, _pool_loop
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:  # pragma: no cover - only outside async context
+        loop = None
+    if _pool is not None and _pool_loop is not loop:
+        await _discard_pool()
+    if _pool is None:
+        async with _pool_lock:
+            # Re-check: another coroutine may have built it while we waited.
+            if _pool is None or _pool_loop is not loop:
+                await _discard_pool()
+                _pool = await asyncmy.create_pool(
+                    host=MYSQL_HOST,
+                    port=MYSQL_PORT,
+                    user=MYSQL_USER,
+                    password=MYSQL_PASSWORD,
+                    db=MYSQL_DATABASE,
+                    autocommit=True,
+                    charset="utf8mb4",
+                    minsize=DB_POOL_MIN,
+                    maxsize=DB_POOL_MAX,
+                    init_command="SET FOREIGN_KEY_CHECKS=0",
+                    connect_timeout=DB_CONNECT_TIMEOUT,
+                )
+                _pool_loop = loop
+    return _pool
+
+
+async def _get_conn() -> asyncmy.connection.Connection:
+    """A dedicated connection, outside the pool.
+
+    Only for callers that need to hold a connection open (the backfill script).
+    Prefer `_query` / `_query_many`, which borrow from the pool instead.
+    """
+    return await _open_conn()
 
 
 async def _query(sql: str, params: Optional[List[Any]] = None) -> Any:
     """Run a statement. Returns row list for SELECT, lastrowid for writes."""
-    async with _lock:
-        conn = await _get_conn()
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
         async with conn.cursor(asyncmy.cursors.DictCursor) as cur:
-            await cur.execute(sql, params or ())
+            await cur.execute(sql, list(params) if params else [])
             if cur.description is None:
                 return cur.lastrowid
             return await cur.fetchall()
 
 
+async def _query_many(statements: List[tuple]) -> List[Any]:
+    """Run several statements on ONE pooled connection.
+
+    Used where a listing needs a COUNT plus a page of rows: borrowing one
+    connection keeps both statements on the same session without serialising
+    other requests behind a global lock.
+    """
+    pool = await _get_pool()
+    out: List[Any] = []
+    async with pool.acquire() as conn:
+        async with conn.cursor(asyncmy.cursors.DictCursor) as cur:
+            for sql, params in statements:
+                await cur.execute(sql, list(params) if params else [])
+                out.append(
+                    cur.lastrowid if cur.description is None else await cur.fetchall()
+                )
+    return out
+
+
+
 async def close_db() -> None:
-    global _conn
-    async with _lock:
-        if _conn is not None:
-            try:
-                await _conn.ensure_closed()
-            except Exception:
-                pass
-            _conn = None
+    await _discard_pool()
     _table_cache.clear()
 
 
@@ -397,6 +666,19 @@ def _values_eq(a: Any, b: Any) -> bool:
         return float(a) == float(b)
     if isinstance(a, str) and isinstance(b, bool):
         return False
+    # A value hydrated from a real MySQL column keeps its numeric type, while
+    # the same value round-tripped through the `data` JSON blob is a string
+    # (and user["id"] from a JWT is a string too). Compare numerically when
+    # one side is a number and the other is its decimal-string form, otherwise
+    # filters like {"patient_id": "15"} silently match nothing.
+    if isinstance(a, str) != isinstance(b, str):
+        num, txt = (b, a) if isinstance(a, str) else (a, b)
+        if isinstance(num, (int, float, Decimal)) and not isinstance(num, bool):
+            s = txt.strip()
+            try:
+                return float(num) == float(s)
+            except (TypeError, ValueError):
+                return a == b
     return a == b
 
 
@@ -569,6 +851,78 @@ def _match_doc(doc: Dict[str, Any], filt: Optional[Dict[str, Any]]) -> bool:
         if not _match_cond(v, _get_path(doc, k), True):
             return False
     return True
+
+
+# --------------------------------------------------------------------------- #
+# SQL filter pushdown
+# --------------------------------------------------------------------------- #
+# Every find() used to run `SELECT *` over the whole table and match in Python
+# via _match_doc. On the shared database that turns `users.find_one({"id": sub})`
+# - the lookup every authenticated request performs - into a full table read
+# plus a JSON decode per row, and `appointments.find({"patient_id": ...})` into
+# a full scan of every booking ever made. Equality predicates are pushed into
+# the WHERE clause instead so MySQL can serve them from the primary key.
+#
+# Only NOT NULL columns qualify. row_to_doc deliberately lets the `data` JSON
+# blob win over a NULL real column, so a nullable column can disagree with the
+# blob; `WHERE col = ?` would then silently drop rows that Python matching
+# would have returned. A NOT NULL column is always written, so the two agree.
+
+def _pushdown_column(field: str, info: Dict[str, Any], collection: str) -> Optional[str]:
+    """Real column to filter `field` on, or None when Python matching must stay."""
+    if not field or "." in field or field.startswith("$"):
+        return None
+    candidates: List[str] = [field, _snake(field)]
+    mapped = COLUMN_MAPS.get(collection, {}).get(field)
+    if isinstance(mapped, str):
+        candidates.append(mapped)
+    elif isinstance(mapped, (list, tuple)):
+        for target in mapped:
+            if isinstance(target, (list, tuple)) and len(target) == 2 and callable(target[1]):
+                target = target[0]
+            if isinstance(target, str):
+                candidates.append(target)
+    for col in candidates:
+        meta = info.get(col)
+        if meta and meta.get("not_null"):
+            return col
+    return None
+
+
+def _sql_where(
+    filt: Optional[Dict[str, Any]], info: Dict[str, Any], collection: str
+) -> tuple:
+    """Push the pushable equality subset of `filt` down into SQL.
+
+    Returns (sql, params, resolved_fields). An empty sql means nothing
+    qualified and the caller must fall back to full-scan Python matching.
+    `resolved_fields` is the subset of `filt` the SQL clause already proved, so
+    the caller can re-match only what is left.
+    """
+    if not isinstance(filt, dict) or not filt:
+        return "", [], set()
+    clauses: List[str] = []
+    params: List[Any] = []
+    resolved: Set[str] = set()
+    for field, cond in filt.items():
+        col = _pushdown_column(field, info, collection)
+        if col is None:
+            continue
+        if isinstance(cond, dict):
+            if set(cond) != {"$eq"}:
+                continue
+            cond = cond["$eq"]
+        # `None` means "matches missing too" in _missing_matches; `col = NULL`
+        # would not, so leave those to Python.
+        if cond is None or not _is_scalar(cond):
+            continue
+        clauses.append(f"`{col}` = %s")
+        params.append(_to_sql(cond))
+        resolved.add(field)
+    if not clauses:
+        return "", [], set()
+    return " WHERE " + " AND ".join(clauses), params, resolved
+
 
 
 def _set_path(doc: Dict[str, Any], key: str, value: Any) -> None:
@@ -797,6 +1151,13 @@ class Collection:
     async def _split_doc(self, doc: Dict[str, Any]) -> tuple:
         return await self._db.split_doc(self._table, doc, collection=self.name)
 
+    async def enrich_docs(self, docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Public wrapper around `_enrich` for callers that already selected a
+        subset of rows in SQL and only need the read-side join synthesis
+        (users + specializations) applied to that subset. Keeps list endpoints
+        from having to load the whole table just to enrich one page."""
+        return await self._enrich(docs)
+
     async def _enrich(self, docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Read-side join synthesis: website-created doctor rows have only FK
         columns (user_id / specialization_id) — pull name/email/phone/avatar and
@@ -833,33 +1194,73 @@ class Collection:
                     d["specialty"] = s
         return docs
 
+    async def _selected(self, filt) -> List[Dict[str, Any]]:
+        """Docs matching `filt`, with pushable equality resolved by MySQL.
+
+        When nothing is pushable this is the old behaviour (whole table, match
+        in Python). When some predicates are pushable they run in SQL and only
+        the residue is re-matched here - the SQL clause can only remove rows
+        Python matching would have rejected too, so results are identical.
+        """
+        await self._ensure()
+        info = await _columns(self._table)
+        where_sql, params, resolved = _sql_where(filt, info, self.name)
+        if not where_sql:
+            rows = await _query("SELECT * FROM `%s`" % _ident(self._table))
+            docs = [self._db.row_to_doc(r, self._table) for r in rows]
+            docs = await self._enrich(docs)
+            return [d for d in docs if _match_doc(d, filt)]
+
+        rows = await _query(
+            "SELECT * FROM `%s`%s" % (_ident(self._table), where_sql), tuple(params)
+        )
+        docs = await self._enrich([self._db.row_to_doc(r, self._table) for r in rows])
+        residue = {k: v for k, v in filt.items() if k not in resolved} if filt else {}
+        if not residue:
+            return docs
+        return [d for d in docs if _match_doc(d, residue)]
+
     # ---- Mongo-ish API ---------------------------------------------------- #
-    async def find_one(self, filt: Optional[Dict[str, Any]] = None, projection: Optional[Dict[str, Any]] = None):
-        for d in await self._all_docs():
-            if _match_doc(d, filt):
-                return _apply_projection(d, projection)
+    async def find_one(
+        self,
+        filt: Optional[Dict[str, Any]] = None,
+        projection: Optional[Dict[str, Any]] = None,
+        sort: Optional[Any] = None,
+    ):
+        matched = await self._selected(filt)
+        if sort and matched:
+            reverse = {1: False, -1: True}
+            specs = sort if isinstance(sort, list) else [sort]
+            for item in reversed(specs):
+                key, direction = tuple(item)
+                matched = sorted(
+                    matched,
+                    key=lambda d, k=key: _norm_sort_key(d.get(k)),
+                    reverse=reverse.get(direction, False),
+                )
+        for d in matched:
+            return _apply_projection(d, projection)
         return None
 
     def find(self, filt: Optional[Dict[str, Any]] = None, projection: Optional[Dict[str, Any]] = None) -> Cursor:
         return Cursor(self._find_all(filt, projection))
 
     async def _find_all(self, filt, projection):
-        await self._ensure()
-        rows = await _query("SELECT * FROM `%s`" % _ident(self._table))
-        docs = [self._db.row_to_doc(r, self._table) for r in rows]
-        docs = await self._enrich(docs)
-        out = []
-        for d in docs:
-            if _match_doc(d, filt):
-                out.append(_apply_projection(d, projection))
-        return out
+        return [_apply_projection(d, projection) for d in await self._selected(filt)]
 
     async def count_documents(self, filt: Optional[Dict[str, Any]] = None) -> int:
-        n = 0
-        for d in await self._all_docs():
-            if _match_doc(d, filt):
-                n += 1
-        return n
+        if isinstance(filt, dict) and filt:
+            info = await _columns(self._table)
+            where_sql, params, resolved = _sql_where(filt, info, self.name)
+            residue = {k: v for k, v in filt.items() if k not in resolved}
+            if not residue:
+                rows = await _query(
+                    "SELECT COUNT(*) AS n FROM `%s`%s" % (_ident(self._table), where_sql),
+                    params,
+                )
+                return int((rows[0] or {}).get("n") or 0)
+        return sum(1 for d in await self._all_docs() if _match_doc(d, filt))
+
 
     async def insert_one(self, doc_src: Dict[str, Any]) -> Result:
         doc = dict(doc_src)
@@ -896,6 +1297,33 @@ class Collection:
             await self.insert_one(doc)
         return Result(acknowledged=True)
 
+    async def _merge_base(self, doc: Dict[str, Any]) -> Dict[str, Any]:
+        """The document an update should be merged onto: the row's REAL columns.
+
+        `_all_docs` returns the *enriched* view - post-read synthesis
+        (`verified`, `experience_years`, `consultation_mode`, joined
+        `specializations`) plus the users join. Merging a `$set` onto that view
+        meant those derived values were written straight back, and because they
+        were computed from the row as it was *before* the update they silently
+        overrode the field being changed: setting `is_available_online=True`
+        still stored 0, because the stale `consultation_mode='none'` the synth
+        had produced won the race. Merging onto the raw row keeps the caller's
+        values authoritative.
+        """
+        pk = doc.get("id")
+        if pk is None:
+            return dict(doc)
+        try:
+            pk_int = int(pk)
+        except (TypeError, ValueError):
+            return dict(doc)
+        await self._ensure()
+        rows = await _query(
+            "SELECT * FROM `%s` WHERE id = %%s" % _ident(self._table), [pk_int])
+        if not rows:
+            return dict(doc)
+        return self._db.row_to_doc(rows[0], self._table, with_synth=False)
+
     async def update_one(self, filt, update, upsert: bool = False, **kwargs) -> Result:
         docs = await self._all_docs()
         target = None
@@ -918,7 +1346,7 @@ class Collection:
             upserted_id = res.inserted_id
             return Result(acknowledged=True, matched_count=1, modified_count=1,
                           upserted_id=upserted_id)
-        new_doc = _apply_update(dict(target), update)
+        new_doc = _apply_update(await self._merge_base(target), update)
         await self._write_row(new_doc)
         return Result(acknowledged=True, matched_count=1, modified_count=1)
 
@@ -1178,21 +1606,78 @@ class SQLDatabase:
         await close_db()
 
     # ---- doc store plumbing ----------------------------------------------- #
-    def row_to_doc(self, row: Dict[str, Any], table: str) -> Dict[str, Any]:
+    async def find_paged(
+        self,
+        table: str,
+        where: Dict[str, Any],
+        *,
+        collection: str = "",
+        order_by: Optional[List[tuple]] = None,
+        limit: int = 20,
+        offset: int = 0,
+        extra_where: str = "",
+        extra_params: Optional[List[Any]] = None,
+    ) -> tuple:
+        """Paged find on real columns: returns (docs, total_count).
+
+        `where` must be equality-only on NOT NULL columns, and `order_by` is a
+        list of (column, "asc"|"desc") pairs naming real columns. Both are
+        served directly by MySQL, so a listing no longer has to materialise
+        every matching row to count and slice it in Python. `extra_where` is an
+        operator-composed range/status clause supplied by the caller; it is
+        internal and never user input.
+        """
+        coll = collection or table
+        info = await _columns(table)
+        where_sql, params, _ = _sql_where(where, info, coll)
+        if not where_sql:
+            raise ValueError(f"find_paged needs at least one indexed equality: {where!r}")
+        if extra_where:
+            where_sql += " AND " + extra_where
+            params = list(params) + list(extra_params or [])
+
+        order_sql = ""
+        if order_by:
+            parts = []
+            for col, direction in order_by:
+                if col not in info:
+                    continue
+                parts.append(f"`{col}` {'DESC' if str(direction).lower().startswith('d') else 'ASC'}")
+            if parts:
+                order_sql = " ORDER BY " + ", ".join(parts)
+
+        # COUNT + page on one pooled connection: two round trips, but they share
+        # a session and no other request has to queue behind a global lock.
+        page_sql = f"SELECT * FROM `{table}`{where_sql}{order_sql} LIMIT %s OFFSET %s"
+        count_sql = f"SELECT COUNT(*) AS n FROM `{table}`{where_sql}"
+        count_row, rows = await _query_many(
+            [(count_sql, params), (page_sql, list(params) + [int(limit), int(offset)])]
+        )
+        total = int((count_row or [{"n": 0}])[0].get("n") or 0)
+        return [self.row_to_doc(r, table) for r in rows], total
+
+    def row_to_doc(self, row: Dict[str, Any], table: str, with_synth: bool = True) -> Dict[str, Any]:
         info = _table_cache.get(table) or {}
-        doc: Dict[str, Any] = {}
+        # Load the app's JSON mirror first, then let REAL schema columns win.
+        # The website is a plain MySQL client: it writes the real columns
+        # (e.g. "UPDATE users SET image = ?"). The `data` blob is an
+        # app-internal detail. If the blob won, every field the app had ever
+        # touched would be frozen and the website's updates would be invisible
+        # to the app (and vice-versa) - the two profiles would drift apart.
+        # A NULL real column never overrides the blob, so app-only fields and
+        # values the app did not mirror into a column still come through.
+        extra: Dict[str, Any] = {}
         raw = row.get("data")
         if raw:
             try:
                 loaded = json.loads(raw)
                 if isinstance(loaded, dict):
-                    doc = loaded
+                    extra = loaded
             except (TypeError, ValueError, json.JSONDecodeError):
-                doc = {}
+                extra = {}
+        doc: Dict[str, Any] = dict(extra)
         for col in info:
             if col in ("id", "data"):
-                continue
-            if col in doc:
                 continue
             v = _norm_cell(row.get(col))
             if v is None:
@@ -1200,9 +1685,10 @@ class SQLDatabase:
             doc[col] = v
         if "id" not in doc and row.get("id") is not None:
             doc["id"] = str(row["id"])
-        synth = POST_READ_SYNTH.get(table)
-        if synth:
-            doc = synth(doc)
+        if with_synth:
+            synth = POST_READ_SYNTH.get(table)
+            if synth:
+                doc = synth(doc)
         return doc
 
     async def split_doc(self, table: str, doc: Dict[str, Any], collection: Optional[str] = None) -> tuple:
@@ -1213,22 +1699,21 @@ class SQLDatabase:
         data: Dict[str, Any] = {}
         col_names = {c for c in info if c not in ("id", "data")}
         col_map = COLUMN_MAPS.get(collection or table, {})
-        # Columns exclusively managed via col_map (e.g. doctors: verified ->
-        # is_approved). row_to_doc also exposes the raw column names in the doc,
-        # so without this guard a STALE raw value (is_approved=0 read earlier)
-        # would re-mirror over the mapped write and silently defeat app->web sync.
-        flat_targets: Set[str] = set()
-        for _t in col_map.values():
-            if isinstance(_t, str):
-                flat_targets.add(_t)
-            elif isinstance(_t, (list, tuple)):
-                for _x in _t:
-                    if isinstance(_x, str):
-                        flat_targets.add(_x)
-                    elif isinstance(_x, (list, tuple)) and len(_x) == 2:
-                        flat_targets.add(_x[0])
-        for k, v in doc.items():
+        # Two passes. Pass 1 writes every plain/raw field, pass 2 writes the
+        # col_map aliases on top.
+        #
+        # An alias has to be authoritative, because row_to_doc exposes the real
+        # column names alongside app-level fields: an update is merged onto the
+        # row that was just read, so `verified` (alias) arrives next to a stale
+        # raw `is_approved`. Writing them in a single pass made the winner depend
+        # on dict order, so an alias could be silently reverted - or, when the
+        # target column was blocked outright, dropped into the blob and never
+        # reach the website that actually reads the columns.
+        for alias_pass in (False, True):
+          for k, v in doc.items():
             if k in ("_id", "id"):
+                continue
+            if (k in col_map) != alias_pass:
                 continue
             mapped = k in col_map
             # Mirrored targets: explicit column map first, else field/direct or
@@ -1241,23 +1726,23 @@ class SQLDatabase:
             for target in targets:
                 if isinstance(target, (list, tuple)) and len(target) == 2 and callable(target[1]):
                     col, fn = target[0], target[1]
-                    if col in col_names and col not in columns:
+                    if col in col_names:
                         sv = fn(v)
                         if sv is not None:
                             columns[col] = _to_sql(sv)
                     continue
                 col = str(target)
-                if col in col_names and col not in columns and (mapped or col not in flat_targets) and _is_scalar(v) and v is not None:
+                if col in col_names and (mapped or col not in columns) and _is_scalar(v) and v is not None:
                     ctype = _base_type(info[col]["type"])
                     if ctype in _MIRROR_TYPES:
                         columns[col] = _to_sql(v)
-            if k in info and k not in columns and k not in flat_targets:
+            if k in info and k not in columns:
                 ctype = _base_type(info[k]["type"])
                 if ctype in _MIRROR_TYPES and _is_scalar(v) and v is not None:
                     columns[k] = _to_sql(v)
             elif v is not None and _is_scalar(v) and k not in col_map:
                 sc = _snake(k)
-                if sc in col_names and sc not in columns and sc not in flat_targets:
+                if sc in col_names and sc not in columns:
                     ctype = _base_type(info[sc]["type"])
                     if ctype in _MIRROR_TYPES:
                         columns[sc] = _to_sql(v)
