@@ -105,24 +105,6 @@ export default function Profile() {
           </View>
         </View>
 
-        {isPatient && (
-          <View style={styles.card} testID="patient-details-card">
-            <Text style={styles.cardKicker}>Personal details</Text>
-            <Text style={styles.pdSummary}>
-              Age, gender, address and contact details live on their own page now.
-            </Text>
-            <TouchableOpacity
-              onPress={() => router.push("/patient/personal-details")}
-              style={styles.pdLink}
-              testID="pd-view-all"
-            >
-              <Feather name="user" size={14} color={COLORS.brand} />
-              <Text style={styles.pdLinkText}>View &amp; edit personal details</Text>
-              <Feather name="chevron-right" size={16} color={COLORS.brand} />
-            </TouchableOpacity>
-          </View>
-        )}
-
         {profile && (
           <View style={styles.card}>
             <Text style={styles.cardKicker}>Your dosha</Text>
@@ -242,13 +224,6 @@ const styles = StyleSheet.create({
   avatarBig: { width: 76, height: 76, borderRadius: 38, backgroundColor: "rgba(255,255,255,0.22)", borderWidth: 3, borderColor: COLORS.surface, alignItems: "center", justifyContent: "center", overflow: "hidden" },
   avatarImg: { width: "100%", height: "100%" },
   avatarInitials: { color: COLORS.surface, fontSize: 28, fontWeight: "700" },
-  pdSummary: { color: COLORS.textSecondary, fontSize: 13, lineHeight: 19, marginTop: 6 },
-  pdLink: {
-    flexDirection: "row", alignItems: "center", gap: 8, marginTop: SPACING.md,
-    paddingVertical: 12, paddingHorizontal: SPACING.md, borderRadius: RADIUS.md,
-    backgroundColor: COLORS.surfaceAlt, borderWidth: 1, borderColor: COLORS.border,
-  },
-  pdLinkText: { flex: 1, color: COLORS.brand, fontWeight: "700", fontSize: 13 },
   userName: { fontFamily: FONTS.heading, color: COLORS.surface, fontSize: 26, marginTop: 10, letterSpacing: -0.5 },
   userMeta: { color: COLORS.surface, marginTop: 2, fontSize: 13 },
   rolePill: { marginTop: 8, paddingHorizontal: 10, paddingVertical: 4, backgroundColor: COLORS.accent, borderRadius: RADIUS.pill },

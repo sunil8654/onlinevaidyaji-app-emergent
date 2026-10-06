@@ -454,33 +454,46 @@ async def register(body: RegisterInput, request: Request):
         "created_at": now_iso(),
     }
     if body.role == "doctor":
+        # Only the registration number is real input here. `documents_uploaded`
+        # used to be `bool(registration_number)`, i.e. the app claimed the doctor
+        # had uploaded credentials the moment they typed a number. It is now
+        # derived from actual `doctor_verifications` rows in the onboard path.
         doc["registration_number"] = body.registration_number
         doc["verified"] = False  # pending admin approval
-        doc["documents_uploaded"] = bool(body.registration_number)
     res = await db.users.insert_one(doc)
     # msdb assigns MySQL AUTO_INCREMENT ids — the token + response + doctor link
     # must use the real STORED id (the Mongo-era UUID above is ignored by msdb).
     user_id = str(res.inserted_id)
     doc["id"] = user_id
 
-    # Doctor self-registration => create a pending entry in doctors collection
+    # Doctor self-registration => a PENDING, deliberately EMPTY doctors row.
+    #
+    # This used to prefill the profile with invented data:
+    #   specialty="Ayurveda", qualification="Pending admin verification",
+    #   bio="Newly enrolled AYUSH practitioner...", a stock pexels.com photo,
+    #   consultation_fee=499, languages=["Hindi","English"].
+    # Two real bugs came out of that:
+    #   1. the website reads these REAL columns, so every app-registered doctor
+    #      appeared to the public directory as an "Ayurveda" practitioner with a
+    #      stranger's stock photo;
+    #   2. the app's own `hasProfile` check (qualification/bio non-empty) saw a
+    #      "complete" profile, so a new doctor was routed straight to the home
+    #      tab and never saw onboarding at all - they could never upload a
+    #      document and never reached the admin review queue.
+    # The website does `INSERT IGNORE INTO doctors (user_id, is_approved) VALUES (?, 0)`;
+    # match it exactly so both surfaces agree on what a fresh account looks like.
     if body.role == "doctor":
         await db.doctors.insert_one({
-            "id": str(uuid.uuid4()),
+            "id": str(uuid.uuid4()),          # placeholder; msdb assigns AUTO_INCREMENT
             "user_id": user_id,
+            # Identity only - these are real columns the website also shows, so
+            # copy them from the signup rather than making the doctor retype them.
             "name": doc["name"],
             "email": doc["email"],
             "phone": doc.get("phone"),
             "registration_number": doc.get("registration_number"),
-            "specialty": "Ayurveda",  # default until admin edits
-            "qualification": "Pending admin verification",
-            "experience_years": 0,
-            "languages": ["Hindi", "English"],
-            "consultation_fee": 499,
-            "bio": "Newly enrolled AYUSH practitioner — awaiting admin approval.",
-            "avatar_url": "https://images.pexels.com/photos/5327585/pexels-photo-5327585.jpeg",
-            "rating": 0.0, "reviews": 0,
-            "verified": False,
+            # `verified` is the app alias for doctors.is_approved (msdb COLUMN_MAPS).
+            "verified": False,                # pending admin approval
             "created_at": now_iso(),
         })
         await log_activity("doctor_enrolled", actor=doc, meta={"email": doc["email"]})
@@ -1394,7 +1407,10 @@ async def get_doctor_slots(doctor_id: str, date: str):
 
     rows = await _sql_query(
         "SELECT id, day_of_week, date, start_time, end_time, is_available "
-        "FROM `appointment_slots` WHERE doctor_id = %s AND is_available = 1 "
+        # The column is nullable with DEFAULT 1, so the website's slots.js
+        # INSERT (which omits it) stores 1. COALESCE only guards an explicit
+        # NULL, which "not disabled" is a fairer reading of than excluding the row.
+        "FROM `appointment_slots` WHERE doctor_id = %s AND COALESCE(is_available, 1) = 1 "
         "AND ((day_of_week = %s AND date IS NULL) OR date = %s) "
         "ORDER BY start_time",
         [did, target.isoweekday() % 7, target],
@@ -1490,7 +1506,9 @@ async def _is_slot_bookable(doctor_id: Any, slot: str) -> bool:
 
     rows = await _sql_query(
         "SELECT day_of_week, date, start_time, end_time FROM `appointment_slots` "
-        "WHERE doctor_id = %s AND is_available = 1 "
+        # COALESCE so an explicitly-NULL is_available counts as bookable; the
+        # column's DEFAULT is already 1, so this only covers stray legacy rows.
+        "WHERE doctor_id = %s AND COALESCE(is_available, 1) = 1 "
         "AND ((day_of_week = %s AND date IS NULL) OR date = %s)",
         [doctor_id, target.isoweekday() % 7, target.date()],
     )
@@ -3814,60 +3832,249 @@ async def admin_update_doctor(doctor_id: str, body: DoctorUpsertInput, admin: di
     return updated
 
 
-@api_router.post("/admin/doctors/{doctor_id}/approve")
-async def admin_approve_doctor(doctor_id: str, admin: dict = Depends(require_admin)):
-    d = await db.doctors.find_one({"id": doctor_id})
-    if not d:
-        raise HTTPException(status_code=404, detail="Doctor not found")
-    await db.doctors.update_one({"id": doctor_id}, {"$set": {"verified": True, "approved_at": now_iso()}})
-    if d.get("user_id"):
-        await db.users.update_one({"id": d["user_id"]}, {"$set": {"verified": True}})
-    await log_activity("admin_doctor_approved", actor=admin, meta={"doctor_id": doctor_id, "name": d.get("name")})
-    # Push notification to doctor (non-blocking)
-    if d.get("user_id"):
+@api_router.get("/admin/verifications/count")
+async def admin_verifications_count(admin: dict = Depends(require_admin)):
+    """Badge count for the admin review queue.
+
+    Mirrors the website's `GET /admin/verifications/count`: unapproved, not
+    restricted, and not already rejected (a rejected doctor is hidden until they
+    resubmit, matching admin.js exactly).
+    """
+    rows = await _sql_query(
+        "SELECT COUNT(*) AS n FROM `doctors` d "
+        "WHERE d.is_approved = 0 AND COALESCE(d.is_restricted, 0) = 0 "
+        "AND d.id NOT IN (SELECT doctor_id FROM `doctor_verifications` WHERE status = 'rejected')"
+    )
+    return {"count": int((rows[0] or {}).get("n") or 0) if rows else 0}
+
+
+@api_router.get("/admin/verifications")
+async def admin_list_verifications(admin: dict = Depends(require_admin)):
+    """The doctor's pending-verification queue, with their documents.
+
+    Mirrors the website's `GET /admin/verifications`, reading the same columns
+    and attaching each doctor's `doctor_verifications` rows. This is the screen
+    that was previously impossible to populate: onboarding stored placeholder
+    filenames instead of real uploads, so there was never anything to review.
+    """
+    rows = await _sql_query(
+        "SELECT d.id, d.user_id, d.slug, d.qualification, d.experience, "
+        "       d.consultation_fee, d.city, d.languages, d.system, d.gender, "
+        "       d.is_approved, d.restriction_reason, d.created_at, "
+        "       u.name, u.email, u.phone, u.image, "
+        "       s.name AS specialization_name "
+        "FROM `doctors` d "
+        "JOIN `users` u ON d.user_id = u.id "
+        "LEFT JOIN `specializations` s ON d.specialization_id = s.id "
+        "WHERE d.is_approved = 0 AND COALESCE(d.is_restricted, 0) = 0 "
+        "  AND d.restriction_reason IS NULL "
+        "  AND d.id NOT IN (SELECT doctor_id FROM `doctor_verifications` WHERE status = 'rejected') "
+        "ORDER BY d.created_at DESC",
+    )
+    verifications: List[Dict[str, Any]] = []
+    for r in rows or []:
+        did = _to_int(r.get("id"))
+        docs = []
         try:
-            await send_push(
-                recipients=[d["user_id"]],
-                data={
-                    "title": "You're approved! 🎉",
-                    "message": f"Welcome to Online VaidyaJi, Dr. {d.get('name', 'Vaidya')}. Start seeing patients now.",
-                    "action_url": "/doctor/home",
-                },
-                idempotency_key=f"doc_approved_{doctor_id}",
-            )
+            docs = [
+                _verification_row(v)
+                for v in await _sql_query(
+                    "SELECT id, doctor_id, document_type, document_path, status, notes, verified_at, created_at "
+                    "FROM `doctor_verifications` WHERE doctor_id = %s ORDER BY created_at DESC",
+                    [did],
+                )
+            ]
         except Exception as e:
-            logger.warning(f"doc-approved push failed (non-blocking): {e}")
-    # Email the doctor (non-blocking)
+            logger.warning("verification documents fetch failed for doctor %s: %s", did, e)
+        verifications.append({
+            "id": str(did),
+            "user_id": str(r.get("user_id")),
+            "slug": r.get("slug"),
+            "name": r.get("name"),
+            "email": r.get("email"),
+            "phone": r.get("phone"),
+            "image": r.get("image"),
+            "qualification": r.get("qualification"),
+            "experience": _to_int(r.get("experience")),
+            "consultation_fee": _to_float(r.get("consultation_fee")),
+            "city": r.get("city"),
+            "languages": r.get("languages"),
+            "system": r.get("system"),
+            "gender": r.get("gender"),
+            "specialization_name": r.get("specialization_name"),
+            "isApproved": bool(_to_int(r.get("is_approved"), 0)),
+            "restrictionReason": r.get("restriction_reason"),
+            "createdAt": _iso(r.get("created_at")),
+            "submittedAt": _iso(r.get("created_at")),
+            "documents": docs,
+            "pendingDocumentCount": len([d for d in docs if d["status"] == "pending"]),
+        })
+    return {"verifications": verifications, "total": len(verifications)}
+
+
+class AdminVerificationDecision(BaseModel):
+    status: Literal["approved", "rejected"]
+    reason: Optional[str] = Field(None, max_length=500)
+
+
+@api_router.put("/admin/verifications/{doctor_id}")
+async def admin_decide_verification(
+    doctor_id: str,
+    body: AdminVerificationDecision,
+    admin: dict = Depends(require_admin),
+):
+    """Approve or reject a doctor, exactly as the website does.
+
+    Mirrors the website's `PUT /admin/verifications/:doctorId`:
+
+      * approve  -> `doctors.is_approved = 1`, clears `is_restricted`;
+      * reject   -> `doctors.is_approved = 0` and stores the reason in
+                    `restriction_reason` (that column is what hides the doctor
+                    from the public directory);
+      * both     -> every PENDING `doctor_verifications` row moves to the same
+                    status with `verified_at` stamped, so the doctor can see the
+                    decision on their documents and re-upload if rejected;
+      * both     -> audit log, `notifications` row for the doctor, push + email.
+    """
+    did = _to_int(doctor_id)
+    if did is None:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+
+    rows = await _sql_query(
+        "SELECT d.id, d.user_id, d.is_approved, d.restriction_reason, "
+        "       u.name, u.email "
+        "FROM `doctors` d JOIN `users` u ON d.user_id = u.id WHERE d.id = %s",
+        [did],
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+    doctor = rows[0]
+    doctor_name = doctor.get("name") or "Doctor"
+
+    stamp = now_iso()
+    if body.status == "approved":
+        # `verified` is the app's alias for `doctors.is_approved` (see
+        # msdb COLUMN_MAPS); writing the real column keeps the website in sync.
+        await db.doctors.update_one(
+            {"id": did},
+            {"$set": {
+                "verified": True,
+                "approved_at": stamp,
+                "is_restricted": False,
+                "restriction_reason": None,
+            }},
+        )
+        await _sql_query(
+            "UPDATE `doctors` SET is_approved = 1, is_restricted = 0, restriction_reason = NULL "
+            "WHERE id = %s", [did]
+        )
+        title = "Account verified"
+        message = (
+            f"Congratulations Dr. {doctor_name}! Your account has been verified. "
+            f"You can now start accepting patients."
+        )
+        doc_notes = "Approved by admin"
+    else:
+        reason = (body.reason or "Rejected during verification").strip()
+        await db.doctors.update_one(
+            {"id": did},
+            {"$set": {
+                "verified": False,
+                "rejected_at": stamp,
+                "restriction_reason": reason,
+            }},
+        )
+        # `restriction_reason` is a real column the website's public queries
+        # filter on, so write it directly as well as through the blob.
+        await _sql_query(
+            "UPDATE `doctors` SET is_approved = 0, is_restricted = 0, restriction_reason = %s "
+            "WHERE id = %s", [reason, did]
+        )
+        title = "Profile needs attention"
+        message = (
+            f"Your profile could not be approved. Reason: {reason} "
+            f"Please update your details and re-upload your documents."
+        )
+        doc_notes = reason
+
+    # Resolve the doctor's pending documents to the same decision.
     try:
-        demail = await user_email(d.get("user_id"))
-        send_doctor_verified_email(
-            doctor_email=demail,
-            doctor_name=d.get("name"),
-            approved=True,
+        await _sql_query(
+            "UPDATE `doctor_verifications` SET status = %s, notes = %s, verified_at = %s "
+            "WHERE doctor_id = %s AND status = 'pending'",
+            [body.status, doc_notes, stamp, did],
         )
     except Exception as e:
-        logger.warning(f"doc-approved email failed (non-blocking): {e}")
-    return {"ok": True}
+        logger.warning("doctor_verifications status update failed for %s: %s", did, e)
+
+    await log_activity(
+        f"verify_doctor_{body.status}",
+        actor=admin,
+        meta={"doctor_id": str(did), "name": doctor_name, "reason": body.reason},
+    )
+
+    user_id = doctor.get("user_id")
+    if user_id is not None:
+        try:
+            await _sql_query(
+                "INSERT INTO `notifications` (user_id, title, message, type, related_id, related_type) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                [user_id, title, message, "verification", did, "doctor"],
+            )
+        except Exception as e:
+            logger.debug("doctor decision notification failed: %s", e)
+
+        try:
+            await send_push(
+                recipients=[str(user_id)],
+                data={
+                    "title": "Account verified" if body.status == "approved" else "Profile needs attention",
+                    "message": message,
+                    "action_url": "/doctor/home" if body.status == "approved" else "/doctor/onboarding",
+                },
+                idempotency_key=f"doc_{body.status}_{did}",
+            )
+        except Exception as e:
+            logger.warning(f"doctor decision push failed (non-blocking): {e}")
+
+        try:
+            send_doctor_verified_email(
+                doctor_email=doctor.get("email"),
+                doctor_name=doctor_name,
+                approved=(body.status == "approved"),
+            )
+        except Exception as e:
+            logger.warning(f"doctor decision email failed (non-blocking): {e}")
+
+    return {
+        "ok": True,
+        "status": body.status,
+        "doctor_id": str(did),
+        "message": f"Doctor {body.status} successfully",
+    }
+
+
+@api_router.post("/admin/doctors/{doctor_id}/approve")
+async def admin_approve_doctor(doctor_id: str, admin: dict = Depends(require_admin)):
+    """Approve a doctor. Thin wrapper over the shared verification decision."""
+    return await admin_decide_verification(
+        doctor_id, AdminVerificationDecision(status="approved"), admin
+    )
 
 
 @api_router.post("/admin/doctors/{doctor_id}/reject")
 async def admin_reject_doctor(doctor_id: str, admin: dict = Depends(require_admin)):
-    d = await db.doctors.find_one({"id": doctor_id})
-    if not d:
-        raise HTTPException(status_code=404, detail="Doctor not found")
-    await db.doctors.update_one({"id": doctor_id}, {"$set": {"verified": False, "rejected_at": now_iso()}})
-    await log_activity("admin_doctor_rejected", actor=admin, meta={"doctor_id": doctor_id})
-    # Email the doctor (non-blocking)
-    try:
-        demail = await user_email(d.get("user_id"))
-        send_doctor_verified_email(
-            doctor_email=demail,
-            doctor_name=d.get("name"),
-            approved=False,
-        )
-    except Exception as e:
-        logger.warning(f"doc-rejected email failed (non-blocking): {e}")
-    return {"ok": True}
+    """Reject a doctor. Thin wrapper over the shared verification decision.
+
+    Rejection records a `restriction_reason`, which is exactly what the public
+    doctor directory filters on, so the doctor stops appearing publicly without
+    their account being disabled.
+    """
+    return await admin_decide_verification(
+        doctor_id,
+        AdminVerificationDecision(status="rejected", reason="Rejected by admin"),
+        admin,
+    )
 
 
 @api_router.delete("/admin/doctors/{doctor_id}")
@@ -4578,18 +4785,90 @@ async def my_diet_plans(user: dict = Depends(current_user)):
 
 # ----------------- Doctor onboarding & workspace -----------------
 class DoctorOnboardInput(BaseModel):
-    specialty: str
-    qualification: str
-    registration_number: str
-    experience_years: int = 0
+    """Everything the website collects across its doctor sign-up + verification.
+
+    Field names are the website's own (`system`, `specialization_id`,
+    `experience`, `about`) with the app's historical aliases (`specialty`,
+    `experience_years`, `bio`) still accepted, so an older build that posts the
+    legacy shape keeps working while new clients send the canonical one.
+    """
+    name: Optional[str] = Field(None, max_length=120)
+    phone: Optional[str] = Field(None, max_length=25)
+
+    # --- practice ---------------------------------------------------------
+    system: Optional[str] = Field(None, max_length=50)
+    specialization_id: Optional[int] = None
+    specialization_ids: Optional[List[int]] = None
+    specialty: Optional[str] = Field(None, max_length=100)      # legacy alias for system
+    qualification: Optional[str] = Field(None, max_length=500)
+    registration_number: Optional[str] = Field(None, max_length=100)
+    experience: Optional[int] = Field(None, ge=0, le=80)
+    experience_years: Optional[int] = Field(None, ge=0, le=80)  # legacy alias
+    consultation_fee: Optional[int] = Field(None, ge=0, le=1000000)
     languages: List[str] = []
-    consultation_fee: int = 499
-    bio: Optional[str] = None
-    clinic_name: Optional[str] = None
-    clinic_address: Optional[str] = None
-    documents: Optional[List[str]] = None  # base64 or filename placeholders
-    # Base64-encoded profile photo (data URI or raw base64). Cap ~4 MB.
+    gender: Optional[Literal["male", "female"]] = None
+    city: Optional[str] = Field(None, max_length=100)
+    is_available_online: Optional[bool] = None
+    is_available_offline: Optional[bool] = None
+
+    # --- copy -------------------------------------------------------------
+    bio: Optional[str] = Field(None, max_length=4000)
+    about: Optional[str] = Field(None, max_length=4000)
+    clinic_name: Optional[str] = Field(None, max_length=200)
+    clinic_address: Optional[str] = Field(None, max_length=500)
+
+    # --- photo ------------------------------------------------------------
+    # Base64 profile photo (data URI or raw base64), capped ~4 MB. Written to
+    # the app's uploads dir and stored as the same relative path the website
+    # uses, not as a base64 blob in a column.
     avatar_base64: Optional[str] = Field(None, max_length=4_000_000)
+
+    # --- credentials ------------------------------------------------------
+    # Real files, base64 encoded (the app has no multipart stack). Stored as
+    # `doctor_verifications` rows for the admin to review.
+    #
+    # A pre-verification build sent `documents` as a list of bare strings
+    # (["degree_certificate.pdf"]) and set a separate `documentsAttached` flag.
+    # Those carry no bytes, so there is nothing for an admin to open - such
+    # entries are skipped, and the response reports them under `skipped_documents`
+    # instead of pretending a credential was stored.
+    documents: Optional[List[Dict[str, Any]]] = None
+
+    # --- weekly schedule --------------------------------------------------
+    # {"0": [{"startTime": "09:00", "endTime": "17:00"}, ...]} where 0 = Sunday,
+    # matching `appointment_slots.day_of_week` on the website. A simpler
+    # {"0": ["09:00", "17:00"]} pair form is also accepted.
+    slots: Optional[Dict[str, List[Any]]] = None
+    weekly_schedule: Optional[Dict[str, List[Any]]] = None
+
+
+class DoctorSlotIn(BaseModel):
+    """One availability window, using the website's field names."""
+    dayOfWeek: Optional[int] = Field(None, alias="dayOfWeek")   # 0 = Sunday
+    date: Optional[str] = Field(None, max_length=10)             # one-off override
+    startTime: str = Field(..., alias="startTime")
+    endTime: str = Field(..., alias="endTime")
+    isAvailable: bool = True
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class DoctorSlotUpdate(BaseModel):
+    """Partial edit of an existing window. Every field is optional."""
+    dayOfWeek: Optional[int] = None
+    date: Optional[str] = Field(None, max_length=10)
+    startTime: Optional[str] = None
+    endTime: Optional[str] = None
+    isAvailable: Optional[bool] = None
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class DoctorWeeklySlots(BaseModel):
+    """Replace the whole recurring week."""
+    slots: Dict[str, List[Any]]
 
 
 class DoctorProfileUpdate(BaseModel):
@@ -4765,6 +5044,10 @@ async def _load_own_doctor_profile(user: dict) -> Optional[Dict[str, Any]]:
         pass
 
     specialty = doc.get("specialty")
+    # `specialty` is title-cased at its source (msdb row_to_doc), so a value
+    # here is already display-ready; only an explicit null falls back.
+    if not specialty and doc.get("system"):
+        specialty = str(doc["system"]).title()
     try:
         if doc.get("specialization_id"):
             r = await _sql_query(
@@ -4828,41 +5111,1027 @@ async def _load_own_doctor_profile(user: dict) -> Optional[Dict[str, Any]]:
     }
 
 
+# --------------------------------------------------------------------------- #
+# Doctor verification: documents + slots + admin review
+#
+# Everything in this block targets the SAME tables the website's Express backend
+# writes, so a doctor who registers in the app is indistinguishable from one who
+# registered on the site:
+#   * `doctor_verifications`  - documents awaiting admin review
+#   * `appointment_slots`     - the schedule the booking flow actually reads
+#   * `doctors.is_approved`   - the single gate on public visibility
+# --------------------------------------------------------------------------- #
+
+# `doctor_verifications.document_type` is a free VARCHAR(100) on the website, so
+# any of the labels its admin UI sends round-trips unchanged.
+DOCTOR_DOC_TYPES = (
+    "degree_certificate",
+    "registration_certificate",
+    "government_id",
+    "experience_letter",
+    "other",
+)
+
+_DOCTOR_DOC_MIME_EXT = {
+    "application/pdf": "pdf",
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "application/msword": "doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+}
+
+# The website caps uploads at 10 MB (multer `limits.fileSize`) and accepts
+# jpeg|jpg|png|pdf|doc|docx. Same numbers so neither backend can be the one that
+# rejects a file the other would have stored.
+DOCTOR_DOC_MAX_BYTES = 10 * 1024 * 1024
+
+# `appointment_slots.day_of_week` is JS `Date.getDay()` order, i.e. 0 = Sunday.
+# Identical to the website's getDayNames() so a day index means the same thing on
+# both surfaces.
+_DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+
+
+def _store_doctor_document(payload: Dict[str, Any], doctor_id: int, doc_type: str) -> str:
+    """Persist one base64 document and return the stored relative path.
+
+    Mirrors the website's multer handler: files land in `uploads/documents/` and
+    the column stores the RELATIVE path `/uploads/documents/<name>`. Both
+    backends mount `/uploads` as static content, so the admin review screen (on
+    either surface) can render the path directly.
+    """
+    encoded = payload.get("base64") or payload.get("data") or ""
+    if encoded.startswith("data:"):
+        _, _, encoded = encoded.partition(",")
+    try:
+        blob = base64.b64decode(encoded, validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Malformed document data")
+    if not blob:
+        raise HTTPException(status_code=400, detail="Document file is empty")
+    if len(blob) > DOCTOR_DOC_MAX_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail="File too large. Maximum size is 10MB.",
+        )
+
+    mime = (payload.get("contentType") or payload.get("mimeType") or "").lower()
+    ext = _DOCTOR_DOC_MIME_EXT.get(mime, "")
+    if not ext:
+        # No usable MIME type: sniff the magic bytes, then fall back to the
+        # client-declared filename. Never trust the extension alone.
+        if blob[:5] == b"%PDF-":
+            ext = "pdf"
+        elif blob[:3] == b"\xff\xd8\xff":
+            ext = "jpg"
+        elif blob[:8] == b"\x89PNG\r\n\x1a\n":
+            ext = "png"
+        else:
+            name = (payload.get("fileName") or payload.get("name") or "").lower()
+            guess = name.rsplit(".", 1)[-1] if "." in name else ""
+            if guess in ("jpg", "jpeg", "png", "pdf", "webp", "doc", "docx"):
+                ext = "jpg" if guess == "jpeg" else guess
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Unsupported file type. Allowed: JPG, PNG, WEBP, PDF, DOC, DOCX.",
+                )
+
+    target_dir = _UPLOADS_ROOT / "documents"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    unique = f"{int(time.time())}-{uuid.uuid4().hex[:9]}"
+    filename = f"doc-{doctor_id}-{unique}.{ext}"
+    (target_dir / filename).write_bytes(blob)
+    return f"/uploads/documents/{filename}"
+
+
+def _format_12h(t) -> str:
+    """Website's formatTime12h: '9:30 AM', hour 0 renders as 12."""
+    hour12 = t.hour % 12 or 12
+    return f"{hour12}:{t.minute:02d} {'AM' if t.hour < 12 else 'PM'}"
+
+
+async def _own_doctor_row(user: dict, *, create: bool = False) -> Dict[str, Any]:
+    """The signed-in doctor's `doctors` row, optionally creating it.
+
+    The website creates the row at registration time (`INSERT INTO doctors
+    (user_id, is_approved) VALUES (?, 0)`), so `create=True` mirrors that for
+    doctors whose row is missing (legacy rows, partial imports).
+    """
+    doc = await db.doctors.find_one({"user_id": user["id"]}, {"_id": 0})
+    if doc:
+        return doc
+    if not create:
+        raise HTTPException(status_code=404, detail="Doctor profile not found")
+    try:
+        await db.doctors.insert_one({
+            "user_id": user["id"],
+            "name": user.get("name"),
+            "email": user.get("email"),
+            "phone": user.get("phone"),
+            "verified": False,          # -> doctors.is_approved = 0
+            "is_restricted": False,
+            "rating": 0.0,
+            "review_count": 0,
+            "created_at": now_iso(),
+        })
+    except Exception:
+        pass
+    doc = await db.doctors.find_one({"user_id": user["id"]}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Doctor profile not found")
+    return doc
+
+
+async def _seed_default_slots(doctor_id: int) -> None:
+    """Website behaviour on an empty schedule (`slots.js` GET /).
+
+    The website lazily seeds Mon-Fri 09:00-17:00 the first time a doctor opens
+    their calendar, so a brand-new doctor is bookable without configuring
+    anything. The app must do the same, otherwise an app-registered doctor has
+    no slots at all and cannot take a single booking.
+    """
+    try:
+        existing = await _sql_query(
+            "SELECT id FROM `appointment_slots` WHERE doctor_id = %s LIMIT 1", [doctor_id]
+        )
+    except Exception:
+        return
+    if existing:
+        return
+    for day in (1, 2, 3, 4, 5):
+        try:
+            await _sql_query(
+                "INSERT INTO `appointment_slots` (doctor_id, day_of_week, start_time, end_time, is_available) "
+                "VALUES (%s, %s, %s, %s, 1)",
+                [doctor_id, day, time(9, 0), time(17, 0)],
+            )
+        except Exception as e:
+            logger.warning("default slot seed failed for doctor %s: %s", doctor_id, e)
+            return
+
+
+async def _notify_admins_of_submission(doctor: Dict[str, Any], *, was_approved: bool = False) -> None:
+    """Create one 'New Doctor Verification' notification per admin.
+
+    Mirrors the website's guard (`doctors.js` PUT /profile/me):
+
+        if (!wasAlreadyApproved) { notifyAdmins(); sendSubmissionEmails(); }
+
+    i.e. admins are pinged on every submission while the doctor is still
+    unapproved - which is what makes a RE-submission after a rejection visible -
+    and never again once they have been approved, so a doctor editing their
+    profile later does not re-spam the review queue.
+
+    Website reference: doctors.js PUT /profile/me.
+    """
+    if was_approved:
+        return
+    did = _to_int(doctor.get("id"))
+    if did is None:
+        return
+
+    doctor_name = doctor.get("name") or "A doctor"
+    message = f"Dr. {doctor_name} has submitted their profile for verification."
+    try:
+        admins = await _sql_query(
+            "SELECT id, email FROM `users` WHERE role = 'admin' LIMIT 50"
+        )
+    except Exception:
+        return
+    admin_addresses: List[str] = []
+    for admin in admins or []:
+        admin_id = _to_int(admin.get("id"))
+        if admin_id is None:
+            continue
+        title = "New Doctor Verification"
+        try:
+            await _sql_query(
+                "INSERT INTO `notifications` (user_id, title, message, type, related_id, related_type) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                [admin_id, title, message, "verification", did, "doctor"],
+            )
+        except Exception as e:
+            logger.debug("admin verification notification failed: %s", e)
+        # Push is best-effort; a dead Expo push token must not fail the submit.
+        try:
+            await send_push(
+                recipients=[str(admin_id)],
+                data={
+                    "type": "verification",
+                    "title": title,
+                    "message": message,
+                    "action_url": "/admin/doctors",
+                },
+                idempotency_key=f"doc_submitted_{did}_{admin_id}",
+            )
+        except Exception as e:
+            logger.debug("admin verification push failed: %s", e)
+        if admin.get("email"):
+            admin_addresses.append(admin["email"])
+
+    if admin_addresses:
+        try:
+            send_doctor_submitted_emails(
+                doctor_email=None,
+                doctor_name=doctor_name,
+                admin_emails=admin_addresses,
+            )
+        except Exception as e:
+            logger.debug("admin verification email failed: %s", e)
+
+
+async def _apply_weekly_slots(doctor_id: int, slots: Optional[Dict[str, Any]]) -> int:
+    """Replace a doctor's recurring weekly schedule from a client payload.
+
+    `slots` maps `appointment_slots.day_of_week` (0 = Sunday, the website's
+    `Date.getDay()` order) to a list of windows. Two shapes are accepted:
+
+        {"0": [{"startTime": "09:00", "endTime": "17:00"}]}
+        {"0": ["09:00", "17:00"]}
+
+    Only RECURRING rows (day_of_week set, date NULL) are replaced; date-specific
+    one-offs an admin or the doctor set up for a particular day are left alone,
+    because `GET /doctors/{id}/slots` prefers them and silently deleting them
+    would drop a real exception.
+
+    `slots=None` means "the client said nothing about my schedule" and seeds the
+    website's Mon-Fri default. `slots={}` means "I deliberately cleared my whole
+    week" and deletes every recurring row - conflating the two would silently
+    resurrect a schedule the doctor had just removed.
+
+    Returns the number of recurring rows written.
+    """
+    if slots is None:
+        await _seed_default_slots(doctor_id)
+        try:
+            n = await _sql_query(
+                "SELECT COUNT(*) AS n FROM `appointment_slots` "
+                "WHERE doctor_id = %s AND date IS NULL", [doctor_id]
+            )
+            return int((n[0] or {}).get("n") or 0)
+        except Exception:
+            return 0
+
+    windows: List[tuple] = []   # (day_of_week, start_time, end_time)
+    for key, value in (slots or {}).items():
+        try:
+            day = int(key)
+        except (TypeError, ValueError):
+            continue
+        if not 0 <= day <= 6:
+            continue
+        if not isinstance(value, list):
+            continue
+        for entry in value:
+            start_raw = end_raw = None
+            if isinstance(entry, dict):
+                start_raw = entry.get("startTime") or entry.get("start_time")
+                end_raw = entry.get("endTime") or entry.get("end_time")
+            elif isinstance(entry, (list, tuple)) and len(entry) == 2:
+                start_raw, end_raw = entry
+            elif isinstance(entry, str) and "," in entry:
+                start_raw, _, end_raw = entry.partition(",")
+            if not start_raw or not end_raw:
+                continue
+            start = _as_time_obj(str(start_raw).strip())
+            end = _as_time_obj(str(end_raw).strip())
+            if not start or not end or start >= end:
+                continue
+            windows.append((day, start, end))
+
+    if not windows:
+        # An explicitly empty payload is a valid "clear my whole week".
+        if not slots:
+            await _sql_query(
+                "DELETE FROM `appointment_slots` WHERE doctor_id = %s AND date IS NULL",
+                [doctor_id],
+            )
+            return 0
+        raise HTTPException(
+            status_code=400,
+            detail="No valid time windows in the schedule. Use HH:MM with a start before the end.",
+        )
+
+    # Reject overlaps on the same weekday: two overlapping windows expand into
+    # duplicate bookable slots, which the booking screen would render twice.
+    by_day: Dict[int, List[tuple]] = {}
+    for day, start, end in windows:
+        by_day.setdefault(day, []).append((start, end))
+    for day, spans in by_day.items():
+        spans.sort()
+        for i in range(1, len(spans)):
+            if spans[i][0] < spans[i - 1][1]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Overlapping time windows on day {day}. Merge them into one range.",
+                )
+
+    try:
+        await _sql_query(
+            "DELETE FROM `appointment_slots` WHERE doctor_id = %s AND date IS NULL", [doctor_id]
+        )
+        for day, start, end in windows:
+            await _sql_query(
+                "INSERT INTO `appointment_slots` "
+                "(doctor_id, day_of_week, start_time, end_time, is_available) "
+                "VALUES (%s, %s, %s, %s, 1)",
+                [doctor_id, day, start, end],
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Could not save your time slots. Please try again.")
+    return len(windows)
+
+
+def _hhmm_to_minutes(value: str) -> Optional[int]:
+    """'HH:MM' -> minutes since midnight, or None if it isn't that shape."""
+    if not isinstance(value, str) or len(value) != 5 or value[2] != ":":
+        return None
+    try:
+        hh, mm = int(value[:2]), int(value[3:])
+    except ValueError:
+        return None
+    if not (0 <= hh <= 23 and 0 <= mm <= 59):
+        return None
+    return hh * 60 + mm
+
+
+def _minutes_between(earlier: str, later: str) -> Optional[int]:
+    """Signed gap in minutes between two 'HH:MM' strings."""
+    a = _hhmm_to_minutes(earlier)
+    b = _hhmm_to_minutes(later)
+    if a is None or b is None:
+        return None
+    return b - a
+
+
+def _span_from_run(times: List[str]) -> Dict[str, str]:
+    """Collapse a contiguous run of discrete slot times into one window.
+
+    The availability grid stores individual taps ('09:00', '09:30', ...) while
+    `appointment_slots` stores ranges, so 09:00/09:30/10:00 becomes
+    {startTime: '09:00', endTime: '10:30'} - the last tap plus one slot, which
+    is the same 30-minute boundaries booking expands.
+    """
+    start = times[0]
+    last = times[-1]
+    end_minutes = (_hhmm_to_minutes(last) or 0) + 30
+    if end_minutes >= 24 * 60:
+        end_minutes = 24 * 60 - 1
+    end = f"{end_minutes // 60:02d}:{end_minutes % 60:02d}"
+    return {"startTime": start, "endTime": end}
+
+
+def _slot_row(r: Dict[str, Any]) -> Dict[str, Any]:
+    start = _as_time_obj(r.get("start_time"))
+    end = _as_time_obj(r.get("end_time"))
+    return {
+        "id": str(r.get("id")),
+        "doctor_id": str(r.get("doctor_id")),
+        "day_of_week": _to_int(r.get("day_of_week")),
+        "day_name": _DAY_NAMES[_to_int(r.get("day_of_week"))] if _to_int(r.get("day_of_week")) is not None else None,
+        "date": _iso(r.get("date")),
+        "start_time": start.strftime("%H:%M:%S") if start else None,
+        "end_time": end.strftime("%H:%M:%S") if end else None,
+        "start_label": _format_12h(start) if start else None,
+        "end_label": _format_12h(end) if end else None,
+        "is_available": bool(_to_int(r.get("is_available"), 0)),
+    }
+
+
+@api_router.get("/doctor/slots")
+async def doctor_list_slots(user: dict = Depends(current_user)):
+    """The signed-in doctor's schedule, straight from `appointment_slots`.
+
+    Mirrors the website's `GET /slots`, including its lazy default: the first
+    call on an empty table seeds Mon-Fri 09:00-17:00 so a newly registered doctor
+    is immediately bookable instead of having an empty calendar.
+    """
+    if user["role"] != "doctor":
+        raise HTTPException(status_code=403, detail="Only doctors can manage slots")
+    doc = await _own_doctor_row(user, create=True)
+    did = _to_int(doc.get("id"))
+    if did is None:
+        raise HTTPException(status_code=404, detail="Doctor profile not found")
+
+    await _seed_default_slots(did)
+    rows = await _sql_query(
+        "SELECT id, doctor_id, day_of_week, date, start_time, end_time, is_available "
+        "FROM `appointment_slots` WHERE doctor_id = %s ORDER BY day_of_week, start_time",
+        [did],
+    )
+    slots = [_slot_row(r) for r in rows or []]
+    return {
+        "slots": slots,
+        "total": len(slots),
+        # The website returns 0=Sunday here, so expose that index map too rather
+        # than making the client re-derive it.
+        "day_order": _DAY_NAMES,
+    }
+
+
+@api_router.post("/doctor/slots")
+async def doctor_create_slot(body: DoctorSlotIn, user: dict = Depends(current_user)):
+    """Add one availability window. Mirrors the website's `POST /slots`."""
+    if user["role"] != "doctor":
+        raise HTTPException(status_code=403, detail="Only doctors can manage slots")
+    doc = await _own_doctor_row(user, create=True)
+    did = _to_int(doc.get("id"))
+    if did is None:
+        raise HTTPException(status_code=404, detail="Doctor profile not found")
+
+    if body.day_of_week is None and not body.date:
+        raise HTTPException(status_code=400, detail="Either dayOfWeek or date is required")
+    if body.day_of_week is not None and not 0 <= body.day_of_week <= 6:
+        raise HTTPException(status_code=400, detail="dayOfWeek must be between 0 (Sunday) and 6 (Saturday)")
+
+    start = _as_time_obj(body.start_time)
+    end = _as_time_obj(body.end_time)
+    if not start or not end:
+        raise HTTPException(status_code=400, detail="startTime and endTime must be HH:MM")
+    if start >= end:
+        raise HTTPException(status_code=400, detail="The end time must be after the start time")
+
+    day = body.day_of_week
+    when = body.date
+    if when is None and day is not None:
+        await _assert_no_overlap(did, day, start, end)
+
+    try:
+        result = await _sql_query(
+            "INSERT INTO `appointment_slots` "
+            "(doctor_id, day_of_week, date, start_time, end_time, is_available) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            [did, day, when, start, end, 1 if body.is_available is not False else 0],
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Could not save the time slot. Please try again.")
+
+    slot_id = _to_int((result[0] if isinstance(result, (list, tuple)) and result else {}) or {}).get("insert_id") \
+        if isinstance(result, (list, tuple)) else None
+    rows = await _sql_query(
+        "SELECT id, doctor_id, day_of_week, date, start_time, end_time, is_available "
+        "FROM `appointment_slots` WHERE doctor_id = %s ORDER BY day_of_week, start_time",
+        [did],
+    )
+    return {"slot": _slot_row(rows[0]) if rows else {"id": str(slot_id)}, "slots": [_slot_row(r) for r in rows or []]}
+
+
+@api_router.put("/doctor/slots/weekly")
+async def doctor_replace_weekly(body: DoctorWeeklySlots, user: dict = Depends(current_user)):
+    """Replace the whole recurring week in one call.
+
+    MUST stay declared above `PUT /doctor/slots/{slot_id}`. FastAPI matches paths
+    in registration order, so a literal segment registered after a parameterised
+    one is unreachable - `PUT /doctor/slots/weekly` would be captured as
+    `slot_id="weekly"`, find no row with that id and 404, and the doctor could
+    never save their whole week.
+
+    The app's availability grid is a per-weekday on/off matrix, so rewriting the
+    week in one shot is both faster and safer than diffing it client-side.
+    """
+    if user["role"] != "doctor":
+        raise HTTPException(status_code=403, detail="Only doctors can manage slots")
+    doc = await _own_doctor_row(user, create=True)
+    did = _to_int(doc.get("id"))
+    if did is None:
+        raise HTTPException(status_code=404, detail="Doctor profile not found")
+    written = await _apply_weekly_slots(did, body.slots)
+    rows = await _sql_query(
+        "SELECT id, doctor_id, day_of_week, date, start_time, end_time, is_available "
+        "FROM `appointment_slots` WHERE doctor_id = %s ORDER BY day_of_week, start_time",
+        [did],
+    )
+    return {"slots": [_slot_row(r) for r in rows or []], "total": written}
+
+
+async def _assert_no_overlap(
+    doctor_id: int,
+    day_of_week: int,
+    start,
+    end,
+    *,
+    exclude_id: Optional[int] = None,
+) -> None:
+    """Reject a recurring window that overlaps an existing one on the same day.
+
+    Two overlapping windows expand into duplicate bookable slots, so the patient
+    booking screen would offer the same time twice.
+    """
+    if day_of_week is None or start is None or end is None:
+        return
+    rows = await _sql_query(
+        "SELECT id, start_time, end_time FROM `appointment_slots` "
+        "WHERE doctor_id = %s AND day_of_week = %s AND date IS NULL",
+        [doctor_id, day_of_week],
+    )
+    for r in rows or []:
+        if exclude_id is not None and _to_int(r.get("id")) == exclude_id:
+            continue
+        other_start = _as_time_obj(r.get("start_time"))
+        other_end = _as_time_obj(r.get("end_time"))
+        if not other_start or not other_end:
+            continue
+        if start < other_end and other_start < end:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"This window overlaps an existing slot "
+                    f"({_format_12h(other_start)} - {_format_12h(other_end)})."
+                ),
+            )
+
+
+@api_router.put("/doctor/slots/{slot_id}")
+async def doctor_update_slot(slot_id: str, body: DoctorSlotUpdate, user: dict = Depends(current_user)):
+    """Edit a window, or toggle it off without deleting it.
+
+    Mirrors the website's `PUT /slots/:id`. Keeping `is_available = 0` rows is
+    deliberate: it is how the website pauses a day while preserving the schedule,
+    and `GET /doctors/{id}/slots` filters them out at read time.
+    """
+    if user["role"] != "doctor":
+        raise HTTPException(status_code=403, detail="Only doctors can manage slots")
+    doc = await _own_doctor_row(user)
+    did = _to_int(doc.get("id"))
+    if did is None:
+        raise HTTPException(status_code=404, detail="Doctor profile not found")
+
+    rows = await _sql_query(
+        "SELECT id, doctor_id, day_of_week, date, start_time, end_time, is_available "
+        "FROM `appointment_slots` WHERE id = %s AND doctor_id = %s",
+        [_to_int(slot_id), did],
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Slot not found")
+    current = rows[0]
+
+    updates: Dict[str, Any] = {}
+    params: List[Any] = []
+
+    if body.day_of_week is not None:
+        if not 0 <= body.day_of_week <= 6:
+            raise HTTPException(status_code=400, detail="dayOfWeek must be between 0 and 6")
+        updates["day_of_week"] = body.day_of_week
+        params.append(body.day_of_week)
+    if body.date is not None:
+        updates["date"] = body.date
+        params.append(body.date)
+    if body.start_time is not None:
+        parsed = _as_time_obj(body.start_time)
+        if not parsed:
+            raise HTTPException(status_code=400, detail="startTime must be HH:MM")
+        updates["start_time"] = parsed
+        params.append(parsed)
+    if body.end_time is not None:
+        parsed = _as_time_obj(body.end_time)
+        if not parsed:
+            raise HTTPException(status_code=400, detail="endTime must be HH:MM")
+        updates["end_time"] = parsed
+        params.append(parsed)
+    if body.is_available is not None:
+        updates["is_available"] = 1 if body.is_available else 0
+        params.append(1 if body.is_available else 0)
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    final_start = _as_time_obj(current.get("start_time"))
+    final_end = _as_time_obj(current.get("end_time"))
+    if "start_time" in updates:
+        final_start = updates["start_time"]
+    if "end_time" in updates:
+        final_end = updates["end_time"]
+    if final_start and final_end and final_start >= final_end:
+        raise HTTPException(status_code=400, detail="The end time must be after the start time")
+
+    final_day = updates.get("day_of_week", current.get("day_of_week"))
+    if updates.get("date") is None and current.get("date") is None and final_day is not None:
+        await _assert_no_overlap(
+            did, _to_int(final_day), final_start, final_end, exclude_id=_to_int(slot_id)
+        )
+
+    assign = ", ".join(f"`{c}` = %s" for c in updates)
+    await _sql_query(
+        f"UPDATE `appointment_slots` SET {assign} WHERE id = %s AND doctor_id = %s",
+        params + [_to_int(slot_id), did],
+    )
+    after = await _sql_query(
+        "SELECT id, doctor_id, day_of_week, date, start_time, end_time, is_available "
+        "FROM `appointment_slots` WHERE id = %s",
+        [_to_int(slot_id)],
+    )
+    return {"message": "Slot updated", "slot": _slot_row(after[0]) if after else None}
+
+
+@api_router.delete("/doctor/slots/{slot_id}")
+async def doctor_delete_slot(slot_id: str, user: dict = Depends(current_user)):
+    """Remove a window. Mirrors the website's `DELETE /slots/:id`."""
+    if user["role"] != "doctor":
+        raise HTTPException(status_code=403, detail="Only doctors can manage slots")
+    doc = await _own_doctor_row(user)
+    did = _to_int(doc.get("id"))
+    if did is None:
+        raise HTTPException(status_code=404, detail="Doctor profile not found")
+    await _sql_query(
+        "DELETE FROM `appointment_slots` WHERE id = %s AND doctor_id = %s",
+        [_to_int(slot_id), did],
+    )
+    return {"message": "Slot deleted", "id": str(slot_id)}
+
+
 @api_router.get("/doctor/me")
 async def doctor_me(user: dict = Depends(current_user)):
     if user["role"] != "doctor":
         raise HTTPException(status_code=403, detail="Doctors only")
     profile = await _load_own_doctor_profile(user)
-    if not profile:
-        raise HTTPException(status_code=404, detail="No doctor profile found for this account")
-    return profile
+    if profile:
+        return profile
+    raise HTTPException(status_code=404, detail="No doctor profile found for this account")
+
+
+# ---- Verification documents ------------------------------------------------
+class DoctorDocumentIn(BaseModel):
+    """One uploaded credential.
+
+    The website sends multipart form-data (`multer`); the app has no multipart
+    stack, so the file arrives as base64 and is written to the same directory
+    the website writes to. `documentType` is the website's own camelCase field.
+    """
+    documentType: str = Field("other", max_length=100)
+    fileName: Optional[str] = Field(None, max_length=200)
+    contentType: Optional[str] = Field(None, max_length=100)
+    base64: str = Field(..., max_length=14_000_000)
+
+
+def _verification_row(r: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": str(r.get("id")),
+        "doctor_id": str(r.get("doctor_id")),
+        "document_type": r.get("document_type"),
+        "document_path": r.get("document_path"),
+        "status": r.get("status") or "pending",
+        "notes": r.get("notes"),
+        "verified_at": _iso(r.get("verified_at")),
+        "created_at": _iso(r.get("created_at")),
+    }
+
+
+@api_router.post("/doctor/documents")
+async def doctor_upload_document(
+    body: DoctorDocumentIn,
+    request: Request,
+    user: dict = Depends(current_user),
+):
+    """Store one credential for admin review.
+
+    Writes a real `doctor_verifications` row with `status='pending'` - exactly
+    what the website's `POST /doctors/documents` does. Previously the app only
+    sent placeholder filenames during onboarding, so the admin review queue was
+    always empty and there was nothing to approve or reject.
+    """
+    if user["role"] != "doctor":
+        raise HTTPException(status_code=403, detail="Only doctors can upload documents")
+    await rate_limit(request, f"doctor:docs:{user['id']}", max_calls=40, window_seconds=3600)
+
+    doc = await _own_doctor_row(user, create=True)
+    did = _to_int(doc.get("id"))
+    if did is None:
+        raise HTTPException(status_code=404, detail="Doctor profile not found")
+
+    relative = _store_doctor_document(body.dict(), did, body.documentType)
+    try:
+        await _sql_query(
+            "INSERT INTO `doctor_verifications` (doctor_id, document_type, document_path, status) "
+            "VALUES (%s, %s, %s, 'pending')",
+            [did, body.documentType, relative],
+        )
+        # `documents_uploaded` is app-only state the app screens read, so derive
+        # it from the real rows instead of trusting a client-sent boolean.
+        count = await _sql_query(
+            "SELECT COUNT(*) AS n FROM `doctor_verifications` WHERE doctor_id = %s", [did]
+        )
+        uploaded = int((count[0] or {}).get("n") or 0) > 0
+    except HTTPException:
+        raise
+    except Exception as e:
+        # The file is already on disk; surface the DB failure rather than
+        # pretending the upload succeeded.
+        logger.exception("doctor_verifications insert failed")
+        raise HTTPException(status_code=500, detail="Could not save the document. Please try again.")
+
+    await db.doctors.update_one(
+        {"user_id": user["id"]}, {"$set": {"documents_uploaded": uploaded}}
+    )
+
+    rows = await _sql_query(
+        "SELECT id, doctor_id, document_type, document_path, status, notes, verified_at, created_at "
+        "FROM `doctor_verifications` WHERE doctor_id = %s ORDER BY created_at DESC",
+        [did],
+    )
+    return {"document": _verification_row(rows[0]) if rows else None, "documents_uploaded": uploaded}
+
+
+@api_router.get("/doctor/documents")
+async def doctor_list_documents(user: dict = Depends(current_user)):
+    """The doctor's own credentials and their review status.
+
+    `status` and `notes` are what the admin writes on review, so the app can
+    show a rejected doctor exactly why and let them re-upload.
+    """
+    if user["role"] != "doctor":
+        raise HTTPException(status_code=403, detail="Only doctors can view their documents")
+    doc = await _own_doctor_row(user)
+    did = _to_int(doc.get("id"))
+    if did is None:
+        raise HTTPException(status_code=404, detail="Doctor profile not found")
+    rows = await _sql_query(
+        "SELECT id, doctor_id, document_type, document_path, status, notes, verified_at, created_at "
+        "FROM `doctor_verifications` WHERE doctor_id = %s ORDER BY created_at DESC",
+        [did],
+    )
+    documents = [_verification_row(r) for r in rows or []]
+    return {
+        "documents": documents,
+        "total": len(documents),
+        "pending_count": len([d for d in documents if d["status"] == "pending"]),
+        "rejected_count": len([d for d in documents if d["status"] == "rejected"]),
+    }
+
+
+@api_router.delete("/doctor/documents/{doc_id}")
+async def doctor_delete_document(doc_id: str, user: dict = Depends(current_user)):
+    """Withdraw a credential that has not been reviewed yet.
+
+    Reviewed rows are kept: `doctor_verifications` is the admin's audit trail,
+    so once a decision exists the doctor can only replace the file, not erase it.
+    """
+    if user["role"] != "doctor":
+        raise HTTPException(status_code=403, detail="Only doctors can manage their documents")
+    doc = await _own_doctor_row(user)
+    did = _to_int(doc.get("id"))
+    if did is None:
+        raise HTTPException(status_code=404, detail="Doctor profile not found")
+    rows = await _sql_query(
+        "SELECT id, status FROM `doctor_verifications` WHERE id = %s AND doctor_id = %s",
+        [_to_int(doc_id), did],
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if (rows[0].get("status") or "pending") != "pending":
+        raise HTTPException(
+            status_code=400,
+            detail="This document has already been reviewed. Please upload a new one instead.",
+        )
+    await _sql_query(
+        "DELETE FROM `doctor_verifications` WHERE id = %s AND doctor_id = %s",
+        [_to_int(doc_id), did],
+    )
+    return {"deleted": True, "id": str(doc_id)}
 
 
 @api_router.put("/doctor/onboard")
-async def doctor_onboard(body: DoctorOnboardInput, user: dict = Depends(current_user)):
+async def doctor_onboard(
+    body: DoctorOnboardInput,
+    request: Request,
+    user: dict = Depends(current_user),
+):
+    """Submit a doctor profile for admin verification.
+
+    This is the app's counterpart of the website's `PUT /doctors/profile/me`, and
+    it must leave the same trace in the shared database:
+
+      * every field is written to the REAL `users` / `doctors` columns (shared
+        with `_write_doctor_profile`), not just the `data` JSON blob;
+      * credentials become real `doctor_verifications` rows with
+        `status='pending'` - no more placeholder filenames;
+      * the weekly schedule becomes real `appointment_slots` rows, which is what
+        the booking flow actually reads;
+      * the profile is explicitly left UNAPPROVED (`doctors.is_approved = 0`)
+        and a slug is generated so the doctor gets a public URL once approved;
+      * admins get exactly one "New Doctor Verification" notification.
+
+    Previously this wrote only `specialty` / `experience_years` / `avatar_url`
+    into the blob and trusted a client-sent `documents` list, so nothing reached
+    the website, the admin review queue was empty, and the doctor's own time
+    slots were never created.
+    """
     if user["role"] != "doctor":
         raise HTTPException(status_code=403, detail="Doctors only")
-    upd = body.dict()
-    # Convert base64 photo → data URI stored as avatar_url so it renders directly in <Image>.
-    avatar_b64 = upd.pop("avatar_base64", None)
-    if avatar_b64:
-        upd["avatar_url"] = avatar_b64 if avatar_b64.startswith("data:") else f"data:image/jpeg;base64,{avatar_b64}"
-    upd["onboarded_at"] = now_iso()
-    upd["documents_uploaded"] = bool(body.documents) or bool(body.registration_number)
-    r = await db.doctors.update_one({"user_id": user["id"]}, {"$set": upd}, upsert=True)
-    d = await db.doctors.find_one({"user_id": user["id"]}, {"_id": 0})
-    await log_activity("doctor_onboarded", actor=user, meta={"specialty": body.specialty})
-    # Email the doctor and notify admins (non-blocking) — matches website
-    try:
-        demail = await user_email(user.get("id"))
-        send_doctor_submitted_emails(
-            doctor_email=demail,
-            doctor_name=d.get("name") if d else user.get("name"),
-            admin_emails=await admin_email_addresses(),
+    await rate_limit(request, f"doctor:onboard:{user['id']}", max_calls=30, window_seconds=3600)
+
+    doc = await _own_doctor_row(user, create=True)
+    did = _to_int(doc.get("id"))
+    if did is None:
+        raise HTTPException(status_code=404, detail="Doctor profile not found")
+
+    was_approved = bool(_to_int(doc.get("is_approved", doc.get("verified")), 0))
+
+    # ---- 1. profile fields -> real columns --------------------------------
+    payload = DoctorProfileUpdate(
+        name=body.name,
+        phone=body.phone,
+        # NOTE: avatar_base64 is deliberately NOT forwarded. `_write_doctor_profile`
+        # would persist the raw data URI into `users.image`, which is a VARCHAR(500)
+        # - a ~4 MB base64 blob either gets truncated or rejected, and it would be
+        # overwritten a few lines below by the real on-disk path anyway. Step 2
+        # stores the photo properly.
+        about=body.bio or body.about,
+        bio=body.bio,
+        qualification=body.qualification,
+        experience=body.experience_years or None,
+        consultation_fee=body.consultation_fee or None,
+        languages=body.languages or None,
+        city=body.city,
+        gender=body.gender,
+        system=body.system or body.specialty,
+        specialization_id=body.specialization_id,
+        specializations=body.specialization_ids,
+        is_available_online=body.is_available_online,
+        is_available_offline=body.is_available_offline,
+        clinic_name=body.clinic_name,
+        clinic_address=body.clinic_address,
+        registration_number=body.registration_number,
+    )
+    await _write_doctor_profile(user, payload, doc, allow_empty=True)
+
+    # ---- 2. photo on disk, not as a giant base64 column --------------------
+    photo_url = None
+    if body.avatar_base64:
+        try:
+            photo_url = await _store_profile_photo_local(
+                body.avatar_base64, int(user["id"]), _upload_base(request)
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning("doctor onboarding photo store failed: %s", e)
+        if photo_url:
+            await _sql_query(
+                "UPDATE `users` SET image = %s WHERE id = %s", [photo_url, user["id"]]
+            )
+            await db.doctors.update_one(
+                {"user_id": user["id"]}, {"$set": {"avatar_url": photo_url}}
+            )
+
+    # ---- 3. slug, so the public URL exists the moment admin approves -------
+    fresh = await db.doctors.find_one({"user_id": user["id"]}, {"_id": 0}) or {}
+    if not fresh.get("slug"):
+        spec_name = None
+        if fresh.get("specialization_id"):
+            r = await _sql_query(
+                "SELECT name FROM `specializations` WHERE id = %s",
+                [fresh["specialization_id"]],
+            )
+            spec_name = r[0].get("name") if r else None
+        slug = await _unique_doctor_slug(
+            body.name or fresh.get("name") or user.get("name"), spec_name, did
         )
-    except Exception as e:
-        logger.warning(f"doctor onboard emails failed (non-blocking): {e}")
-    return d
+        await db.doctors.update_one({"user_id": user["id"]}, {"$set": {"slug": slug}})
+
+    # ---- 4. presence row, so the doctor can go online ----------------------
+    try:
+        await db.doctor_status.insert_one({
+            "doctor_id": did,
+            "status": "offline",
+            "last_seen": None,
+            "updated_at": now_iso(),
+        })
+    except Exception:
+        # Duplicate key: the website already created this row. Harmless.
+        pass
+
+    # ---- 5. credentials -> doctor_verifications ---------------------------
+    saved_documents = 0
+    skipped_documents = 0
+    for doc_payload in body.documents or []:
+        # A pre-verification build of the app posted `documents` as a list of
+        # bare strings (["degree_certificate.pdf"]). Those carry no bytes, so
+        # there is nothing to store - skip them instead of crashing the whole
+        # submission on `.get()`.
+        if not isinstance(doc_payload, dict):
+            skipped_documents += 1
+            continue
+        doc_type = doc_payload.get("documentType") or "other"
+        try:
+            relative = _store_doctor_document(doc_payload, did, doc_type)
+            await _sql_query(
+                "INSERT INTO `doctor_verifications` (doctor_id, document_type, document_path, status) "
+                "VALUES (%s, %s, %s, 'pending')",
+                [did, doc_type, relative],
+            )
+            saved_documents += 1
+        except HTTPException:
+            raise
+        except Exception as e:
+            # One bad file must not discard the profile the doctor just filled in.
+            logger.exception("onboarding document store failed")
+
+    # ---- 6. weekly schedule -> appointment_slots --------------------------
+    saved_slots = await _apply_weekly_slots(did, body.slots or body.weekly_schedule)
+
+    # ---- 7. requeue a previously REJECTED application --------------------
+    # `GET /admin/verifications` hides any doctor who has a `rejected`
+    # `doctor_verifications` row - that is how the website keeps a returned
+    # application out of the queue until they fix it. Without this step a doctor
+    # who resubmits (with brand-new pending uploads) would stay hidden forever,
+    # because their OLD rejected row never goes away, and nobody would ever look
+    # at the replacement file. So resubmitting clears the return: the flag is
+    # lifted, the stale rejection rows go back to `pending`, and the admin sees
+    # the doctor again on their next queue refresh.
+    was_returned = bool(doc.get("restriction_reason")) or bool(_to_int(doc.get("is_restricted"), 0))
+    if was_returned:
+        try:
+            await _sql_query(
+                "UPDATE `doctors` SET restriction_reason = NULL, is_restricted = 0 WHERE id = %s",
+                [did],
+            )
+            await db.doctors.update_one(
+                {"id": did}, {"$set": {"restriction_reason": None, "is_restricted": False}}
+            )
+            # Stale rejections become pending again so the admin re-checks the
+            # whole set, matching the website's "profile in review" state.
+            await _sql_query(
+                "UPDATE `doctor_verifications` SET status = 'pending', notes = %s, verified_at = NULL "
+                "WHERE doctor_id = %s AND status = 'rejected'",
+                ["Resubmitted for review", did],
+            )
+        except Exception as e:
+            logger.warning(f"requeue on resubmit failed for doctor {did}: {e}")
+
+    # ---- 8. submission state ---------------------------------------------
+    # `documents_uploaded` is derived from real rows, never from the client.
+    uploaded = False
+    try:
+        count = await _sql_query(
+            "SELECT COUNT(*) AS n FROM `doctor_verifications` WHERE doctor_id = %s", [did]
+        )
+        uploaded = int((count[0] or {}).get("n") or 0) > 0
+    except Exception:
+        uploaded = saved_documents > 0
+
+    stamp = now_iso()
+    await db.doctors.update_one(
+        {"user_id": user["id"]},
+        {"$set": {
+            "onboarded_at": stamp,
+            "submitted_at": stamp,
+            "documents_uploaded": uploaded,
+        }},
+    )
+    await log_activity(
+        "doctor_onboarded",
+        actor=user,
+        meta={
+            "documents": saved_documents,
+            "skipped_documents": skipped_documents,
+            "slots": saved_slots,
+            "system": body.system or body.specialty,
+            "resubmission": was_returned,
+        },
+    )
+
+    # ---- 9. tell the admin, and the doctor, about the submission ----------
+    # Mirrors the website: `if (!wasAlreadyApproved)` guards both the admin
+    # email/notification and the doctor's own confirmation. An already-approved
+    # doctor editing their profile never re-spams the review queue, while a
+    # REJECTED doctor resubmitting does - that is how a returned application
+    # becomes visible to the admin a second time.
+    if not was_approved:
+        final = await db.doctors.find_one({"user_id": user["id"]}, {"_id": 0}) or {}
+        try:
+            send_doctor_submitted_emails(
+                doctor_email=final.get("email") or user.get("email"),
+                doctor_name=body.name or final.get("name") or user.get("name"),
+                admin_emails=[],
+            )
+        except Exception as e:
+            logger.warning(f"doctor onboard email failed (non-blocking): {e}")
+        try:
+            await _notify_admins_of_submission(final, was_approved=False)
+        except Exception as e:
+            logger.warning(f"admin notification failed (non-blocking): {e}")
+
+    # ---- 10. return the real profile + what admin will review --------------
+    profile = await _load_own_doctor_profile(user)
+    doc_rows = await _sql_query(
+        "SELECT id, doctor_id, document_type, document_path, status, notes, verified_at, created_at "
+        "FROM `doctor_verifications` WHERE doctor_id = %s ORDER BY created_at DESC",
+        [did],
+    )
+    documents = [_verification_row(r) for r in doc_rows or []]
+    profile = dict(profile or {})
+    profile["submitted_at"] = stamp
+    profile["documents"] = documents
+    profile["documents_uploaded"] = uploaded
+    profile["pending_documents"] = len([d for d in documents if d["status"] == "pending"])
+    profile["rejected_documents"] = len([d for d in documents if d["status"] == "rejected"])
+    profile["slots_configured"] = saved_slots
+    profile["skipped_documents"] = skipped_documents
+    return profile
 
 
 @api_router.put("/doctor/profile")
@@ -4882,6 +6151,26 @@ async def doctor_update_profile(body: DoctorProfileUpdate, user: dict = Depends(
     current = await db.doctors.find_one({"user_id": user["id"]})
     if not current:
         raise HTTPException(status_code=404, detail="No doctor profile found for this account")
+
+    return await _write_doctor_profile(user, body, current)
+
+
+async def _write_doctor_profile(
+    user: dict,
+    body: DoctorProfileUpdate,
+    current: Dict[str, Any],
+    *,
+    allow_empty: bool = False,
+) -> Dict[str, Any]:
+    """Apply a `DoctorProfileUpdate` to the real `users` + `doctors` columns.
+
+    Shared by `PUT /doctor/profile` and `PUT /doctor/onboard` so both paths write
+    byte-identical rows: onboarding used to be a separate code path that only
+    touched the `data` blob, which is why an app-registered doctor's profile was
+    invisible on the website.
+
+    Returns the reloaded profile via `_load_own_doctor_profile`.
+    """
     did = current["id"]
 
     doc_set: Dict[str, Any] = {}     # real `doctors` columns
@@ -4971,7 +6260,8 @@ async def doctor_update_profile(body: DoctorProfileUpdate, user: dict = Depends(
         if val is not None:
             blob_set[col] = val.strip() or None
 
-    if not doc_set and not user_set and not blob_set and body.specializations is None:
+    if not doc_set and not user_set and not blob_set and body.specializations is None \
+            and not allow_empty:
         raise HTTPException(status_code=400, detail="No fields to update")
 
     # ---- multi-valued specializations -------------------------------------
@@ -5028,15 +6318,59 @@ async def doctor_update_profile(body: DoctorProfileUpdate, user: dict = Depends(
 
 @api_router.get("/doctor/availability")
 async def doctor_get_availability(user: dict = Depends(current_user)):
-    """Return the currently signed-in doctor's calendar/availability."""
+    """Return the signed-in doctor's availability, derived from REAL columns.
+
+    `weekly_schedule` used to be echoed straight out of the app's `data` blob,
+    which nothing else reads - booking expands `appointment_slots`, and the
+    website edits the same table. So the grid a doctor configured here was
+    invisible to every patient. It is now reconstructed from the real rows, and
+    `consultation_mode` is derived from the real `is_available_*` columns
+    instead of a blob field that could silently disagree with them.
+    """
     if user["role"] != "doctor":
         raise HTTPException(status_code=403, detail="Doctors only")
     d = await db.doctors.find_one({"user_id": user["id"]}, {"_id": 0}) or {}
+
+    doc = await _own_doctor_row(user, create=True)
+    did = _to_int(doc.get("id"))
+    weekly: Dict[str, List[str]] = {str(i): [] for i in range(7)}
+    if did is not None:
+        try:
+            await _seed_default_slots(did)
+            rows = await _sql_query(
+                "SELECT day_of_week, start_time, end_time FROM `appointment_slots` "
+                # DEFAULT is 1 for this column, so both backends' inserts land
+                # here; COALESCE only guards an explicit NULL.
+                "WHERE doctor_id = %s AND date IS NULL AND COALESCE(is_available, 1) = 1 "
+                "ORDER BY day_of_week, start_time",
+                [did],
+            )
+            for r in rows or []:
+                day = _to_int(r.get("day_of_week"))
+                start = _as_time_obj(r.get("start_time"))
+                end = _as_time_obj(r.get("end_time"))
+                if day is None or not 0 <= day <= 6 or not start or not end:
+                    continue
+                # Expand the window back into the discrete 30-min taps the
+                # availability grid is built from, so the UI round-trips.
+                cur = start
+                while cur < end:
+                    weekly[str(day)].append(cur.strftime("%H:%M"))
+                    cur = (datetime.combine(datetime.min, cur) + timedelta(minutes=30)).time()
+        except Exception as e:
+            logger.warning(f"availability read failed for doctor {did}: {e}")
+
+    online = bool(_to_int(d.get("is_available_online"), 1))
+    offline = bool(_to_int(d.get("is_available_offline"), 1))
+    mode = "both" if online and offline else "online" if online else "offline" if offline else "both"
+
     return {
         "is_available": bool(d.get("is_available", True)),
-        "consultation_mode": d.get("consultation_mode", "both"),
-        "weekly_schedule": d.get("weekly_schedule") or {},
-        "slot_duration_min": d.get("slot_duration_min", 30),
+        "consultation_mode": mode,
+        "weekly_schedule": weekly,
+        # 30 min is what booking actually expands every window into; it is not
+        # configurable, so reporting a doctor-chosen value would be a lie.
+        "slot_duration_min": 30,
         "notes": d.get("availability_notes", ""),
     }
 
@@ -5077,17 +6411,54 @@ async def doctor_set_availability(body: DoctorAvailabilityInput, user: dict = De
         raise HTTPException(status_code=400, detail="No fields to update")
     upd["updated_at"] = now_iso()
     d = await db.doctors.find_one({"user_id": user["id"]})
-    if not d or not d.get("onboarded_at"):
-        raise HTTPException(status_code=404, detail="Complete onboarding first")
+    # A doctor profile row is required, but full onboarding is not. Rows created
+    # outside /doctor/onboard (admin-created, imported, seeded, or legacy) carry
+    # no onboarded_at, and that gated the doctor out of their own calendar with
+    # a misleading "Complete onboarding first". Verification, which is what
+    # actually gates public exposure, is enforced at read time.
+    if not d:
+        raise HTTPException(status_code=404, detail="Doctor profile not found")
+
+    # Consultation mode maps onto the REAL columns the website reads and the
+    # public directory filters on, instead of the blob's `consultation_mode`,
+    # which could disagree with them.
+    doc_set: Dict[str, Any] = {}
+    if body.consultation_mode is not None:
+        doc_set["is_available_online"] = 1 if body.consultation_mode in ("online", "both") else 0
+        doc_set["is_available_offline"] = 1 if body.consultation_mode in ("offline", "both") else 0
+    if doc_set:
+        doc_set["updated_at"] = now_iso()
+        await db.doctors.update_one({"user_id": user["id"]}, {"$set": doc_set})
+
     await db.doctors.update_one({"user_id": user["id"]}, {"$set": upd})
-    d = await db.doctors.find_one({"user_id": user["id"]}, {"_id": 0})
-    return {
-        "is_available": bool(d.get("is_available", True)),
-        "consultation_mode": d.get("consultation_mode", "both"),
-        "weekly_schedule": d.get("weekly_schedule") or {},
-        "slot_duration_min": d.get("slot_duration_min", 30),
-        "notes": d.get("availability_notes", ""),
-    }
+
+    # The tap-grid is a list of discrete 30-minute times; `appointment_slots`
+    # stores RANGES. Collapse each day's contiguous run back into the windows
+    # booking expands, so the doctor sees the same bookable times they selected.
+    if body.weekly_schedule is not None:
+        did = _to_int(d.get("id"))
+        if did is not None:
+            windows: Dict[str, List[Dict[str, str]]] = {}
+            for day, times in clean.items():
+                spans: List[Dict[str, str]] = []
+                run: List[str] = []
+                for t in times:
+                    if run and _minutes_between(run[-1], t) != 30:
+                        spans.append(_span_from_run(run))
+                        run = []
+                    run.append(t)
+                if run:
+                    spans.append(_span_from_run(run))
+                if spans:
+                    windows[day] = spans
+            try:
+                await _apply_weekly_slots(did, windows or {})
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.warning(f"availability slot sync failed for doctor {did}: {e}")
+
+    return await doctor_get_availability(user)
 
 
 @api_router.get("/doctor/my-appointments")
@@ -5238,6 +6609,24 @@ async def doctor_my_patients(
     }
 
 
+def _appt_when(a: Dict[str, Any]) -> Optional[str]:
+    """Sortable timestamp for one appointment row, tolerating a missing blob.
+
+    App-created rows carry `slot` in their `data` JSON. Rows created from the
+    website only ever wrote the real `appointment_date` / `appointment_time`
+    columns, so reading `a["slot"]` raised KeyError on exactly those rows -
+    which surfaced as a bare HTTP 500 on the doctor's patient-history screen
+    while /doctor/my-patients (SQL-only, never touches the blob) kept working.
+    """
+    s = a.get("slot")
+    if s:
+        return str(s)
+    d = a.get("appointment_date")
+    if not d:
+        return None
+    return "%sT%s" % (d, a.get("appointment_time") or "00:00:00")
+
+
 @api_router.get("/doctor/patients/{patient_id}/history")
 async def doctor_patient_history(patient_id: str, user: dict = Depends(current_user)):
     """Full visit + prescription history between the logged-in doctor and one patient."""
@@ -5248,7 +6637,7 @@ async def doctor_patient_history(patient_id: str, user: dict = Depends(current_u
         raise HTTPException(status_code=404, detail="Doctor profile not found")
     # Ensure the doctor has actually seen this patient
     items = await db.appointments.find(
-        {"doctor_id": d["id"], "patient_id": patient_id},
+        {"doctor_id": _to_int(d.get("id"), 0), "patient_id": patient_id},
         {"_id": 0},
     ).sort("slot", -1).to_list(200)
     if not items:
@@ -5264,7 +6653,7 @@ async def doctor_patient_history(patient_id: str, user: dict = Depends(current_u
         if a.get("paid"):
             # Try to sum from payments table for accuracy
             pay = await db.payments.find_one(
-                {"reference_id": a["id"], "purpose": "appointment", "status": "paid"},
+                {"reference_id": a.get("id"), "purpose": "appointment", "status": "paid"},
                 {"_id": 0, "amount": 1},
             )
             if pay:
@@ -5276,8 +6665,12 @@ async def doctor_patient_history(patient_id: str, user: dict = Depends(current_u
         "patient": {
             "id": patient.get("id", patient_id),
             "name": patient.get("name") or (items[0].get("patient_name") if items else "Patient"),
-            "email": patient.get("email"),
-            "phone": patient.get("phone"),
+            # email/phone are deliberately NOT returned. A doctor needs the
+            # clinical record (visits, prescriptions, dosha) to treat the
+            # patient; contact details are not needed for that and exposing
+            # them to a third party is a privacy leak. Anything that genuinely
+            # requires them (e.g. notifying the patient) must go through the
+            # patient's own authenticated channel, not the doctor's session.
             "age": prof.get("age"),
             "gender": prof.get("gender"),
             "dosha": prof.get("dosha"),
@@ -5288,8 +6681,12 @@ async def doctor_patient_history(patient_id: str, user: dict = Depends(current_u
             "total_visits": len(items),
             "total_prescriptions": total_rx,
             "total_paid_paise": total_paid,
-            "first_visit": items[-1]["slot"] if items else None,
-            "last_visit": items[0]["slot"] if items else None,
+            # `slot` only exists in the JSON blob. Rows booked from the website
+            # wrote the real DATE/TIME columns instead, so `items[-1]["slot"]`
+            # raised KeyError and 500'd this whole endpoint for those patients.
+            # Same trap /doctor/my-patients already documents in its docstring.
+            "first_visit": _appt_when(items[-1]) if items else None,
+            "last_visit": _appt_when(items[0]) if items else None,
         },
         "appointments": items,
     }

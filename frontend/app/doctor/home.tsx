@@ -64,10 +64,15 @@ export default function DoctorHome() {
       setPatients(pats.items);
       setPatientTotal(pats.total);
       setEarnings(e);
-      // Only force onboarding for a genuinely empty profile. `onboarded_at` is
-      // an app-only field, so a doctor registered on the website never has it -
-      // gating on that alone locked them out of the app behind a form that
-      // demands a registration number and document uploads they already did.
+      // Force onboarding only for a genuinely empty profile.
+      //
+      // Gating on `onboarded_at` alone was wrong: it is an app-only field, so a
+      // doctor registered on the website never has it and would be locked out of
+      // the app behind a form demanding a registration number and document
+      // uploads they already submitted. So we check the shared columns instead -
+      // which also works the other way now that registration writes a minimal
+      // `(user_id, is_approved)` row (as the website does) rather than prefilling
+      // placeholder text that made a new account look already onboarded.
       const hasProfile = !!(
         d?.system || d?.specialization_id || d?.qualification || d?.about || d?.bio
       );
@@ -96,6 +101,13 @@ export default function DoctorHome() {
 
   const approved = !!doc?.is_approved;
   const restricted = !!doc?.is_restricted;
+  // A rejected doctor is `is_approved = 0` + `restriction_reason` set. Without
+  // this the badge just read "AWAITING APPROVAL" for an application that had
+  // already been returned, leaving the doctor no idea why nothing was happening
+  // and no way to resubmit - the reason the admin recorded was never surfaced
+  // anywhere in the app.
+  const returned = !approved && !!(doc?.restriction_reason || restricted);
+  const returnReason = doc?.restriction_reason || "Your profile was returned for changes.";
   // `is_available` was never a field on /doctor/me, so this branch never fired
   // and the card always claimed "You're Live". The real value is `status`
   // ('online' | 'busy' | 'offline') from doctor_status.
@@ -170,9 +182,11 @@ export default function DoctorHome() {
               <Text style={styles.statusText}>
                 {restricted
                   ? "ACCOUNT RESTRICTED"
-                  : approved
-                    ? "VERIFIED · LIVE"
-                    : "AWAITING APPROVAL"}
+                  : returned
+                    ? "CHANGES REQUESTED"
+                    : approved
+                      ? "VERIFIED · LIVE"
+                      : "AWAITING APPROVAL"}
               </Text>
             </View>
           </View>
@@ -189,19 +203,36 @@ export default function DoctorHome() {
         ) : null}
 
         {/* Approval / restriction notice - explains what the badge means. */}
-        {!loading && (restricted || !approved) ? (
-          <View style={[styles.notice, restricted && styles.noticeDanger]}>
+        {!loading && (restricted || returned || !approved) ? (
+          <View style={[styles.notice, (restricted || returned) && styles.noticeDanger]}>
             <Feather
-              name={restricted ? "alert-triangle" : "info"}
+              name={restricted || returned ? "alert-triangle" : "info"}
               size={16}
-              color={restricted ? COLORS.error : COLORS.accent}
+              color={restricted || returned ? COLORS.error : COLORS.accent}
             />
-            <Text style={[styles.noticeText, restricted && { color: COLORS.error }]}>
-              {restricted
-                ? doc?.restriction_reason ||
-                  "Your account is restricted. Contact the clinic admin to restore access."
-                : "Your profile is submitted and waiting for clinic approval. You can set up your profile and availability in the meantime."}
-            </Text>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.noticeText, (restricted || returned) && { color: COLORS.error }]}>
+                {restricted && !returned
+                  ? "Your account is restricted. Contact the clinic admin to restore access."
+                  : returned
+                    ? returnReason
+                    : "Your profile is submitted and waiting for clinic approval. You can set up your profile and availability in the meantime."}
+              </Text>
+              {/* A returned doctor must be able to actually fix and resubmit,
+                  otherwise the reason is just information they can do nothing
+                  about. Onboarding stays open for them (it only auto-exits once
+                  a submission is approved) and the backend requeues them. */}
+              {returned ? (
+                <TouchableOpacity
+                  style={styles.noticeCta}
+                  onPress={() => router.push("/doctor/onboarding")}
+                  testID="dh-fix-profile"
+                >
+                  <Feather name="upload" size={14} color={COLORS.surface} />
+                  <Text style={styles.noticeCtaText}>Update details &amp; resubmit</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
           </View>
         ) : null}
 
@@ -434,6 +465,8 @@ const styles = StyleSheet.create({
   notice: { marginHorizontal: SPACING.lg, marginTop: SPACING.md, flexDirection: "row", alignItems: "flex-start", gap: 8, padding: SPACING.md, backgroundColor: COLORS.surfaceAlt, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.accent },
   noticeDanger: { borderColor: COLORS.error },
   noticeText: { flex: 1, color: COLORS.textSecondary, fontSize: 12, lineHeight: 17 },
+  noticeCta: { flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start", marginTop: 10, paddingHorizontal: 14, paddingVertical: 9, borderRadius: RADIUS.pill, backgroundColor: COLORS.brand },
+  noticeCtaText: { color: COLORS.surface, fontSize: 12, fontWeight: "700" },
   center: { paddingVertical: SPACING.lg, alignItems: "center" },
   // Normal flow spacing - no negative margins, so the card can never overlap
   // the hero image above it or the stats row below it.

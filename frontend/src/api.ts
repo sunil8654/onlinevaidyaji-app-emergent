@@ -2,6 +2,23 @@
 import { storage } from "@/src/utils/storage";
 
 const BASE = process.env.EXPO_PUBLIC_BACKEND_URL;
+
+/**
+ * Turns a relative `/uploads/...` path from the API into something loadable.
+ *
+ * Both backends store the SAME relative path in `doctor_verifications.document_path`
+ * and `users.image` (so the two surfaces stay interchangeable), and both mount
+ * `/uploads` as static content. Absolute URLs are passed through untouched.
+ */
+export function absoluteMediaUrl(path?: string | null): string | null {
+  if (!path) return null;
+  const v = String(path).trim();
+  if (!v) return null;
+  if (v.startsWith("http://") || v.startsWith("https://")) return v;
+  if (v.startsWith("data:")) return v;
+  if (v.startsWith("/")) return `${BASE}${v}`;
+  return `${BASE}/uploads/${v}`;
+}
 export const TOKEN_KEY = "vaidyaji.token";
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -121,13 +138,51 @@ export type DoctorProfilePayload = {
   city?: string;
   gender?: "male" | "female";
   system?: string;
+  /** Legacy alias for `system`; the backend slugifies whichever it gets. */
+  specialty?: string;
   specialization_id?: number;
   specializations?: number[];
   is_available_online?: boolean;
   is_available_offline?: boolean;
+  /** Legacy alias for `experience`. */
+  experience_years?: number;
   clinic_name?: string;
   clinic_address?: string;
   registration_number?: string;
+};
+
+/**
+ * One entry in the admin verification queue (GET /admin/verifications).
+ *
+ * The `documents` array is the whole point of this endpoint: it is the real
+ * `doctor_verifications` rows for the doctor, each pointing at a file both
+ * backends can serve, so an admin can actually check a registration instead of
+ * seeing a profile with nothing attached.
+ */
+export type AdminVerification = {
+  id: string;
+  user_id: string;
+  slug: string | null;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  image: string | null;
+  qualification: string | null;
+  experience: number | null;
+  consultation_fee: number | null;
+  city: string | null;
+  /** Comma-separated, as stored in `doctors.languages`. */
+  languages: string | null;
+  system: string | null;
+  gender: string | null;
+  specialization_name: string | null;
+  isApproved: boolean;
+  /** Why an admin rejected them; non-null removes them from the public list. */
+  restrictionReason: string | null;
+  createdAt: string | null;
+  submittedAt: string | null;
+  documents: DoctorVerificationDoc[];
+  pendingDocumentCount: number;
 };
 
 /** One bookable slot, mirroring the website's `generateTimeSlots` output. */
@@ -147,6 +202,84 @@ export type DoctorSlotDay = {
   slots: DoctorSlot[];
   total: number;
   available: number;
+};
+
+// --- doctor onboarding: credentials -----------------------------------
+/**
+ * One uploaded credential, as stored in `doctor_verifications`.
+ *
+ * `document_path` is a `/uploads/documents/...` relative path, which both
+ * backends serve, so an admin can open the file the doctor attached.
+ */
+export type DoctorVerificationDoc = {
+  id: string;
+  doctor_id: string;
+  document_type: string;
+  document_path: string | null;
+  status: "pending" | "approved" | "rejected";
+  notes: string | null;
+  verified_at: string | null;
+  created_at: string | null;
+};
+
+/**
+ * A credential being uploaded. The app has no multipart stack, so the file
+ * travels base64-encoded, exactly like the profile photo already did.
+ */
+export type DoctorDocumentPayload = {
+  documentType: string;
+  fileName?: string;
+  contentType?: string;
+  base64: string;
+};
+
+/** One availability window: a row in `appointment_slots`. */
+export type DoctorAvailabilitySlot = {
+  id: string;
+  doctor_id: string;
+  /** 0 = Sunday ... 6 = Saturday (JS `Date.getDay()`), matching the website. */
+  day_of_week: number | null;
+  day_name: string | null;
+  /** Set for a one-off date override; null for a recurring weekly window. */
+  date: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  /** "9:00 AM" - website's 12-hour format, no leading zero. */
+  start_label: string | null;
+  end_label: string | null;
+  is_available: boolean;
+};
+
+export type DoctorAvailabilitySlotInput = {
+  dayOfWeek?: number;
+  date?: string;
+  /** "HH:MM" (24h). */
+  startTime: string;
+  endTime: string;
+  isAvailable?: boolean;
+};
+
+/**
+ * A whole recurring week, keyed by `day_of_week` string ("0".."6").
+ * A day maps to one or more `{ startTime, endTime }` windows.
+ */
+export type WeeklySlotMap = Record<
+  string,
+  { startTime: string; endTime: string }[]
+>;
+
+/**
+ * Everything collected by the doctor onboarding wizard, in one submission.
+ *
+ * This replaces the old payload which carried a `documents: string[]` of
+ * invented filenames - the admin review queue was therefore always empty even
+ * after a doctor "uploaded" documents.
+ */
+export type DoctorOnboardPayload = DoctorProfilePayload & {
+  /** Real credential files, base64-encoded. */
+  documents?: DoctorDocumentPayload[];
+  /** Recurring weekly schedule, keyed by "0".."6". */
+  slots?: WeeklySlotMap;
 };
 
 /** Paginated envelope returned by GET /doctors. */
@@ -637,8 +770,27 @@ export const api = {
   adminStats: () => request("/admin/stats"),
   adminDoctors: (verify_status?: "pending" | "verified") =>
     request(`/admin/doctors${verify_status ? `?verify_status=${verify_status}` : ""}`),
+  /**
+   * Pending-verification queue, with each doctor's uploaded credentials.
+   * Mirrors the website's GET /admin/verifications - this is the screen that
+   * could not be built before, because onboarding never wrote a real
+   * `doctor_verifications` row.
+   */
+  adminVerifications: () =>
+    request<{ verifications: AdminVerification[]; total: number }>("/admin/verifications"),
+  adminVerificationsCount: () =>
+    request<{ count: number }>("/admin/verifications/count"),
+  adminDecideVerification: (doctorId: string, status: "approved" | "rejected", reason?: string) =>
+    request<{ ok: boolean; status: string; doctor_id: string; message: string }>(
+      `/admin/verifications/${doctorId}`,
+      "PUT",
+      { status, reason }
+    ),
   adminApproveDoctor: (id: string) => request(`/admin/doctors/${id}/approve`, "POST"),
-  adminRejectDoctor: (id: string) => request(`/admin/doctors/${id}/reject`, "POST"),
+  adminRejectDoctor: (id: string, reason?: string) =>
+    reason
+      ? request(`/admin/verifications/${id}`, "PUT", { status: "rejected", reason })
+      : request(`/admin/doctors/${id}/reject`, "POST"),
   adminDeleteDoctor: (id: string) => request(`/admin/doctors/${id}`, "DELETE"),
   adminAddDoctor: (body: any) => request("/admin/doctors", "POST", body),
   adminPatients: () => request("/admin/patients"),
@@ -722,9 +874,50 @@ export const api = {
 
 // Doctor workspace
   doctorMe: () => request<DoctorOwnProfile>("/doctor/me"),
-  doctorOnboard: (body: any) => request("/doctor/onboard", "PUT", body),
+  /** Full first-time submission: profile + credentials + weekly schedule. */
+  doctorOnboard: (body: DoctorOnboardPayload) =>
+    request<DoctorOwnProfile>("/doctor/onboard", "PUT", body),
   updateDoctorProfile: (body: DoctorProfilePayload) =>
     request<DoctorOwnProfile>("/doctor/profile", "PUT", body),
+
+  // --- credentials -------------------------------------------------------
+  // These write real `doctor_verifications` rows, which is what the website's
+  // admin review queue reads. The old onboarding posted a list of placeholder
+  // filenames instead, so an admin had nothing to actually check.
+  uploadDoctorDocument: (body: DoctorDocumentPayload) =>
+    request<{ document: DoctorVerificationDoc }>("/doctor/documents", "POST", body),
+  listDoctorDocuments: () =>
+    request<{ documents: DoctorVerificationDoc[] }>("/doctor/documents"),
+  deleteDoctorDocument: (docId: string) =>
+    request<{ ok: boolean }>(`/doctor/documents/${docId}`, "DELETE"),
+
+  // --- availability (real `appointment_slots` rows) ----------------------
+  // day_of_week is 0=Sunday, matching the website's `Date.getDay()` order.
+  doctorListSlots: () =>
+    request<{ slots: DoctorAvailabilitySlot[]; total: number; day_order: string[] }>(
+      "/doctor/slots"
+    ),
+  doctorAddSlot: (body: DoctorAvailabilitySlotInput) =>
+    request<{ slot: DoctorAvailabilitySlot; slots: DoctorAvailabilitySlot[] }>(
+      "/doctor/slots",
+      "POST",
+      body
+    ),
+  doctorUpdateSlot: (slotId: string, body: Partial<DoctorAvailabilitySlotInput>) =>
+    request<{ message: string; slot: DoctorAvailabilitySlot }>(
+      `/doctor/slots/${slotId}`,
+      "PUT",
+      body
+    ),
+  doctorDeleteSlot: (slotId: string) =>
+    request<{ message: string; id: string }>(`/doctor/slots/${slotId}`, "DELETE"),
+  doctorReplaceWeeklySlots: (slots: WeeklySlotMap) =>
+    request<{ slots: DoctorAvailabilitySlot[]; total: number }>(
+      "/doctor/slots/weekly",
+      "PUT",
+      { slots }
+    ),
+
   doctorGetAvailability: () => request<{
     is_available: boolean;
     consultation_mode: "online" | "offline" | "both";
@@ -778,11 +971,12 @@ export const api = {
     }[];
   }>("/doctor/earnings"),
   doctorPatientHistory: (patient_id: string) => request<{
-    patient: {
-      id: string; name: string; email?: string; phone?: string;
-      age?: number; gender?: string; dosha?: string;
-      conditions?: string[]; lifestyle?: string;
-    };
+patient: {
+          // No email/phone: withheld server-side for patient privacy.
+          id: string; name: string;
+          age?: number; gender?: string; dosha?: string;
+          conditions?: string[]; lifestyle?: string;
+        };
     stats: {
       total_visits: number;
       total_prescriptions: number;

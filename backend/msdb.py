@@ -189,6 +189,18 @@ COLUMN_MAPS: Dict[str, Dict[str, Any]] = {
     "doc_com_dm_messages": {"thread_id": "room_id", "text": "content"},
     "doc_com_notifications": {"doctor_id": "user_id", "snippet": "message", "read": "is_read"},
     "medicines": {"price": ["sale_price", "mrp"]},
+    # users.role is ENUM('patient','doctor','admin'). ENUM's base type is not in
+    # _MIRROR_TYPES, so without this callable entry split_doc dropped `role` into
+    # the JSON blob and the real column fell back to its DEFAULT of 'patient'.
+    # The symptom was severe and totally silent: POST /auth/register returned
+    # role='doctor' and minted a doctor JWT, but the row said 'patient', so the
+    # very next call - PUT /doctor/onboard - was rejected 403 "Doctors only".
+    # No doctor could ever complete onboarding from the app; they bounced off
+    # their own registration. Verified against the live DB: 14 of 15 doctors
+    # were linked to a user whose role was 'patient'.
+    "users": {
+        "role": [("role", _enum_val)],
+    },
     # appointments: the real columns are DATE / TIME / ENUM, and none of those
     # base types are in _MIRROR_TYPES, so without these callable entries
     # split_doc drops them into the JSON blob and every booking silently stored
@@ -321,7 +333,13 @@ def _synth_doctor(doc: Dict[str, Any]) -> Dict[str, Any]:
         doc["consultation_mode"] = "both" if (online and offline) else ("online" if online else ("offline" if offline else None))
     # Web rows only carry `system` — give app callers the field shapes they
     # expect so raw no-projection reads (e.g. create_appointment) never KeyError.
-    doc.setdefault("specialty", doc.get("system") or None)
+    # `system` is stored slugified ('ayurveda'), but `specialty` is a display
+    # field the app renders to the user, so title-case the derived value rather
+    # than leaking the slug. A caller-supplied / blob `specialty` still wins.
+    if doc.get("specialty") is None and doc.get("system"):
+        doc["specialty"] = str(doc["system"]).title()
+    else:
+        doc.setdefault("specialty", doc.get("system") or None)
     doc.setdefault("qualification", None)
     doc.setdefault("consultation_fee", None)
     doc.setdefault("bio", None)

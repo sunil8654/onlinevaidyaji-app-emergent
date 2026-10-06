@@ -71,12 +71,8 @@ export default function DoctorPatientHistory() {
               {data?.patient?.gender ? <Chip icon="user" label={data.patient.gender} /> : null}
               {data?.patient?.dosha ? <Chip icon="feather" label={data.patient.dosha} /> : null}
             </View>
-            {data?.patient?.email ? (
-              <Text style={styles.contactLine}><Feather name="mail" size={11} color={COLORS.textSecondary} />  {data.patient.email}</Text>
-            ) : null}
-            {data?.patient?.phone ? (
-              <Text style={styles.contactLine}><Feather name="phone" size={11} color={COLORS.textSecondary} />  {data.patient.phone}</Text>
-            ) : null}
+            {/* No email/phone here. A doctor only needs the clinical record;
+                contact details are withheld by the API for privacy. */}
           </View>
 
           {/* Stats row */}
@@ -191,7 +187,6 @@ const styles = StyleSheet.create({
   chipsRow: { flexDirection: "row", gap: 6, marginTop: 8, flexWrap: "wrap", justifyContent: "center" },
   chip: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: COLORS.surfaceAlt, paddingHorizontal: 10, paddingVertical: 4, borderRadius: RADIUS.pill },
   chipText: { color: COLORS.brand, fontSize: 11, fontWeight: "700" },
-  contactLine: { color: COLORS.textSecondary, fontSize: 12, marginTop: 6 },
   stats: { flexDirection: "row", gap: SPACING.sm, paddingHorizontal: SPACING.lg, marginTop: SPACING.md },
   stat: { flex: 1, backgroundColor: COLORS.surface, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: COLORS.border, padding: SPACING.md, alignItems: "center" },
   statVal: { fontFamily: FONTS.heading, fontSize: 20, color: COLORS.brand },

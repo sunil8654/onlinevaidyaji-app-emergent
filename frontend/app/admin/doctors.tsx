@@ -1,35 +1,107 @@
 import { useEffect, useState, useCallback } from "react";
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Image, ScrollView, Modal, TextInput } from "react-native";
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Image, ScrollView, Modal, TextInput, Alert, Linking } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { COLORS, FONTS, RADIUS, SPACING, SPECIALTIES } from "@/src/theme";
-import { api } from "@/src/api";
+import { api, absoluteMediaUrl, type AdminVerification, type DoctorVerificationDoc } from "@/src/api";
 import { useI18n } from "@/src/i18n";
 import Feather from "@react-native-vector-icons/feather";
 
 type Filter = "all" | "pending" | "verified";
+
+const DOC_STATUS_COLOR: Record<DoctorVerificationDoc["status"], string> = {
+  pending: COLORS.warning,
+  approved: COLORS.success,
+  rejected: COLORS.error,
+};
+
+const prettyType = (t: string) =>
+  t.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
 export default function AdminDoctors() {
   const router = useRouter();
   const { t } = useI18n();
   const [filter, setFilter] = useState<Filter>("all");
   const [items, setItems] = useState<any[]>([]);
+  const [queue, setQueue] = useState<AdminVerification[]>([]);
   const [busy, setBusy] = useState<string>("");
   const [addOpen, setAddOpen] = useState(false);
   const [form, setForm] = useState<any>({ name: "", email: "", specialty: "Ayurveda", qualification: "", experience_years: "0", consultation_fee: "499", bio: "", verified: true });
+  /** Rejection reason prompt. Rejecting without a reason leaves the doctor
+      with a `restriction_reason` they cannot act on, so it is mandatory here. */
+  const [rejectFor, setRejectFor] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
+  const [expanded, setExpanded] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  // Shared by the effect and the manual refreshes after approve/reject.
+  // `alive` guards against a stale response: switching the filter tab fires a
+  // second fetch, and without this the slower first response could land last and
+  // overwrite the list with the wrong filter's doctors.
+  const load = useCallback(async (alive?: () => boolean) => {
+    const ok = () => (alive ? alive() : true);
     try {
       const q = filter === "all" ? undefined : filter;
       const d = await api.adminDoctors(q);
-      setItems(d || []);
+      if (ok()) setItems(Array.isArray(d) ? d : (d?.items ?? []));
+    } catch {}
+    try {
+      // The verification queue is what carries the uploaded credentials, so it
+      // is loaded alongside the doctor list and merged in by id.
+      const v = await api.adminVerifications();
+      if (ok()) setQueue(v?.verifications ?? []);
     } catch {}
   }, [filter]);
-  useEffect(() => { load(); }, [load]);
 
-  const approve = async (id: string) => { setBusy(id); await api.adminApproveDoctor(id).catch(() => {}); setBusy(""); load(); };
-  const reject = async (id: string) => { setBusy(id); await api.adminRejectDoctor(id).catch(() => {}); setBusy(""); load(); };
+  useEffect(() => {
+    let mounted = true;
+    load(() => mounted);
+    return () => { mounted = false; };
+  }, [load]);
+
+  const docsFor = useCallback(
+    (id: string): DoctorVerificationDoc[] => queue.find((q) => q.id === id)?.documents ?? [],
+    [queue]
+  );
+
+  const approve = async (id: string) => {
+    setBusy(id);
+    try {
+      await api.adminDecideVerification(id, "approved");
+    } catch {
+      // Fall back to the legacy route so an older build still works.
+      await api.adminApproveDoctor(id).catch(() => {});
+    }
+    setBusy("");
+    load();
+  };
+
+  const confirmReject = async () => {
+    if (!rejectFor) return;
+    const id = rejectFor;
+    setBusy(id);
+    try {
+      await api.adminDecideVerification(id, "rejected", rejectReason.trim() || "Rejected during verification");
+    } catch {
+      await api.adminRejectDoctor(id).catch(() => {});
+    }
+    setBusy("");
+    setRejectFor(null);
+    setRejectReason("");
+    load();
+  };
+
   const remove = async (id: string) => { setBusy(id); await api.adminDeleteDoctor(id).catch(() => {}); setBusy(""); load(); };
+
+  const openDoc = async (doc: DoctorVerificationDoc) => {
+    const url = absoluteMediaUrl(doc.document_path);
+    if (!url) return;
+    const canOpen = await Linking.canOpenURL(url).catch(() => false);
+    if (!canOpen) {
+      Alert.alert("Cannot open", `This file could not be opened on your device:\n${url}`);
+      return;
+    }
+    await Linking.openURL(url).catch(() => {});
+  };
 
   const saveNew = async () => {
     const body = {
@@ -81,14 +153,16 @@ export default function AdminDoctors() {
         contentContainerStyle={{ paddingHorizontal: SPACING.lg, paddingBottom: 100 }}
         ItemSeparatorComponent={() => <View style={{ height: SPACING.md }} />}
         ListEmptyComponent={<Text style={styles.empty}>No entries.</Text>}
-        renderItem={({ item }) => (
-          <TouchableOpacity
-            style={styles.card}
-            onPress={() => router.push({ pathname: "/admin/doctor/[id]", params: { id: item.id } })}
-            testID={`ad-doc-${item.id}`}
-          >
-            <View style={{ flexDirection: "row", gap: SPACING.md }}>
-              <Image source={{ uri: item.avatar_url }} style={styles.avatar} />
+        renderItem={({ item }) => {
+          const docs = docsFor(item.id);
+          const open = expanded === item.id;
+          return (
+          <View style={styles.card} testID={`ad-doc-${item.id}`}>
+            <TouchableOpacity
+              onPress={() => router.push({ pathname: "/admin/doctor/[id]", params: { id: item.id } })}
+              style={{ flexDirection: "row", gap: SPACING.md }}
+            >
+              <Image source={{ uri: absoluteMediaUrl(item.avatar_url) ?? undefined }} style={styles.avatar} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.docName}>{item.name}</Text>
                 <Text style={styles.docSub}>{item.specialty} · {item.qualification}</Text>
@@ -98,7 +172,56 @@ export default function AdminDoctors() {
               <View style={[styles.badge, { backgroundColor: item.verified ? COLORS.success : COLORS.warning }]}>
                 <Text style={styles.badgeText}>{item.verified ? "VERIFIED" : "PENDING"}</Text>
               </View>
-            </View>
+            </TouchableOpacity>
+
+            {/* Credentials. An admin cannot verify a registration they cannot see,
+                and before this the app stored no real files at all - onboarding
+                sent placeholder filenames, so there was nothing to review. */}
+            {docs.length > 0 ? (
+              <View style={styles.docsWrap} testID={`ad-docs-${item.id}`}>
+                <TouchableOpacity
+                  style={styles.docsToggle}
+                  onPress={() => setExpanded(open ? null : item.id)}
+                  testID={`ad-docs-toggle-${item.id}`}
+                >
+                  <Feather name="paperclip" size={13} color={COLORS.brand} />
+                  <Text style={styles.docsToggleText}>
+                    {docs.length} credential{docs.length > 1 ? "s" : ""} uploaded
+                  </Text>
+                  <Feather name={open ? "chevron-up" : "chevron-down"} size={14} color={COLORS.textMuted} />
+                </TouchableOpacity>
+                {open ? (
+                  <View style={{ gap: 6, marginTop: 8 }}>
+                    {docs.map((doc) => (
+                      <TouchableOpacity
+                        key={doc.id}
+                        style={styles.docRow}
+                        onPress={() => openDoc(doc)}
+                        testID={`ad-doc-file-${doc.id}`}
+                      >
+                        <Feather name="file-text" size={15} color={COLORS.brand} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.docRowTitle}>{prettyType(doc.document_type)}</Text>
+                          <Text style={styles.docRowSub} numberOfLines={1}>{doc.document_path ?? "no file"}</Text>
+                        </View>
+                        <View style={[styles.docStatus, { backgroundColor: DOC_STATUS_COLOR[doc.status] }]}>
+                          <Text style={styles.docStatusText}>{doc.status.toUpperCase()}</Text>
+                        </View>
+                        <Feather name="external-link" size={13} color={COLORS.textMuted} />
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                ) : null}
+              </View>
+            ) : (
+              !item.verified && (
+                <View style={styles.docsWarning} testID={`ad-docs-missing-${item.id}`}>
+                  <Feather name="alert-circle" size={13} color={COLORS.warning} />
+                  <Text style={styles.docsWarningText}>No credentials on file — review the details before approving.</Text>
+                </View>
+              )
+            )}
+
             <View style={styles.actionRow}>
               {!item.verified && (
                 <TouchableOpacity
@@ -111,17 +234,19 @@ export default function AdminDoctors() {
                   <Text style={styles.actText}>{t("approve")}</Text>
                 </TouchableOpacity>
               )}
-              {item.verified && (
-                <TouchableOpacity
-                  style={[styles.actBtn, { backgroundColor: COLORS.warning }]}
-                  onPress={() => reject(item.id)}
-                  disabled={busy === item.id}
-                  testID={`ad-reject-${item.id}`}
-                >
-                  <Feather name="alert-circle" size={14} color={COLORS.surface} />
-                  <Text style={styles.actText}>{t("reject")}</Text>
-                </TouchableOpacity>
-              )}
+              {/* Reject must be available for a PENDING doctor too. It used to be
+                  gated on `item.verified`, which meant an unapproved applicant
+                  could never be returned — there was no path out of the queue
+                  except approval or deletion. */}
+              <TouchableOpacity
+                style={[styles.actBtn, { backgroundColor: COLORS.warning }]}
+                onPress={() => { setRejectFor(item.id); setRejectReason(""); }}
+                disabled={busy === item.id}
+                testID={`ad-reject-${item.id}`}
+              >
+                <Feather name="alert-circle" size={14} color={COLORS.surface} />
+                <Text style={styles.actText}>{t("reject")}</Text>
+              </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.actBtn, { backgroundColor: COLORS.error }]}
                 onPress={() => remove(item.id)}
@@ -132,9 +257,49 @@ export default function AdminDoctors() {
                 <Text style={styles.actText}>{t("remove")}</Text>
               </TouchableOpacity>
             </View>
-          </TouchableOpacity>
-        )}
+          </View>
+          );
+        }}
       />
+
+      {/* Reject with a reason. The reason is stored in
+          `doctors.restriction_reason` and shown to the doctor in the app and on
+          the website, so it is the only thing telling them what to fix. */}
+      <Modal visible={!!rejectFor} animationType="slide" transparent onRequestClose={() => setRejectFor(null)}>
+        <View style={styles.modalBack}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Return this application?</Text>
+            <Text style={styles.modalSub}>
+              The doctor is not approved and your reason is shown to them so they can
+              fix it and resubmit. They stay hidden from the public directory until you
+              approve them.
+            </Text>
+            <TextInput
+              style={[styles.field, { minHeight: 84 }]}
+              value={rejectReason}
+              onChangeText={setRejectReason}
+              multiline
+              placeholder="e.g. Degree certificate is unreadable — please re-upload a clearer scan."
+              placeholderTextColor={COLORS.textMuted}
+              testID="ad-reject-reason"
+            />
+            <View style={{ flexDirection: "row", gap: 8, marginTop: SPACING.md }}>
+              <TouchableOpacity style={styles.cancel} onPress={() => setRejectFor(null)} testID="ad-reject-cancel">
+                <Text style={styles.cancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.save, { backgroundColor: COLORS.warning }, busy === rejectFor && { opacity: 0.6 }]}
+                onPress={confirmReject}
+                disabled={busy === rejectFor}
+                testID="ad-reject-confirm"
+              >
+                <Feather name="send" size={14} color={COLORS.surface} />
+                <Text style={styles.saveText}>Return</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Add doctor modal */}
       <Modal visible={addOpen} animationType="slide" transparent onRequestClose={() => setAddOpen(false)}>
@@ -226,5 +391,24 @@ const styles = StyleSheet.create({
   specChipActive: { backgroundColor: COLORS.brand, borderColor: COLORS.brand },
   specText: { color: COLORS.textPrimary, fontWeight: "600", fontSize: 13 },
   cancel: { flex: 1, paddingVertical: 14, alignItems: "center", borderRadius: RADIUS.pill, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border },
-  save: { flex: 1, paddingVertical: 14, alignItems: "center", borderRadius: RADIUS.pill, backgroundColor: COLORS.brand },
+  cancelText: { color: COLORS.textPrimary, fontWeight: "700", fontSize: 14 },
+  save: { flex: 1, paddingVertical: 14, alignItems: "center", flexDirection: "row", gap: 6, justifyContent: "center", borderRadius: RADIUS.pill, backgroundColor: COLORS.brand },
+  saveText: { color: COLORS.surface, fontWeight: "700", fontSize: 14 },
+  // --- credentials list -------------------------------------------------
+  docsWrap: { marginTop: SPACING.md, paddingTop: SPACING.md, borderTopWidth: 1, borderTopColor: COLORS.border },
+  docsToggle: { flexDirection: "row", alignItems: "center", gap: 6 },
+  docsToggleText: { flex: 1, color: COLORS.brand, fontSize: 12, fontWeight: "700" },
+  docRow: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: COLORS.surfaceAlt, borderRadius: RADIUS.sm, paddingHorizontal: 10, paddingVertical: 8 },
+  docRowTitle: { color: COLORS.textPrimary, fontSize: 12, fontWeight: "700" },
+  docRowSub: { color: COLORS.textMuted, fontSize: 10, marginTop: 1 },
+  docStatus: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: RADIUS.sm },
+  docStatusText: { color: COLORS.surface, fontSize: 8, fontWeight: "800", letterSpacing: 0.5 },
+  docsWarning: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: SPACING.md, paddingTop: SPACING.md, borderTopWidth: 1, borderTopColor: COLORS.border },
+  docsWarningText: { flex: 1, color: COLORS.textSecondary, fontSize: 11 },
+  // --- reject modal -----------------------------------------------------
+  modalBack: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", padding: SPACING.lg },
+  modalCard: { backgroundColor: COLORS.surface, borderRadius: RADIUS.lg, padding: SPACING.lg },
+  modalTitle: { fontFamily: FONTS.heading, fontSize: 20, color: COLORS.textPrimary },
+  modalSub: { color: COLORS.textSecondary, fontSize: 13, lineHeight: 19, marginTop: 6, marginBottom: SPACING.md },
+  field: { backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: RADIUS.md, paddingHorizontal: SPACING.md, paddingVertical: 10, color: COLORS.textPrimary, fontSize: 14, textAlignVertical: "top" },
 });

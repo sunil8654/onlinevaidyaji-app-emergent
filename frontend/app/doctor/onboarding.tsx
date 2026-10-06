@@ -1,14 +1,51 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView, KeyboardAvoidingView, Platform, Image, Alert } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import { COLORS, FONTS, RADIUS, SPACING, SPECIALTIES } from "@/src/theme";
-import { api } from "@/src/api";
+import { api, type DoctorDocumentPayload, type WeeklySlotMap } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import Feather from "@react-native-vector-icons/feather";
+import { CREDENTIAL_TYPES, labelForDocType, pickCredentialFiles } from "@/src/utils/pickCredentials";
 
 const LANGS = ["Hindi", "English", "Tamil", "Marathi", "Bengali", "Gujarati", "Urdu", "Kannada", "Telugu", "Malayalam"];
+
+/** 0 = Sunday, matching `appointment_slots.day_of_week` and the website. */
+const DAYS = [
+  { idx: 0, short: "Sun", name: "Sunday" },
+  { idx: 1, short: "Mon", name: "Monday" },
+  { idx: 2, short: "Tue", name: "Tuesday" },
+  { idx: 3, short: "Wed", name: "Wednesday" },
+  { idx: 4, short: "Thu", name: "Thursday" },
+  { idx: 5, short: "Fri", name: "Friday" },
+  { idx: 6, short: "Sat", name: "Saturday" },
+];
+
+/** Time pickers in React Native need a simple list; 30-min steps match booking. */
+const TIME_OPTIONS = (() => {
+  const out: string[] = [];
+  for (let h = 6; h <= 22; h += 1) {
+    out.push(`${String(h).padStart(2, "0")}:00`);
+    if (h < 22) out.push(`${String(h).padStart(2, "0")}:30`);
+  }
+  return out;
+})();
+
+const toMinutes = (hhmm: string) => {
+  const [h, m] = hhmm.split(":").map((n) => parseInt(n, 10));
+  return (h || 0) * 60 + (m || 0);
+};
+
+const fmt12h = (hhmm: string) => {
+  const mins = toMinutes(hhmm);
+  const h24 = Math.floor(mins / 60);
+  const m = mins % 60;
+  const h12 = h24 % 12 || 12;
+  return `${h12}:${String(m).padStart(2, "0")} ${h24 < 12 ? "AM" : "PM"}`;
+};
+
+const TOTAL_STEPS = 5;
 
 export default function DoctorOnboarding() {
   const router = useRouter();
@@ -16,6 +53,7 @@ export default function DoctorOnboarding() {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState({
     specialty: "Ayurveda",
+    specialization_id: "" as string,
     qualification: "",
     registration_number: "",
     experience_years: "",
@@ -23,18 +61,69 @@ export default function DoctorOnboarding() {
     bio: "",
     clinic_name: "",
     clinic_address: "",
+    city: "",
+    gender: "" as "" | "male" | "female",
     languages: ["Hindi", "English"] as string[],
-    documentsAttached: false,
     avatar_base64: "" as string,  // profile photo (base64 or data URI)
   });
+  /** Real base64 credential files, keyed by nothing - just an ordered list. */
+  const [documents, setDocuments] = useState<DoctorDocumentPayload[]>([]);
+  /** Recurring weekly schedule: day index -> start/end windows. */
+  const [slots, setSlots] = useState<Record<number, { start: string; end: string }>>({
+    1: { start: "09:00", end: "17:00" },
+    2: { start: "09:00", end: "17:00" },
+    3: { start: "09:00", end: "17:00" },
+    4: { start: "09:00", end: "17:00" },
+    5: { start: "09:00", end: "17:00" },
+  });
+  const [taxonomy, setTaxonomy] = useState<{ specializations: { id: number; name: string }[]; systems: string[] }>({
+    specializations: [],
+    systems: [],
+  });
   const [busy, setBusy] = useState(false);
+  const [picking, setPicking] = useState(false);
   const [err, setErr] = useState("");
+  /** Set when the admin previously rejected us; drives the resubmit banner. */
+  const [rejectReason, setRejectReason] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
       try {
         const d = await api.doctorMe();
-        if (d?.onboarded_at) router.replace("/(tabs)/home");
+        if (!d) return;
+
+        // Prefill from whatever is already saved, so a doctor coming back after a
+        // rejection does not retype their whole profile just to swap one file.
+        setForm((f) => ({
+          ...f,
+          specialty: d.specialty || d.system || f.specialty,
+          specialization_id: d.specialization_id ? String(d.specialization_id) : f.specialization_id,
+          qualification: d.qualification || "",
+          registration_number: d.registration_number || "",
+          experience_years: d.experience ? String(d.experience) : "",
+          consultation_fee: d.consultation_fee ? String(d.consultation_fee) : "499",
+          bio: d.bio || d.about || "",
+          clinic_name: d.clinic_name || "",
+          clinic_address: d.clinic_address || "",
+          city: d.city || "",
+          gender: (d.gender as "male" | "female" | null) || "",
+          languages: d.languages
+            ? String(d.languages).split(",").map((l) => l.trim()).filter(Boolean)
+            : f.languages,
+        }));
+
+        // Skip the wizard only once a submission actually landed AND the admin
+        // hasn't bounced it. `onboarded_at` alone is not enough: the old
+        // registration path prefilled placeholder text, so a brand-new doctor
+        // looked onboarded and never saw this screen. A rejected doctor is kept
+        // here so they can fix the flagged reason and resubmit.
+        const rejected = !!d.is_restricted || !!d.restriction_reason;
+        if (d.onboarded_at && !rejected) router.replace("/(tabs)/home");
+        if (rejected) setRejectReason(d.restriction_reason || "Your profile was returned for changes.");
+      } catch {}
+      try {
+        const t = await api.listSpecializations();
+        if (t?.specializations?.length) setTaxonomy(t as any);
       } catch {}
     })();
   }, [router]);
@@ -72,25 +161,85 @@ export default function DoctorOnboarding() {
     }
   };
 
-  const next = () => setStep((s) => Math.min(s + 1, 3));
+  /** Opens the OS picker and appends the REAL files. */
+  const pickDocuments = async () => {
+    setErr("");
+    setPicking(true);
+    try {
+      const res = await pickCredentialFiles();
+      if (!res.ok) {
+        if (res.reason === "error") setErr(res.message);
+        return;
+      }
+      setDocuments((prev) => [...prev, ...res.files]);
+    } finally {
+      setPicking(false);
+    }
+  };
+
+  const setDocType = (index: number, t: string) =>
+    setDocuments((prev) => prev.map((d, i) => (i === index ? { ...d, documentType: t } : d)));
+
+  const removeDoc = (index: number) => setDocuments((prev) => prev.filter((_, i) => i !== index));
+
+  const toggleDay = (idx: number) =>
+    setSlots((prev) => {
+      const next = { ...prev };
+      if (next[idx]) delete next[idx];
+      else next[idx] = { start: "09:00", end: "17:00" };
+      return next;
+    });
+
+  const setWindow = (idx: number, patch: Partial<{ start: string; end: string }>) =>
+    setSlots((prev) => {
+      const base = prev[idx] ?? { start: "09:00", end: "17:00" };
+      return { ...prev, [idx]: { ...base, ...patch } };
+    });
+
+  const next = () => setStep((s) => Math.min(s + 1, TOTAL_STEPS - 1));
   const back = () => setStep((s) => Math.max(s - 1, 0));
+
+  /** Day index -> the `{ "0": [{startTime,endTime}] }` shape the API expects. */
+  const slotPayload = useMemo<WeeklySlotMap>(() => {
+    const out: WeeklySlotMap = {};
+    Object.entries(slots).forEach(([day, w]) => {
+      if (!w) return;
+      if (toMinutes(w.end) <= toMinutes(w.start)) return;
+      out[String(day)] = [{ startTime: w.start, endTime: w.end }];
+    });
+    return out;
+  }, [slots]);
+
+  const activeDays = Object.keys(slotPayload).length;
+  const invalidWindow = Object.values(slots).some(
+    (w) => w && toMinutes(w.end) <= toMinutes(w.start)
+  );
 
   const submit = async () => {
     setErr("");
     setBusy(true);
     try {
       await api.doctorOnboard({
+        name: user?.name,
         specialty: form.specialty,
+        specialization_id: form.specialization_id ? Number(form.specialization_id) : undefined,
         qualification: form.qualification,
         registration_number: form.registration_number,
-        experience_years: parseInt(form.experience_years || "0", 10),
+        experience: parseInt(form.experience_years || "0", 10),
         consultation_fee: parseInt(form.consultation_fee || "499", 10),
         bio: form.bio,
+        about: form.bio,
         clinic_name: form.clinic_name,
         clinic_address: form.clinic_address,
+        city: form.city || undefined,
+        gender: form.gender || undefined,
         languages: form.languages,
         avatar_base64: form.avatar_base64 || undefined,
-        documents: form.documentsAttached ? ["degree_certificate.pdf", "reg_certificate.pdf"] : [],
+        // Real files now, not placeholder filenames. The backend stores each as a
+        // `doctor_verifications` row with status='pending' for an admin to review.
+        documents,
+        // Real `appointment_slots` rows, which is what booking reads.
+        slots: slotPayload,
       });
       router.replace("/(tabs)/home");
     } catch (e: any) {
@@ -101,8 +250,9 @@ export default function DoctorOnboarding() {
 
   const canNext = () => {
     if (step === 0) return !!form.specialty && !!form.qualification;
-    if (step === 1) return !!form.registration_number && form.documentsAttached;
+    if (step === 1) return !!form.registration_number && documents.length > 0;
     if (step === 2) return form.languages.length > 0 && !!form.experience_years;
+    if (step === 4) return activeDays > 0 && !invalidWindow;
     return true;
   };
 
@@ -114,18 +264,31 @@ export default function DoctorOnboarding() {
             <Feather name="arrow-left" size={22} color={COLORS.textPrimary} />
           </TouchableOpacity>
           <View style={{ flex: 1 }}>
-            <Text style={styles.eyebrow}>Vaidya onboarding · Step {step + 1} / 4</Text>
+            <Text style={styles.eyebrow}>Vaidya onboarding · Step {step + 1} / {TOTAL_STEPS}</Text>
             <Text style={styles.title}>Welcome, {user?.name}</Text>
           </View>
         </View>
 
         <View style={styles.progress}>
-          {[0, 1, 2, 3].map((i) => (
+          {Array.from({ length: TOTAL_STEPS }).map((_, i) => (
             <View key={i} style={[styles.dot, step >= i && styles.dotActive]} />
           ))}
         </View>
 
         <ScrollView contentContainerStyle={{ padding: SPACING.lg, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+          {rejectReason && (
+            <View style={styles.rejectBox} testID="do-reject-banner">
+              <Feather name="alert-triangle" size={16} color={COLORS.error} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rejectTitle}>Admin asked for changes</Text>
+                <Text style={styles.rejectBody}>{rejectReason}</Text>
+                <Text style={styles.rejectHint}>
+                  Fix the details below and upload fresh documents, then submit again.
+                </Text>
+              </View>
+            </View>
+          )}
+
           {step === 0 && (
             <View>
               <Text style={styles.sectionTitle}>Your practice</Text>
@@ -138,15 +301,42 @@ export default function DoctorOnboarding() {
                   </TouchableOpacity>
                 ))}
               </ScrollView>
+              {taxonomy.specializations.length > 0 && (
+                <>
+                  <Text style={styles.label}>Specialization (public profile)</Text>
+                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+                    {taxonomy.specializations.slice(0, 24).map((s) => (
+                      <TouchableOpacity
+                        key={s.id}
+                        onPress={() => setForm({ ...form, specialization_id: String(form.specialization_id) === String(s.id) ? "" : String(s.id) })}
+                        style={[styles.chip, form.specialization_id === String(s.id) && styles.chipActive]}
+                        testID={`do-specialization-${s.id}`}
+                      >
+                        <Text style={[styles.chipText, form.specialization_id === String(s.id) && styles.chipTextActive]}>{s.name}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </>
+              )}
               <Text style={styles.label}>Qualification</Text>
               <TextInput style={styles.input} value={form.qualification} onChangeText={(v) => setForm({ ...form, qualification: v })} placeholder="e.g. BAMS, MD (Ayurveda)" placeholderTextColor={COLORS.textMuted} testID="do-qual" />
+              <Text style={styles.label}>City</Text>
+              <TextInput style={styles.input} value={form.city} onChangeText={(v) => setForm({ ...form, city: v })} placeholder="e.g. Chandigarh" placeholderTextColor={COLORS.textMuted} testID="do-city" />
+              <Text style={styles.label}>Gender</Text>
+              <View style={{ flexDirection: "row", gap: 8 }}>
+                {(["male", "female"] as const).map((g) => (
+                  <TouchableOpacity key={g} onPress={() => setForm({ ...form, gender: form.gender === g ? "" : g })} style={[styles.chip, form.gender === g && styles.chipActive]} testID={`do-gender-${g}`}>
+                    <Text style={[styles.chipText, form.gender === g && styles.chipTextActive]}>{g === "male" ? "Male" : "Female"}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
             </View>
           )}
 
           {step === 1 && (
             <View>
               <Text style={styles.sectionTitle}>Verification</Text>
-              <Text style={styles.sectionSub}>Your AYUSH council registration + degree — for patient trust.</Text>
+              <Text style={styles.sectionSub}>Upload your AYUSH council registration and degree. An admin checks these before you go live.</Text>
               <Text style={styles.label}>AYUSH Registration No.</Text>
               <TextInput
                 style={styles.input}
@@ -157,18 +347,54 @@ export default function DoctorOnboarding() {
                 placeholderTextColor={COLORS.textMuted}
                 testID="do-reg"
               />
+
               <TouchableOpacity
-                style={[styles.uploader, form.documentsAttached && styles.uploaderDone]}
-                onPress={() => setForm({ ...form, documentsAttached: !form.documentsAttached })}
+                style={[styles.uploader, documents.length > 0 && styles.uploaderDone]}
+                onPress={pickDocuments}
+                disabled={picking}
                 testID="do-upload"
               >
-                <Feather name={form.documentsAttached ? "check-circle" : "upload"} size={24} color={form.documentsAttached ? COLORS.success : COLORS.brand} />
-                <Text style={styles.uploaderTitle}>{form.documentsAttached ? "Documents attached" : "Attach degree + reg certificate"}</Text>
-                <Text style={styles.uploaderSub}>{form.documentsAttached ? "2 files ready (demo)" : "PDF / JPG — max 5 MB each"}</Text>
+                <Feather name={documents.length > 0 ? "check-circle" : "upload"} size={24} color={documents.length > 0 ? COLORS.success : COLORS.brand} />
+                <Text style={styles.uploaderTitle}>
+                  {picking ? "Opening file picker…" : documents.length > 0 ? `${documents.length} file${documents.length > 1 ? "s" : ""} attached` : "Attach degree + reg certificate"}
+                </Text>
+                <Text style={styles.uploaderSub}>JPG / PNG / PDF / DOC · max 10 MB each</Text>
               </TouchableOpacity>
+
+              {documents.length > 0 && (
+                <View style={{ gap: 8, marginTop: SPACING.md }}>
+                  {documents.map((d, i) => (
+                    <View key={`${d.fileName}-${i}`} style={styles.docRow} testID={`do-doc-${i}`}>
+                      <Feather name="file-text" size={18} color={COLORS.brand} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.docName} numberOfLines={1}>{d.fileName}</Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingVertical: 4 }}>
+                          {CREDENTIAL_TYPES.map((t) => (
+                            <TouchableOpacity
+                              key={t.value}
+                              onPress={() => setDocType(i, t.value)}
+                              style={[styles.docTag, d.documentType === t.value && styles.docTagActive]}
+                              testID={`do-doc-${i}-type-${t.value}`}
+                            >
+                              <Text style={[styles.docTagText, d.documentType === t.value && styles.docTagTextActive]}>{t.label}</Text>
+                            </TouchableOpacity>
+                          ))}
+                        </ScrollView>
+                        <Text style={styles.docMeta}>
+                          {labelForDocType(d.documentType)} · {(d.base64?.length ?? 0) > 0 ? `${Math.round((d.base64.length * 3) / 4 / 1024)} KB` : ""}
+                        </Text>
+                      </View>
+                      <TouchableOpacity onPress={() => removeDoc(i)} testID={`do-doc-${i}-remove`} hitSlop={8}>
+                        <Feather name="trash-2" size={17} color={COLORS.error} />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
+              )}
+
               <View style={styles.info}>
                 <Feather name="info" size={12} color={COLORS.brand} />
-                <Text style={styles.infoText}>Our admin verifies your documents within 24 hours. You&apos;ll get a notification once approved.</Text>
+                <Text style={styles.infoText}>These files are sent to our admin team for review and kept private. You&apos;ll get a notification once your profile is approved.</Text>
               </View>
             </View>
           )}
@@ -228,6 +454,89 @@ export default function DoctorOnboarding() {
             </View>
           )}
 
+          {step === 4 && (
+            <View>
+              <Text style={styles.sectionTitle}>Your availability</Text>
+              <Text style={styles.sectionSub}>
+                Pick the days and hours patients can book you. We&apos;ll split each range into
+                30-minute slots, minus anything already booked.
+              </Text>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: SPACING.md }}>
+                {DAYS.map((d) => {
+                  const on = !!slots[d.idx];
+                  return (
+                    <TouchableOpacity
+                      key={d.idx}
+                      onPress={() => toggleDay(d.idx)}
+                      style={[styles.dayChip, on && styles.dayChipActive]}
+                      testID={`do-day-${d.idx}`}
+                    >
+                      <Text style={[styles.dayChipText, on && styles.dayChipTextActive]}>{d.short}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {Object.keys(slots).length === 0 && (
+                <View style={styles.info}>
+                  <Feather name="alert-circle" size={12} color={COLORS.accent} />
+                  <Text style={styles.infoText}>Select at least one day, otherwise patients won&apos;t be able to book you.</Text>
+                </View>
+              )}
+
+              {Object.keys(slots)
+                .sort((a, b) => Number(a) - Number(b))
+                .map((key) => {
+                  const idx = Number(key);
+                  const w = slots[idx];
+                  const day = DAYS.find((d) => d.idx === idx);
+                  return (
+                    <View key={key} style={styles.slotCard} testID={`do-slot-card-${idx}`}>
+                      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                        <Text style={styles.slotDay}>{day?.name}</Text>
+                        <TouchableOpacity onPress={() => toggleDay(idx)} hitSlop={8} testID={`do-slot-remove-${idx}`}>
+                          <Feather name="x" size={16} color={COLORS.textMuted} />
+                        </TouchableOpacity>
+                      </View>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 }}>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
+                          {TIME_OPTIONS.map((t) => (
+                            <TouchableOpacity
+                              key={`s-${t}`}
+                              onPress={() => setWindow(idx, { start: t })}
+                              style={[styles.timeChip, w.start === t && styles.timeChipActive]}
+                              testID={`do-slot-${idx}-start-${t}`}
+                            >
+                              <Text style={[styles.timeChipText, w.start === t && styles.timeChipTextActive]}>{fmt12h(t)}</Text>
+                            </TouchableOpacity>
+                          ))}
+                        </ScrollView>
+                      </View>
+                      <Text style={styles.slotLabel}>to</Text>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
+                        {TIME_OPTIONS.map((t) => (
+                          <TouchableOpacity
+                            key={`e-${t}`}
+                            onPress={() => setWindow(idx, { end: t })}
+                            style={[styles.timeChip, w.end === t && styles.timeChipActive]}
+                            testID={`do-slot-${idx}-end-${t}`}
+                          >
+                            <Text style={[styles.timeChipText, w.end === t && styles.timeChipTextActive]}>{fmt12h(t)}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </ScrollView>
+                    </View>
+                  );
+                })}
+
+              {invalidWindow && (
+                <Text style={styles.err} testID="do-slot-invalid">
+                  An end time is not after its start time. Fix the highlighted range.
+                </Text>
+              )}
+            </View>
+          )}
+
           {err ? <Text style={styles.err}>{err}</Text> : null}
 
           <View style={styles.navRow}>
@@ -237,14 +546,16 @@ export default function DoctorOnboarding() {
                 <Text style={styles.navBtnText}>Back</Text>
               </TouchableOpacity>
             )}
-            {step < 3 ? (
+            {step < TOTAL_STEPS - 1 ? (
               <TouchableOpacity style={[styles.nextBtn, !canNext() && { opacity: 0.5 }]} onPress={next} disabled={!canNext()} testID="do-next">
                 <Text style={styles.nextText}>Continue</Text>
                 <Feather name="arrow-right" size={16} color={COLORS.surface} />
               </TouchableOpacity>
             ) : (
-              <TouchableOpacity style={[styles.nextBtn, busy && { opacity: 0.5 }]} onPress={submit} disabled={busy} testID="do-submit">
-                <Text style={styles.nextText}>{busy ? "Submitting…" : "Submit for verification"}</Text>
+              <TouchableOpacity style={[styles.nextBtn, (busy || !canNext()) && { opacity: 0.5 }]} onPress={submit} disabled={busy || !canNext()} testID="do-submit">
+                <Text style={styles.nextText}>
+                  {busy ? "Submitting…" : `Submit ${documents.length} doc${documents.length === 1 ? "" : "s"} · ${activeDays} day${activeDays === 1 ? "" : "s"}`}
+                </Text>
                 <Feather name="check" size={16} color={COLORS.surface} />
               </TouchableOpacity>
             )}
@@ -283,9 +594,31 @@ const styles = StyleSheet.create({
   photoRemoveText: { color: COLORS.error, fontSize: 12, fontWeight: "600" },
   uploaderTitle: { fontFamily: FONTS.heading, fontSize: 16, color: COLORS.textPrimary, marginTop: 10 },
   uploaderSub: { color: COLORS.textSecondary, fontSize: 12, marginTop: 4 },
+  docRow: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: COLORS.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, padding: 10 },
+  docName: { color: COLORS.textPrimary, fontSize: 13, fontWeight: "700" },
+  docMeta: { color: COLORS.textMuted, fontSize: 11, marginTop: 2 },
+  docTag: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: RADIUS.sm, borderWidth: 1, borderColor: COLORS.border, backgroundColor: COLORS.surfaceAlt },
+  docTagActive: { backgroundColor: COLORS.brand, borderColor: COLORS.brand },
+  docTagText: { color: COLORS.textSecondary, fontSize: 10, fontWeight: "600" },
+  docTagTextActive: { color: COLORS.surface },
+  dayChip: { width: 52, paddingVertical: 10, alignItems: "center", backgroundColor: COLORS.surface, borderRadius: RADIUS.pill, borderWidth: 1, borderColor: COLORS.border },
+  dayChipActive: { backgroundColor: COLORS.brand, borderColor: COLORS.brand },
+  dayChipText: { color: COLORS.textPrimary, fontSize: 12, fontWeight: "700" },
+  dayChipTextActive: { color: COLORS.surface },
+  slotCard: { backgroundColor: COLORS.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, padding: SPACING.md, marginTop: SPACING.md },
+  slotDay: { color: COLORS.textPrimary, fontSize: 15, fontWeight: "700" },
+  slotLabel: { color: COLORS.textMuted, fontSize: 11, textTransform: "uppercase", letterSpacing: 2, marginTop: 10, marginBottom: 4 },
+  timeChip: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: RADIUS.sm, borderWidth: 1, borderColor: COLORS.border, backgroundColor: COLORS.surfaceAlt },
+  timeChipActive: { backgroundColor: COLORS.brand, borderColor: COLORS.brand },
+  timeChipText: { color: COLORS.textSecondary, fontSize: 12, fontWeight: "600" },
+  timeChipTextActive: { color: COLORS.surface },
   info: { flexDirection: "row", gap: 6, marginTop: SPACING.md, padding: 10, backgroundColor: COLORS.surfaceAlt, borderRadius: RADIUS.md, alignItems: "flex-start" },
   infoText: { color: COLORS.textSecondary, fontSize: 12, flex: 1, lineHeight: 16 },
   err: { color: COLORS.error, marginTop: 12 },
+  rejectBox: { flexDirection: "row", gap: 10, padding: SPACING.md, backgroundColor: "#FDECEA", borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.error, marginBottom: SPACING.md },
+  rejectTitle: { color: COLORS.error, fontSize: 14, fontWeight: "700" },
+  rejectBody: { color: COLORS.textPrimary, fontSize: 13, marginTop: 3, lineHeight: 18 },
+  rejectHint: { color: COLORS.textSecondary, fontSize: 12, marginTop: 5, lineHeight: 16 },
   navRow: { flexDirection: "row", gap: 8, marginTop: SPACING.lg },
   navBtn: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 16, paddingVertical: 14, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: RADIUS.pill },
   navBtnText: { color: COLORS.brand, fontWeight: "700" },

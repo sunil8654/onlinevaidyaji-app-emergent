@@ -174,6 +174,88 @@ async def test_public_taxonomy_endpoints(authed_client):
     assert cities["cities"]
 
 
+REG_UID = 9512
+REG_EMAIL = "rolebug@vaidhyaji.example.com"
+PNG = ("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+       "AAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+
+
+async def _cleanup_reg() -> None:
+    """Remove the probe account by EMAIL.
+
+    Looking the row up first (rather than assuming a fixed id) means a rerun
+    after a half-failed test still finds and clears the leftovers instead of
+    colliding with a unique email. `audit_logs` and `notifications` both FK to
+    users, so they have to go too - users.id is NOT freely deletable.
+    """
+    rows = await msdb._query("SELECT id FROM `users` WHERE email=%s", [REG_EMAIL])
+    for u in rows:
+        uid = u["id"]
+        docs = await msdb._query("SELECT id FROM `doctors` WHERE user_id=%s", [uid])
+        for d in docs:
+            did = d["id"]
+            for t in ("doctor_verifications", "appointment_slots",
+                      "doctor_specializations", "doctor_status"):
+                await msdb._query("DELETE FROM `%s` WHERE doctor_id=%%s" % t, [did])
+            await msdb._query("DELETE FROM `doctors` WHERE id=%s", [did])
+        for t in ("audit_logs", "notifications", "password_resets"):
+            try:
+                await msdb._query("DELETE FROM `%s` WHERE user_id=%%s" % t, [uid])
+            except Exception:
+                pass  # table/column absent in some schemas
+        await msdb._query("DELETE FROM `users` WHERE id=%s", [uid])
+
+
+@pytest.mark.asyncio
+async def test_doctor_registration_persists_role_and_can_onboard():
+    """`users.role` is ENUM, so msdb needs an explicit column-map entry.
+
+    Regression: without `"users": {"role": [("role", _enum_val)]}` in
+    COLUMN_MAPS the value fell into the `data` blob and the real column took its
+    DEFAULT of 'patient'. Registration still answered `role: 'doctor'` and
+    minted a doctor JWT, but every follow-up call was rejected 403 "Doctors
+    only" - no doctor could ever finish onboarding from the app. Verified in
+    production data: 14 of 15 doctors were linked to a 'patient' user.
+    """
+    await _cleanup_reg()
+    transport = httpx.ASGITransport(app=server.app)
+    async with httpx.AsyncClient(transport=transport, base_url=BASE) as c:
+        r = await c.post("/api/auth/register", json={
+            "name": "Role Bug Doc", "email": REG_EMAIL,
+            "password": "Sm0kePass!42", "role": "doctor",
+            "phone": "919000009512",
+        })
+        assert r.status_code == 200, f"register failed: {r.status_code} {r.text[:300]}"
+        assert r.json()["user"]["role"] == "doctor"
+
+        # the response was never proof - assert the COLUMN
+        rows = await msdb._query("SELECT id, role FROM `users` WHERE email=%s",
+                                 [REG_EMAIL])
+        assert rows, "registered user row missing"
+        assert rows[0]["role"] == "doctor", (
+            f"users.role stored as {rows[0]['role']!r}: the ENUM column was not "
+            "mirrored, so a real doctor was persisted as a patient"
+        )
+
+        # and the practical consequence: onboarding must not 403
+        token = r.json()["token"]
+        c.headers["Authorization"] = f"Bearer {token}"
+        me = await c.get("/api/auth/me")
+        assert me.status_code == 200, me.text[:300]
+        assert me.json()["role"] == "doctor"
+
+        ob = await c.put("/api/doctor/onboard", json={
+            "specialty": "Ayurveda", "qualification": "BAMS",
+            "registration_number": "AYUSH/BAMS/2020/ROLEBUG",
+            "experience_years": 5, "languages": ["Hindi"],
+            "consultation_fee": 400, "bio": "role regression probe",
+            "avatar_base64": PNG,
+        })
+        assert ob.status_code == 200, f"onboard 403'd a real doctor: {ob.text[:300]}"
+        assert ob.json().get("id")
+    await _cleanup_reg()
+
+
 async def test_public_doctor_profile_shows_the_edit(authed_client):
     """The patient-facing profile must reflect what the doctor just saved."""
     await authed_client.put("/api/doctor/profile", json={

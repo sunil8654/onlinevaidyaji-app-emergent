@@ -12,17 +12,26 @@ import { api } from "@/src/api";
 
 type Mode = "online" | "offline" | "both";
 
+// Keys are `appointment_slots.day_of_week`, which is JS `Date.getDay()` order:
+// 0 = SUNDAY. This array used to label key "0" as Monday, i.e. off by one against
+// the real table, so saving Sunday's slots booked them for Monday (and vice
+// versa) - a doctor could never be free on the day they picked.
 const DAYS: { key: string; label: string; short: string }[] = [
-  { key: "0", label: "Monday", short: "Mon" },
-  { key: "1", label: "Tuesday", short: "Tue" },
-  { key: "2", label: "Wednesday", short: "Wed" },
-  { key: "3", label: "Thursday", short: "Thu" },
-  { key: "4", label: "Friday", short: "Fri" },
-  { key: "5", label: "Saturday", short: "Sat" },
-  { key: "6", label: "Sunday", short: "Sun" },
+  { key: "0", label: "Sunday", short: "Sun" },
+  { key: "1", label: "Monday", short: "Mon" },
+  { key: "2", label: "Tuesday", short: "Tue" },
+  { key: "3", label: "Wednesday", short: "Wed" },
+  { key: "4", label: "Thursday", short: "Thu" },
+  { key: "5", label: "Friday", short: "Fri" },
+  { key: "6", label: "Saturday", short: "Sat" },
 ];
 
-// Preset slot grid (8:00 – 20:00 in 30-min steps) for one-tap toggle.
+const MONDAY = "1";
+const TUE_TO_FRI = ["2", "3", "4", "5"];
+
+// Slot grid (8:00 – 20:00 in 30-min steps) for one-tap toggle. These are the
+// discrete taps the doctor sees; the backend collapses each contiguous run back
+// into the ranges `appointment_slots` actually stores.
 const SLOT_PRESETS: string[] = (() => {
   const arr: string[] = [];
   for (let h = 8; h <= 20; h++) {
@@ -38,10 +47,8 @@ export default function DoctorAvailability() {
   const [saving, setSaving] = useState(false);
   const [isAvailable, setIsAvailable] = useState(true);
   const [mode, setMode] = useState<Mode>("both");
-  const [slotDuration, setSlotDuration] = useState(30);
-  const [notes, setNotes] = useState("");
   const [schedule, setSchedule] = useState<Record<string, string[]>>({});
-  const [activeDay, setActiveDay] = useState<string>("0");
+  const [activeDay, setActiveDay] = useState<string>("1");
   const [customSlot, setCustomSlot] = useState("");
 
   useEffect(() => {
@@ -50,8 +57,6 @@ export default function DoctorAvailability() {
         const d = await api.doctorGetAvailability();
         setIsAvailable(d.is_available);
         setMode((d.consultation_mode || "both") as Mode);
-        setSlotDuration(d.slot_duration_min || 30);
-        setNotes(d.notes || "");
         setSchedule(d.weekly_schedule || {});
       } catch (e: any) {
         Alert.alert("Error", e?.message || "Could not load availability");
@@ -76,10 +81,14 @@ export default function DoctorAvailability() {
   }
 
   function copyMondayToWeekdays() {
-    const monSlots = schedule["0"] || [];
+    const monSlots = schedule[MONDAY] || [];
+    if (!monSlots.length) {
+      Alert.alert("Nothing to copy", "Pick some Monday slots first.");
+      return;
+    }
     setSchedule((s) => ({
       ...s,
-      "1": [...monSlots], "2": [...monSlots], "3": [...monSlots], "4": [...monSlots],
+      ...Object.fromEntries(TUE_TO_FRI.map((k) => [k, [...monSlots]])),
     }));
     Alert.alert("Copied", "Monday's slots copied to Tue–Fri");
   }
@@ -100,9 +109,9 @@ export default function DoctorAvailability() {
       await api.doctorSetAvailability({
         is_available: isAvailable,
         consultation_mode: mode,
+        // Keys are day_of_week (0 = Sunday) and the backend turns each
+        // contiguous run of times into real `appointment_slots` ranges.
         weekly_schedule: schedule,
-        slot_duration_min: slotDuration,
-        notes,
       });
       Alert.alert("Saved", "Availability updated");
       router.back();
@@ -174,22 +183,9 @@ export default function DoctorAvailability() {
           ))}
         </View>
 
-        {/* Slot duration */}
-        <Text style={styles.sectionLabel}>Slot duration</Text>
-        <View style={styles.modeRow}>
-          {[15, 20, 30, 45, 60].map((d) => (
-            <TouchableOpacity
-              key={d}
-              onPress={() => setSlotDuration(d)}
-              style={[styles.chip, slotDuration === d && styles.chipActive]}
-              testID={`av-dur-${d}`}
-            >
-              <Text style={[styles.chipText, slotDuration === d && { color: COLORS.surface }]}>
-                {d} min
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+        {/* Slot duration is deliberately NOT editable. Booking expands every
+            `appointment_slots` window into fixed 30-minute slots, so offering
+            15/20/45/60 here only implied a choice that silently did nothing. */}
 
         {/* Weekly schedule */}
         <View style={styles.sectionHead}>
@@ -267,23 +263,15 @@ export default function DoctorAvailability() {
           </TouchableOpacity>
         </View>
 
-        {/* Notes */}
-        <Text style={styles.sectionLabel}>Notes for patients (optional)</Text>
-        <TextInput
-          value={notes}
-          onChangeText={setNotes}
-          multiline
-          placeholder="e.g. Weekday evenings on video only. Sunday reserved for follow-ups."
-          placeholderTextColor={COLORS.textMuted}
-          style={styles.notesInput}
-          maxLength={300}
-          testID="av-notes"
-        />
+        {/* "Notes for patients" was removed: it was written to the app's `data` blob
+            with no `doctors` column behind it and nothing ever rendered it for a
+            patient, so it looked like a way to tell patients something that
+            simply never reached them. Put it in your bio instead. */}
 
         <View style={styles.summary}>
           <Feather name="calendar" size={14} color={COLORS.brand} />
           <Text style={styles.summaryText}>
-            {totalSlots} total weekly {totalSlots === 1 ? "slot" : "slots"} · {slotDuration} min each
+            {totalSlots} total weekly {totalSlots === 1 ? "slot" : "slots"} · 30 min each
           </Text>
         </View>
       </ScrollView>
@@ -347,12 +335,6 @@ const styles = StyleSheet.create({
   },
   modeChipActive: { backgroundColor: COLORS.brand, borderColor: COLORS.brand },
   modeText: { color: COLORS.brand, fontWeight: "700", fontSize: 12 },
-  chip: {
-    paddingHorizontal: 14, paddingVertical: 8, borderRadius: RADIUS.pill,
-    backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border,
-  },
-  chipActive: { backgroundColor: COLORS.accent, borderColor: COLORS.accent },
-  chipText: { color: COLORS.textPrimary, fontWeight: "700", fontSize: 12 },
   dayChip: {
     paddingHorizontal: 14, paddingVertical: 10, borderRadius: RADIUS.md,
     backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border,
@@ -392,14 +374,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14, borderRadius: RADIUS.md, backgroundColor: COLORS.accent,
   },
   addText: { color: COLORS.surface, fontWeight: "700", fontSize: 13 },
-  notesInput: {
-    marginHorizontal: SPACING.lg,
-    minHeight: 80,
-    padding: SPACING.md,
-    backgroundColor: COLORS.surface, borderRadius: RADIUS.md,
-    borderWidth: 1, borderColor: COLORS.border, color: COLORS.textPrimary,
-    textAlignVertical: "top",
-  },
   summary: {
     flexDirection: "row", alignItems: "center", gap: 8,
     marginHorizontal: SPACING.lg, marginTop: SPACING.lg,
