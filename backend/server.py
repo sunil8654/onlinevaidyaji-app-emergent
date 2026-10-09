@@ -14,7 +14,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr, validator
 from typing import List, Optional, Literal, Dict, Any, Tuple
 import uuid
-from datetime import datetime, timedelta, timezone, time
+from datetime import datetime, timedelta, timezone, time as dt_time
 from collections import defaultdict, deque
 import asyncio
 import time
@@ -139,6 +139,13 @@ _push_client = httpx.AsyncClient(
 )
 
 app = FastAPI(title="Online VaidyaJi API")
+
+
+@app.get("/health")
+async def health_check():
+    """K8s readiness/liveness probe endpoint — must always return 200."""
+    return {"status": "ok"}
+
 api_router = APIRouter(prefix="/api")
 bearer = HTTPBearer(auto_error=False)
 
@@ -377,6 +384,15 @@ async def current_user(cred: HTTPAuthorizationCredentials = Depends(bearer)) -> 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _iso(v: Any) -> Optional[str]:
+    """Serialize datetimes/dates to ISO strings; pass through everything else."""
+    if v is None:
+        return None
+    if hasattr(v, "isoformat"):
+        return v.isoformat()
+    return str(v)
 
 
 async def log_activity(kind: str, actor: Optional[dict] = None, meta: Optional[dict] = None) -> None:
@@ -1599,7 +1615,7 @@ async def create_appointment(body: AppointmentInput, user: dict = Depends(curren
         "doctor_specialty": doctor["specialty"],
         "slot": body.slot,
         "appointment_date": slot_date,
-        "appointment_time": slot_time or time(0, 0),
+        "appointment_time": slot_time or dt_time(0, 0),
         "type": appt_type,
         "symptoms": (body.symptoms or "").strip() or None,
         "reason": body.reason,
@@ -5406,7 +5422,7 @@ async def _seed_default_slots(doctor_id: int) -> None:
             await _sql_query(
                 "INSERT INTO `appointment_slots` (doctor_id, day_of_week, start_time, end_time, is_available) "
                 "VALUES (%s, %s, %s, %s, 1)",
-                [doctor_id, day, time(9, 0), time(17, 0)],
+                [doctor_id, day, dt_time(9, 0), dt_time(17, 0)],
             )
         except Exception as e:
             logger.warning("default slot seed failed for doctor %s: %s", doctor_id, e)
