@@ -1,5 +1,6 @@
-// Real video consultation powered by Daily.co (WebView + Daily Prebuilt).
-// Works in Expo Go without a native build.
+// Real video consultation powered by PeerJS/WebRTC over our own Socket.IO
+// signalling — the same stack the website uses. Rendered in a WebView so it
+// works in Expo Go without a native build.
 import { useEffect, useRef, useState } from "react";
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert, Platform } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -18,6 +19,7 @@ export default function VideoCall() {
     doctor_specialty?: string;
     appt_id?: string;
     doctor_id?: string;
+    room_id?: string;
   }>();
 
   const [loading, setLoading] = useState(true);
@@ -32,15 +34,17 @@ export default function VideoCall() {
     (async () => {
       try {
         const payload: any = {};
+        if (params.room_id) payload.room_id = String(params.room_id);
         if (params.appt_id) payload.appointment_id = String(params.appt_id);
         if (params.doctor_id) payload.doctor_id = String(params.doctor_id);
-        if (!payload.appointment_id && !payload.doctor_id) {
-          throw new Error("Missing appointment or doctor id");
+        if (!payload.room_id && !payload.appointment_id && !payload.doctor_id) {
+          throw new Error("Missing room, appointment or doctor id");
         }
         const res = await api.createVideoSession(payload);
         if (!alive) return;
         // Prepend backend base URL to embed_url (starts with /api/...)
-        setEmbedUrl(`${BASE}${res.embed_url}`);
+        const base = BASE.replace(/\/api$/, "");
+        setEmbedUrl(res.embed_url.startsWith("http") ? res.embed_url : `${base}${res.embed_url}`);
       } catch (e: any) {
         if (!alive) return;
         setError(e?.message || "Failed to start consultation");
@@ -51,7 +55,7 @@ export default function VideoCall() {
     return () => {
       alive = false;
     };
-  }, [params.appt_id, params.doctor_id]);
+  }, [params.appt_id, params.doctor_id, params.room_id]);
 
   // Call duration timer starts when the WebView reports "joined"
   const [joined, setJoined] = useState(false);
@@ -89,7 +93,10 @@ export default function VideoCall() {
   const handleEnd = () => {
     if (ended) return;
     setEnded(true);
-    setTimeout(() => router.replace(params.appt_id ? "/appointments" : "/(tabs)/home"), 300);
+    setTimeout(() => {
+      if (params.room_id) router.back();
+      else router.replace(params.appt_id ? "/appointments" : "/(tabs)/home");
+    }, 300);
   };
 
   const confirmEnd = () => {
@@ -168,10 +175,9 @@ export default function VideoCall() {
                 onMessage={handleMessage}
                 onLoad={() => setJoined(true)}
                 onError={() => setError("Video failed to load")}
-                // Grant camera/mic on Android
-                onPermissionRequest={(event: any) => {
-                  event?.grant?.(event.resources);
-                }}
+                // Grant camera/mic on Android (prop exists at runtime; the
+                // installed react-native-webview types omit it)
+                {...({ onPermissionRequest: (event: any) => event?.grant?.(event.resources) } as any)}
                 mixedContentMode="always"
               />
             )

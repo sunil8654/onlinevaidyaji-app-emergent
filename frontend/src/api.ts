@@ -991,9 +991,22 @@ patient: {
   registerPush: (body: { user_id: string; platform: string; device_token: string }) =>
     request("/register-push", "POST", body, false),
 
-  // Video (Daily.co)
-  createVideoSession: (body: { appointment_id?: string; doctor_id?: string; duration_minutes?: number }) =>
+  // Video (PeerJS / WebRTC over Socket.IO — same stack as the website)
+  createVideoSession: (body: { appointment_id?: string; doctor_id?: string; room_id?: string; duration_minutes?: number }) =>
     request<{ room_url: string; room_name: string; token: string; embed_url: string; is_owner: boolean; exp: number; user_name: string }>("/video/session", "POST", body),
+
+  // Consultation chat (patient <-> doctor), backed by consultation_rooms/messages
+  consultationRooms: () => request<any[]>("/consultation-rooms"),
+  consultationRoomForAppointment: (apptId: string) =>
+    request<any>(`/consultation-rooms/by-appointment/${apptId}`),
+  consultationMessages: (roomId: string) =>
+    request<any[]>(`/consultation-rooms/${roomId}/messages`),
+  sendConsultationMessage: (
+    roomId: string,
+    body: { content?: string; message_type?: string; file_url?: string; file_name?: string; file_size?: number }
+  ) => request<{ ok: boolean; id: number }>(`/consultation-rooms/${roomId}/messages`, "POST", body),
+  markConsultationRead: (roomId: string) =>
+    request<{ ok: boolean }>(`/consultation-rooms/${roomId}/messages/read`, "PUT"),
 
   // Payments (Razorpay)
   createPaymentOrder: (body: { amount: number; currency?: string; purpose: string; reference_id?: string; description?: string }) =>

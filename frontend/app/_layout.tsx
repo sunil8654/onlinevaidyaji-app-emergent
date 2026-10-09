@@ -8,6 +8,7 @@ import * as Linking from "expo-linking";
 
 import { useIconFonts } from "@/src/hooks/use-icon-fonts";
 import { AuthProvider, useAuth } from "@/src/auth";
+import { SocketProvider } from "@/src/socket";
 import { I18nProvider } from "@/src/i18n";
 import { registerForPush, getNotifications } from "@/src/push";
 import { ErrorBoundary } from "@/src/components/ErrorBoundary";
@@ -95,14 +96,16 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <I18nProvider>
         <AuthProvider>
-          <StatusBar style="dark" />
-          <PushRegistrar />
-          {/* Outermost guard: without it a render throw anywhere in the app is
-              fatal and the process simply exits, which is indistinguishable
-              from a native crash to whoever is holding the phone. */}
-          <ErrorBoundary>
-            <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#FFFDF3" } }} />
-          </ErrorBoundary>
+          <SocketProvider>
+            <StatusBar style="dark" />
+            <PushRegistrar />
+            {/* Outermost guard: without it a render throw anywhere in the app is
+                fatal and the process simply exits, which is indistinguishable
+                from a native crash to whoever is holding the phone. */}
+            <ErrorBoundary>
+              <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#FFFDF3" } }} />
+            </ErrorBoundary>
+          </SocketProvider>
         </AuthProvider>
       </I18nProvider>
     </SafeAreaProvider>

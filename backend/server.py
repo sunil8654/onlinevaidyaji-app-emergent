@@ -409,6 +409,18 @@ async def require_super_admin(user: dict = Depends(current_user)) -> dict:
     return user
 
 
+def _id_eq(a, b) -> bool:
+    """Compare DB ids that may differ in type (int vs numeric string).
+
+    `doctors.id` is stored as a VARCHAR (e.g. "10") while `appointments.doctor_id`
+    and `consultation_rooms.doctor_id` round-trip as INTs, so a plain `==` check
+    silently denies the doctor access to their own appointments/rooms.
+    """
+    if a is None or b is None:
+        return False
+    return a == b or str(a) == str(b)
+
+
 async def _appt_actor_ids(user: dict) -> tuple[str, Optional[str]]:
     """Return (user_id, doctor_row_id_or_none) for appointment ACL checks.
 
@@ -418,16 +430,22 @@ async def _appt_actor_ids(user: dict) -> tuple[str, Optional[str]]:
     """
     if user.get("role") == "doctor":
         d = await db.doctors.find_one({"user_id": user["id"]}, {"_id": 0, "id": 1})
-        return user["id"], (d or {}).get("id")
+        did = (d or {}).get("id")
+        # `doctors.id` is a numeric VARCHAR but appointments/rooms store an INT
+        # doctor_id. Normalize here so `==` ACL checks and `{"doctor_id": did}`
+        # queries match instead of silently denying the doctor.
+        if isinstance(did, str) and did.isdigit():
+            did = int(did)
+        return user["id"], did
     return user["id"], None
 
 
 async def _is_appt_participant(user: dict, appt: dict) -> bool:
     """True if `user` is either the patient or the doctor of `appt`."""
-    if appt.get("patient_id") == user["id"]:
+    if _id_eq(appt.get("patient_id"), user.get("id")):
         return True
     _, doc_id = await _appt_actor_ids(user)
-    return bool(doc_id and appt.get("doctor_id") == doc_id)
+    return _id_eq(appt.get("doctor_id"), doc_id)
 
 
 # ----------------- Auth Routes -----------------
@@ -2135,15 +2153,51 @@ async def list_consultation_rooms(user: dict = Depends(current_user)):
     return rooms
 
 
+@api_router.get("/consultation-rooms/by-appointment/{appt_id}")
+async def consultation_room_for_appointment(appt_id: str, user: dict = Depends(current_user)):
+    """Resolve (or lazily create) the consultation room tied to an appointment.
+
+    The website creates this room on appointment confirm/payment; the app must
+    handle appointments that predate that or were confirmed elsewhere, so it
+    creates it on demand too. Used by the app's Chat button.
+    """
+    appt = await db.appointments.find_one({"id": appt_id}, {"_id": 0})
+    if not appt:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+    if not await _is_appt_participant(user, appt):
+        raise HTTPException(status_code=403, detail="Not part of this appointment")
+
+    room = await db.consultation_rooms.find_one({"appointment_id": appt_id}, {"_id": 0})
+    if room:
+        return room
+
+    try:
+        await db.consultation_rooms.insert_one({
+            "appointment_id": appt_id,
+            "room_id": f"consult_{uuid.uuid4().hex[:10]}",
+            "doctor_id": appt.get("doctor_id"),
+            "patient_id": appt.get("patient_id"),
+            "type": "both",
+            "status": "active",
+            "created_at": now_iso(),
+        })
+    except Exception:
+        # A concurrent request may have created it; fall through to the re-read.
+        logger.warning("consultation room insert raced for appt %s", appt_id, exc_info=True)
+
+    room = await db.consultation_rooms.find_one({"appointment_id": appt_id}, {"_id": 0})
+    if not room:
+        raise HTTPException(status_code=500, detail="Could not create consultation room")
+    return room
+
+
 @api_router.get("/consultation-rooms/{room_id}/messages")
 async def get_consultation_room_messages(room_id: str, user: dict = Depends(current_user)):
     room = await db.consultation_rooms.find_one({"room_id": room_id}, {"_id": 0})
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
     _, doc_id = await _appt_actor_ids(user)
-    if room.get("patient_id") != user["id"] and (
-        not doc_id or room.get("doctor_id") != doc_id
-    ):
+    if not _id_eq(room.get("patient_id"), user.get("id")) and not _id_eq(room.get("doctor_id"), doc_id):
         raise HTTPException(status_code=403, detail="Not part of this room")
 
     msgs = (
@@ -2170,12 +2224,10 @@ async def send_consultation_room_message(
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
     _, doc_id = await _appt_actor_ids(user)
-    if room.get("patient_id") != user["id"] and (
-        not doc_id or room.get("doctor_id") != doc_id
-    ):
+    if not _id_eq(room.get("patient_id"), user.get("id")) and not _id_eq(room.get("doctor_id"), doc_id):
         raise HTTPException(status_code=403, detail="Not part of this room")
 
-    sender_role = "doctor" if (doc_id and room.get("doctor_id") == doc_id) else "patient"
+    sender_role = "doctor" if _id_eq(room.get("doctor_id"), doc_id) else "patient"
     msg = {
         "room_id": room_id,
         "sender_id": user["id"],
@@ -2200,9 +2252,7 @@ async def mark_consultation_messages_read(room_id: str, user: dict = Depends(cur
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
     _, doc_id = await _appt_actor_ids(user)
-    if room.get("patient_id") != user["id"] and (
-        not doc_id or room.get("doctor_id") != doc_id
-    ):
+    if not _id_eq(room.get("patient_id"), user.get("id")) and not _id_eq(room.get("doctor_id"), doc_id):
         raise HTTPException(status_code=403, detail="Not part of this room")
 
     await db.messages.update_many(
@@ -2227,157 +2277,123 @@ async def video_history(appointment_id: str, user: dict = Depends(current_user))
     return sessions
 
 
-# ----------------- Daily.co Video Consultation -----------------
-DAILY_API_KEY = os.environ.get("DAILY_API_KEY", "")
-DAILY_BASE = "https://api.daily.co/v1"
-
+# ----------------- Video Consultation (PeerJS / WebRTC) -----------------
+# Parity with the website, which uses PeerJS for media and a Socket.IO relay to
+# exchange peer ids. No third-party video API (no Daily.co, no paid SDK). The
+# mobile app opens `/api/video/embed/{room}` in a WebView; that page loads the
+# same PeerJS build the website uses and connects to our own Socket.IO server
+# (realtime.py) for signalling.
 
 class VideoSessionInput(BaseModel):
     appointment_id: Optional[str] = None
     doctor_id: Optional[str] = None  # for instant consults w/o appt
     duration_minutes: int = 60
+    room_id: Optional[str] = None
 
 
-async def _daily_create_room(room_name: str, exp_ts: int) -> dict:
-    if not DAILY_API_KEY:
-        raise HTTPException(status_code=503, detail="Daily.co not configured (missing DAILY_API_KEY)")
+def _video_signal_token(user_id, role: Optional[str]) -> str:
+    """Short-lived JWT scoped to the video embed page (never the 30-day one)."""
     payload = {
-        "name": room_name,
-        "privacy": "private",
-        "properties": {
-            "exp": exp_ts,
-            "eject_at_room_exp": True,
-            "enable_prejoin_ui": True,
-            "enable_screenshare": True,
-            "enable_chat": True,
-            "start_video_off": False,
-            "start_audio_off": False,
-        },
+        "sub": str(user_id),
+        "role": role,
+        "scope": "video",
+        "exp": datetime.now(timezone.utc) + timedelta(hours=4),
     }
-    headers = {"Authorization": f"Bearer {DAILY_API_KEY}"}
-    async with httpx.AsyncClient(timeout=20) as client:
-        r = await client.post(f"{DAILY_BASE}/rooms", json=payload, headers=headers)
-    already_exists = (
-        r.status_code == 409
-        or (r.status_code == 400 and "already exists" in r.text.lower())
-    )
-    if already_exists:
-        # Room already exists – fetch it
-        async with httpx.AsyncClient(timeout=20) as client:
-            g = await client.get(f"{DAILY_BASE}/rooms/{room_name}", headers=headers)
-        if g.status_code >= 400:
-            raise HTTPException(status_code=502, detail=f"Daily fetch room failed: {g.text}")
-        return g.json()
-    if r.status_code >= 400:
-        raise HTTPException(status_code=502, detail=f"Daily create room failed: {r.text}")
-    return r.json()
-
-
-async def _daily_create_token(room_name: str, user_name: str, user_id: str, is_owner: bool, exp_ts: int) -> str:
-    if not DAILY_API_KEY:
-        raise HTTPException(status_code=503, detail="Daily.co not configured")
-    payload = {
-        "properties": {
-            "room_name": room_name,
-            "exp": exp_ts,
-            "user_name": user_name,
-            "user_id": user_id,
-            "is_owner": is_owner,
-        }
-    }
-    headers = {"Authorization": f"Bearer {DAILY_API_KEY}"}
-    async with httpx.AsyncClient(timeout=20) as client:
-        r = await client.post(f"{DAILY_BASE}/meeting-tokens", json=payload, headers=headers)
-    if r.status_code >= 400:
-        raise HTTPException(status_code=502, detail=f"Daily create token failed: {r.text}")
-    return r.json()["token"]
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
 @api_router.post("/video/session")
 async def create_video_session(body: VideoSessionInput, user: dict = Depends(current_user)):
-    """Create (or fetch) a Daily.co room + token for this user.
+    """Resolve the signalling room + a scoped token for a PeerJS call.
 
-    Works for both scheduled appointments (pass appointment_id) and instant consults
-    (pass doctor_id). Returns { room_url, token, room_name, is_owner, exp }.
+    Works for scheduled appointments (pass appointment_id) and instant consults
+    (pass doctor_id). Returns { room_name, token, embed_url, is_owner, exp }.
+    The actual media never touches this server - it is peer-to-peer WebRTC.
     """
     is_owner = user.get("role") == "doctor"
     now_ts = int(datetime.now(timezone.utc).timestamp())
     duration = max(15, min(body.duration_minutes, 180))
     exp_ts = now_ts + duration * 60
 
-    room_name = None
-    doctor = None
+    signal_room: Optional[str] = None
     appt = None
+    effective_doctor_id = body.doctor_id
 
     if body.appointment_id:
         appt = await db.appointments.find_one({"id": body.appointment_id}, {"_id": 0})
         if not appt:
             raise HTTPException(status_code=404, detail="Appointment not found")
-        # Authorization: only linked patient or doctor (doctor_id references doctors.id)
+        # Authorization: only the linked patient or doctor (doctor_id => doctors.id)
         if not await _is_appt_participant(user, appt):
             raise HTTPException(status_code=403, detail="Not part of this appointment")
-        room_name = appt.get("daily_room_name") or f"vaidhya-appt-{appt['id']}"[:60]
-        # Doctor owns the room (needs kick/mute powers)
+        # Prefer the auto-created consultation room so video + chat share authz.
+        room_row = await db.consultation_rooms.find_one(
+            {"appointment_id": body.appointment_id}, {"_id": 0, "room_id": 1}
+        )
+        signal_room = (room_row or {}).get("room_id") or f"appt-{appt['id']}"
+        effective_doctor_id = appt.get("doctor_id")
         _, doc_id = await _appt_actor_ids(user)
         is_owner = bool(doc_id and appt.get("doctor_id") == doc_id)
+    elif body.room_id:
+        # Opening an existing consultation room directly (from the chat screen).
+        room_row = await db.consultation_rooms.find_one(
+            {"room_id": body.room_id}, {"_id": 0}
+        )
+        if not room_row:
+            raise HTTPException(status_code=404, detail="Room not found")
+        _, doc_id = await _appt_actor_ids(user)
+        if room_row.get("patient_id") != user["id"] and (
+            not doc_id or room_row.get("doctor_id") != doc_id
+        ):
+            raise HTTPException(status_code=403, detail="Not part of this room")
+        signal_room = room_row["room_id"]
+        effective_doctor_id = room_row.get("doctor_id")
+        is_owner = bool(doc_id and room_row.get("doctor_id") == doc_id)
     elif body.doctor_id:
         doctor = await db.doctors.find_one({"id": body.doctor_id}, {"_id": 0})
         if not doctor:
             raise HTTPException(status_code=404, detail="Doctor not found")
-        # Instant consult room – ephemeral; tie to user+doctor+timestamp
-        room_name = f"vaidhya-instant-{user['id'][:8]}-{doctor['id'][:8]}-{now_ts}"[:60]
+        # Deterministic per patient+doctor so a re-open lands in the same room.
+        signal_room = f"instant-{user['id']}-{doctor['id']}"[:60]
     else:
-        raise HTTPException(status_code=400, detail="Provide appointment_id or doctor_id")
+        raise HTTPException(status_code=400, detail="Provide appointment_id, room_id or doctor_id")
 
-    # Create/fetch room
-    room = await _daily_create_room(room_name, exp_ts)
-
-    # Persist room fields on appointment for reuse
-    if appt is not None and not appt.get("daily_room_url"):
-        await db.appointments.update_one(
-            {"id": appt["id"]},
-            {"$set": {
-                "daily_room_name": room["name"],
-                "daily_room_url": room["url"],
-                "daily_room_exp": exp_ts,
-            }},
-        )
-
-    # Generate token for this participant
-    token = await _daily_create_token(
-        room_name=room["name"],
-        user_name=user.get("name") or "Guest",
-        user_id=user["id"],
-        is_owner=is_owner,
-        exp_ts=exp_ts,
-    )
+    token = _video_signal_token(user["id"], user.get("role"))
 
     await log_activity("video_session_started", actor=user, meta={
-        "room_name": room["name"], "is_owner": is_owner,
+        "room_name": signal_room, "is_owner": is_owner,
         "appointment_id": body.appointment_id, "doctor_id": body.doctor_id,
     })
 
-    # Extract domain subdomain from room URL (e.g. https://onlinevaidya.daily.co/room)
-    domain_sub = "onlinevaidya"
+    # Session bookkeeping (parity with the website's `video_sessions` table).
     try:
-        from urllib.parse import urlparse
-        host = urlparse(room["url"]).hostname or ""
-        if host.endswith(".daily.co"):
-            domain_sub = host.split(".")[0]
+        patient_id = appt.get("patient_id") if appt else user["id"]
+        if is_owner and appt is None:
+            patient_id = user["id"]
+        await db.video_sessions.insert_one({
+            "appointment_id": body.appointment_id,
+            "room_id": signal_room,
+            "doctor_id": effective_doctor_id,
+            "patient_id": patient_id,
+            "status": "active",
+            "started_at": now_iso(),
+            "created_at": now_iso(),
+        })
     except Exception:
-        pass
+        logger.warning("video_sessions insert failed (non-blocking)", exc_info=True)
 
     from urllib.parse import quote
     embed_url = (
-        f"/api/video/embed/{room['name']}"
+        f"/api/video/embed/{quote(signal_room)}"
         f"?token={quote(token)}"
+        f"&user_id={quote(str(user['id']))}"
         f"&user_name={quote(user.get('name') or 'Guest')}"
-        f"&domain={quote(domain_sub)}"
+        f"&role={quote(user.get('role') or 'patient')}"
     )
 
     return {
-        "room_url": room["url"],
-        "room_name": room["name"],
+        "room_url": signal_room,
+        "room_name": signal_room,
         "token": token,
         "embed_url": embed_url,
         "is_owner": is_owner,
@@ -2403,86 +2419,182 @@ def _js_str(val) -> str:
 
 
 @app.get("/api/video/embed/{room_name}", response_class=HTMLResponse)
-async def video_embed(room_name: str, token: str = "", user_name: str = "Guest", domain: str = "onlinevaidya"):
-    """HTML page that hosts the Daily Prebuilt iframe.
+async def video_embed(
+    room_name: str,
+    token: str = "",
+    user_id: str = "",
+    user_name: str = "Guest",
+    role: str = "patient",
+):
+    """PeerJS/WebRTC page rendered inside a React Native WebView.
 
-    Rendered inside a React Native WebView so we can use Daily's fully-featured
-    JS SDK without needing a native Expo build. Token is passed in the query
-    string; it is short-lived (~60min) and room-locked so exposure risk is low.
+    Same stack as the website: PeerJS negotiates the media peer-to-peer and our
+    own Socket.IO server (realtime.py) relays the peer ids. No third-party video
+    API. `token` is a short-lived JWT scoped to this embed.
     """
     # Basic validation
     safe_room = ''.join(c for c in room_name if c.isalnum() or c in '-_')[:80]
-    safe_domain = ''.join(c for c in domain if c.isalnum() or c in '-_')[:60] or "onlinevaidya"
     # Sanitize free-form user_name — strip anything not alnum/space/dot/hyphen
     safe_user_name = ''.join(c for c in (user_name or "Guest") if c.isalnum() or c in " .-_'")[:60] or "Guest"
-    # Token is opaque; only permit URL-safe base64 chars used by Daily
-    safe_token = ''.join(c for c in token if c.isalnum() or c in "._-")[:2048]
+    safe_user_id = ''.join(c for c in str(user_id) if c.isalnum() or c in '-_')[:64]
+    safe_role = role if role in ("doctor", "patient") else "patient"
+    # JWT is header.payload.signature — keep only URL-safe chars.
+    safe_token = ''.join(c for c in token if c.isalnum() or c in "._-")[:4096]
     if not safe_room:
         raise HTTPException(status_code=400, detail="Invalid room name")
-    room_url_js = _js_str(f"https://{safe_domain}.daily.co/{safe_room}")
-    token_js = _js_str(safe_token)
-    user_name_js = _js_str(safe_user_name)
 
-    html = f"""<!doctype html>
+    config_js = _js_str({
+        "room": safe_room,
+        "token": safe_token,
+        "userId": safe_user_id,
+        "userName": safe_user_name,
+        "role": safe_role,
+    })
+
+    html = """<!doctype html>
 <html>
 <head>
   <meta name='viewport' content='width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no'/>
   <meta charset='utf-8'/>
   <title>Online VaidyaJi Consultation</title>
   <style>
-    html, body {{ margin:0; padding:0; height:100%; width:100%; background:#0F4C36; overflow:hidden; font-family: -apple-system, Roboto, sans-serif; }}
-    #call {{ position: absolute; inset: 0; }}
-    #err {{ color:#fff; padding:20px; text-align:center; font-size:14px; }}
-    .loader {{ color:#fff; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); text-align:center; }}
-    .spinner {{ width:36px; height:36px; border:3px solid rgba(255,255,255,0.25); border-top-color:#F4B942; border-radius:50%; margin:0 auto 12px; animation: spin 1s linear infinite; }}
-    @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+    html, body { margin:0; padding:0; height:100%; width:100%; background:#0F4C36; overflow:hidden; font-family:-apple-system,Roboto,sans-serif; }
+    #remote { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; background:#0F4C36; }
+    #local { position:absolute; right:12px; bottom:96px; width:96px; height:128px; object-fit:cover; border-radius:14px; border:2px solid rgba(255,255,255,0.25); background:#123B2A; z-index:2; }
+    #waiting { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#F4E4C1; text-align:center; padding:24px; font-size:15px; }
+    #bar { position:absolute; left:0; right:0; bottom:0; height:76px; display:flex; align-items:center; justify-content:center; gap:14px; background:linear-gradient(to top, rgba(0,0,0,0.6), rgba(0,0,0,0)); }
+    .btn { width:52px; height:52px; border-radius:26px; border:1px solid rgba(255,255,255,0.15); background:rgba(255,255,255,0.14); color:#fff; font-size:20px; }
+    .btn.off { background:#C0392B; border-color:#C0392B; }
+    .btn.end { width:60px; height:60px; background:#E74C3C; border-color:#E74C3C; border-radius:30px; font-size:24px; }
+    #status { position:absolute; top:12px; left:12px; color:#fff; background:rgba(0,0,0,0.45); padding:6px 12px; border-radius:20px; font-size:12px; }
   </style>
 </head>
 <body>
-  <div class='loader' id='loader'><div class='spinner'></div>Connecting to your Vaidya…</div>
-  <div id='call'></div>
-  <script src='https://unpkg.com/@daily-co/daily-js'></script>
+  <video id='remote' autoplay playsinline></video>
+  <video id='local' autoplay playsinline muted></video>
+  <div id='waiting'>Waiting for the other person to join...</div>
+  <div id='status'></div>
+  <div id='bar'>
+    <button class='btn' id='mic' title='Mute'>🎤</button>
+    <button class='btn' id='cam' title='Camera'>🎥</button>
+    <button class='btn end' id='end' title='End call'>📞</button>
+  </div>
+  <script src='https://cdn.socket.io/4.8.3/socket.io.min.js'></script>
+  <script src='https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js'></script>
   <script>
-    (function(){{
-      var roomUrl = {room_url_js};
-      var token = {token_js};
-      var userName = {user_name_js};
-      try {{
-        var call = window.DailyIframe.createFrame(document.getElementById('call'), {{
-          iframeStyle: {{ position:'absolute', width:'100%', height:'100%', border:'0', top:'0', left:'0' }},
-          showLeaveButton: true,
-          showFullscreenButton: false,
-          theme: {{
-            colors: {{
-              accent: '#F4B942',
-              accentText: '#0F4C36',
-              background: '#0F4C36',
-              backgroundAccent: '#123B2A',
-              baseText: '#F7F5F0',
-              border: '#1B5C43',
-              mainAreaBg: '#0F4C36',
-              mainAreaBgAccent: '#123B2A',
-              mainAreaText: '#F7F5F0',
-              supportiveText: '#F4E4C1'
-            }}
-          }}
-        }});
-        call.on('joined-meeting', function(){{ document.getElementById('loader').style.display='none'; }});
-        call.on('error', function(e){{ document.getElementById('loader').innerHTML = 'Connection error: ' + (e && e.errorMsg ? e.errorMsg : 'unknown'); }});
-        call.on('left-meeting', function(){{
-          try {{ if (window.ReactNativeWebView) {{ window.ReactNativeWebView.postMessage(JSON.stringify({{type:'left'}})); }} }} catch(_) {{}}
-          try {{ if (window.parent && window.parent !== window) {{ window.parent.postMessage(JSON.stringify({{type:'left'}}), '*'); }} }} catch(_) {{}}
-        }});
-        var joinOpts = {{ url: roomUrl, userName: userName }};
-        if (token) joinOpts.token = token;
-        call.join(joinOpts);
-      }} catch (e) {{
-        document.getElementById('loader').innerHTML = 'Failed to load video: ' + e.message;
-      }}
-    }})();
+    (function () {
+      var CFG = __CONFIG__;
+      var room = CFG.room, token = CFG.token, userId = CFG.userId;
+      var localStream = null, peer = null, call = null, peerId = '', remoteId = '';
+      var micOn = true, camOn = true;
+
+      function post(m) {
+        try { if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify(m)); } catch (e) {}
+        try { if (window.parent && window.parent !== window) window.parent.postMessage(JSON.stringify(m), '*'); } catch (e) {}
+      }
+      function setStatus(t) { document.getElementById('status').textContent = t || ''; }
+      function showWaiting(on) { document.getElementById('waiting').style.display = on ? 'flex' : 'none'; }
+
+      var socket = io(window.location.origin, { auth: { token: token }, transports: ['websocket', 'polling'] });
+      socket.on('connect', function () { setStatus('Connecting...'); });
+      socket.on('connect_error', function (e) { setStatus('Signalling error: ' + (e && e.message ? e.message : 'unknown')); });
+
+      socket.on('video:signal', function (data) {
+        if (!data || data.userId === userId || !peerId) return;
+        if (data.signal && data.signal.type === 'peerId') {
+          remoteId = data.signal.peerId;
+          if (peerId > remoteId) startCall(remoteId);
+        }
+      });
+      socket.on('video:user-joined', function (data) {
+        if (data && data.userId !== userId && peerId) {
+          setTimeout(function () {
+            socket.emit('video:signal', { roomId: room, signal: { type: 'peerId', peerId: peerId } });
+          }, 1000);
+        }
+      });
+      socket.on('video:user-left', function () { endRemote('The other person left the call'); });
+
+      function attachRemote(stream) {
+        document.getElementById('remote').srcObject = stream;
+        showWaiting(false);
+        setStatus('Connected');
+        post({ type: 'joined' });
+      }
+      function endRemote(msg) {
+        var r = document.getElementById('remote');
+        if (r) r.srcObject = null;
+        showWaiting(true);
+        if (msg) setStatus(msg);
+        post({ type: 'peer-left' });
+      }
+      function startCall(id) {
+        if (!peer || !localStream || call) return;
+        call = peer.call(id, localStream);
+        if (!call) return;
+        call.on('stream', function (s) { attachRemote(s); });
+        call.on('close', function () { endRemote(); });
+      }
+
+      navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(function (stream) {
+        localStream = stream;
+        document.getElementById('local').srcObject = stream;
+        peer = new Peer('ovj_' + userId + '_' + Date.now(), {
+          host: '0.peerjs.com', port: 443, secure: true,
+          config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
+        });
+        peer.on('open', function (id) {
+          peerId = id;
+          socket.emit('video:join', { roomId: room });
+          socket.emit('video:signal', { roomId: room, signal: { type: 'peerId', peerId: id } });
+          setStatus('Waiting...');
+          post({ type: 'ready' });
+        });
+        peer.on('call', function (incoming) {
+          call = incoming;
+          incoming.answer(localStream);
+          incoming.on('stream', function (s) { attachRemote(s); });
+          incoming.on('close', function () { endRemote(); });
+        });
+        peer.on('error', function (err) { setStatus('Connection error: ' + (err && err.type ? err.type : 'unknown')); });
+      }).catch(function (e) {
+        setStatus('Could not access camera/microphone: ' + e.message);
+        post({ type: 'error', message: String(e && e.message || e) });
+      });
+
+      function cleanup() {
+        try { socket.emit('video:leave', { roomId: room }); } catch (e) {}
+        try { if (localStream) localStream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {}
+        try { if (call) call.close(); } catch (e) {}
+        try { if (peer) peer.destroy(); } catch (e) {}
+        try { socket.disconnect(); } catch (e) {}
+      }
+      document.getElementById('mic').onclick = function () {
+        if (!localStream) return;
+        micOn = !micOn;
+        localStream.getAudioTracks().forEach(function (t) { t.enabled = micOn; });
+        this.classList.toggle('off', !micOn);
+        socket.emit('video:state-change', { roomId: room, state: { mic: micOn } });
+      };
+      document.getElementById('cam').onclick = function () {
+        if (!localStream) return;
+        camOn = !camOn;
+        localStream.getVideoTracks().forEach(function (t) { t.enabled = camOn; });
+        this.classList.toggle('off', !camOn);
+        socket.emit('video:state-change', { roomId: room, state: { cam: camOn } });
+      };
+      document.getElementById('end').onclick = function () {
+        cleanup();
+        post({ type: 'left' });
+        showWaiting(true);
+        setStatus('Call ended');
+      };
+      window.addEventListener('beforeunload', cleanup);
+    })();
   </script>
 </body>
 </html>"""
+    html = html.replace("__CONFIG__", config_js)
     return HTMLResponse(html)
 
 
@@ -2586,74 +2698,70 @@ async def _resolve_server_price(purpose: str, reference_id: Optional[str], user:
 
 @api_router.post("/payments/create-order")
 async def create_payment_order(body: PaymentOrderInput, user: dict = Depends(current_user)):
-    """Create a Razorpay order. Price is ALWAYS resolved server-side."""
+    """Create a Razorpay order and record the pending payment locally."""
     if _rzp_client is None:
         raise HTTPException(status_code=503, detail="Razorpay not configured on server")
     if body.currency.upper() != "INR":
         raise HTTPException(status_code=400, detail="Only INR currency supported")
 
-    resolved = await _resolve_server_price(body.purpose, body.reference_id, user)
-    if resolved == -1:
-        # Custom purpose — accept client amount but hard-cap
-        amount_paise = int(body.amount)
-        if amount_paise < 100 or amount_paise > 5000000:  # min ₹1, max ₹50,000
-            raise HTTPException(status_code=400, detail="Amount out of allowed range")
-    else:
-        amount_paise = resolved
-        # Reject if client tried to send a different amount (log for audit)
-        if body.amount and int(body.amount) != amount_paise:
-            logger.warning(
-                "payment amount mismatch: client=%s server=%s user=%s purpose=%s ref=%s",
-                body.amount, amount_paise, user["id"], body.purpose, body.reference_id,
-            )
+    # Server-side price resolution: the client never sets what is charged.
+    # (-1 means purpose == "custom": use body.amount under a hard cap.)
+    amount = await _resolve_server_price(body.purpose, body.reference_id, user)
+    if amount == -1:
+        amount = int(body.amount or 0)
+        if amount < 100:
+            raise HTTPException(status_code=400, detail="Amount must be at least ₹1")
+        if amount > 5000000:  # hard cap: ₹50,000 for one-off custom payments
+            raise HTTPException(status_code=400, detail="Amount exceeds the maximum allowed")
 
-    # Receipt must be <= 40 chars
-    receipt = f"vaidhya_{body.purpose[:8]}_{uuid.uuid4().hex[:8]}"[:40]
-
+    receipt = f"vaidhya_{body.purpose[:8]}_{uuid.uuid4().hex[:12]}"
     try:
-        rzp_order = _rzp_client.order.create({
-            "amount": amount_paise,
-            "currency": "INR",
-            "receipt": receipt,
-            "payment_capture": 1,
-            "notes": {
-                "user_id": user["id"],
-                "user_name": user.get("name", ""),
-                "purpose": body.purpose,
-                "reference_id": body.reference_id or "",
-            },
-        })
+        rzp_order = _rzp_client.order.create(
+            {
+                "amount": amount,
+                "currency": "INR",
+                "receipt": receipt,
+                "notes": {
+                    "purpose": body.purpose,
+                    "reference_id": body.reference_id or "",
+                    "user_id": str(user["id"]),
+                },
+            }
+        )
+        order_id = rzp_order["id"]
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Razorpay order failed: {e}")
+        logger.error(f"razorpay order create failed: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail="Could not create payment order. Please try again.",
+        )
 
-    # Persist a local payment record
-    payment_doc = {
-        "id": str(uuid.uuid4()),
-        "user_id": user["id"],
-        "razorpay_order_id": rzp_order["id"],
+    # Local record that /payments/verify looks up (by razorpay_order_id)
+    # before it will accept a signature. Amount is in paise.
+    await db.payments.insert_one({
+        "razorpay_order_id": order_id,
         "razorpay_payment_id": None,
-        "amount": amount_paise,
+        "amount": amount,
         "currency": "INR",
         "purpose": body.purpose,
         "reference_id": body.reference_id,
         "description": body.description,
+        "user_id": user["id"],
         "status": "created",
-        "created_at": now_iso(),
-        "verified_at": None,
-    }
-    await db.payments.insert_one(payment_doc)
+        "appointment_id": _to_int(body.reference_id) if body.purpose == "appointment" else 0,
+    })
 
     await log_activity("payment_order_created", actor=user, meta={
-        "razorpay_order_id": rzp_order["id"], "amount": amount_paise,
+        "razorpay_order_id": order_id, "amount": amount,
         "purpose": body.purpose, "reference_id": body.reference_id,
     })
 
     return {
-        "order_id": rzp_order["id"],
-        "amount": rzp_order["amount"],
-        "currency": rzp_order["currency"],
+        "order_id": order_id,
+        "amount": amount,
+        "currency": "INR",
+        "key_id": RAZORPAY_KEY_ID,
         "receipt": receipt,
-        "key_id": RAZORPAY_KEY_ID,  # safe to expose
         "purpose": body.purpose,
         "reference_id": body.reference_id,
     }
@@ -2713,6 +2821,30 @@ async def verify_payment(body: PaymentVerifyInput, user: dict = Depends(current_
             {"id": ref_id, "patient_id": user["id"]},
             {"$set": {"paid": True, "paid_at": now_iso(), "razorpay_payment_id": body.razorpay_payment_id}},
         )
+        # Tell BOTH sides the booking is confirmed. `wa_booking_paid` loops
+        # over (patient_phone, doctor_phone) itself, so one call covers both.
+        # Non-blocking: a WhatsApp outage must never turn a successful payment
+        # into an HTTP 500 the moment after the money moved.
+        try:
+            appt = await db.appointments.find_one({"id": ref_id}, {"_id": 0})
+            when = (_appt_when(appt) if appt else None) or ref_id
+            doctor_phone = None
+            if appt and appt.get("doctor_id") is not None:
+                did = _to_int(appt.get("doctor_id"))
+                if did is not None:
+                    drows = await _sql_query(
+                        "SELECT u.phone FROM `doctors` d JOIN `users` u ON d.user_id = u.id "
+                        "WHERE d.id = %s",
+                        [did],
+                    )
+                    if drows:
+                        doctor_phone = drows[0].get("phone")
+            # payments.amount is in PAISE (server.py:2505); the helper renders
+            # rupees, so divide before passing it.
+            amount_rs = float(payment.get("amount") or 0) / 100.0
+            wa_booking_paid(user.get("phone"), doctor_phone, when, amount_rs)
+        except Exception as e:
+            logger.warning(f"booking whatsapp notification failed (non-blocking): {e}")
     elif purpose == "medicine_order" and ref_id:
         await db.medicine_orders.update_one(
             {"id": ref_id, "user_id": user["id"]},
@@ -3942,7 +4074,7 @@ async def admin_decide_verification(
 
     rows = await _sql_query(
         "SELECT d.id, d.user_id, d.is_approved, d.restriction_reason, "
-        "       u.name, u.email "
+        "       u.name, u.email, u.phone "
         "FROM `doctors` d JOIN `users` u ON d.user_id = u.id WHERE d.id = %s",
         [did],
     )
@@ -4045,6 +4177,15 @@ async def admin_decide_verification(
             )
         except Exception as e:
             logger.warning(f"doctor decision email failed (non-blocking): {e}")
+
+        # Fourth channel: WhatsApp. The helper is a no-op on rejection, so
+        # only an actual approval reaches the doctor - matching the
+        # IMPORTANT_WHATSAPP_EVENTS allowlist. Fire-and-forget like the three
+        # channels above: WhatsApp being down must never fail the admin action.
+        try:
+            wa_doctor_verified(doctor.get("phone"), body.status == "approved")
+        except Exception as e:
+            logger.warning(f"doctor decision whatsapp failed (non-blocking): {e}")
 
     return {
         "ok": True,
@@ -10537,6 +10678,12 @@ async def root():
 
 
 app.include_router(api_router)
+
+# Socket.IO realtime layer (chat + WebRTC signalling). Mounted under
+# `/socket.io` so `server:app` stays the uvicorn entrypoint.
+import realtime as _realtime
+
+_realtime.attach(app)
 
 cors_origins = os.environ.get("CORS_ORIGINS", "*")
 allow_origins_list = [o.strip() for o in cors_origins.split(",")] if cors_origins != "*" else ["*"]

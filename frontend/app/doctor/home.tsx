@@ -377,6 +377,19 @@ export default function DoctorHome() {
                     <Text style={styles.joinText}>Join</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
+                    style={styles.chatBtn}
+                    onPress={() =>
+                      router.push({
+                        pathname: "/consultation/chat",
+                        params: { appt_id: a.id, partner_name: a.patient_name || "Patient" },
+                      })
+                    }
+                    testID={`dh-chat-${a.id}`}
+                  >
+                    <Feather name="message-circle" size={12} color={COLORS.surface} />
+                    <Text style={styles.joinText}>Chat</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
                     style={[styles.rxBtn, a.has_prescription && { backgroundColor: COLORS.success }]}
                     onPress={() =>
                       router.push({ pathname: "/doctor/prescription/[apptId]", params: { apptId: a.id } })
@@ -519,6 +532,7 @@ const styles = StyleSheet.create({
   tag: { backgroundColor: COLORS.success, paddingHorizontal: 6, paddingVertical: 2, borderRadius: RADIUS.pill },
   tagText: { color: COLORS.surface, fontSize: 9, fontWeight: "700", letterSpacing: 1 },
   joinBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4, backgroundColor: COLORS.brand, paddingHorizontal: 10, paddingVertical: 6, borderRadius: RADIUS.pill },
+  chatBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4, backgroundColor: COLORS.brandDark, paddingHorizontal: 10, paddingVertical: 6, borderRadius: RADIUS.pill },
   rxBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4, backgroundColor: COLORS.accent, paddingHorizontal: 10, paddingVertical: 6, borderRadius: RADIUS.pill },
   joinText: { color: COLORS.surface, fontWeight: "700", fontSize: 11 },
   patCard: { flexDirection: "row", alignItems: "center", gap: SPACING.md, marginHorizontal: SPACING.lg, padding: SPACING.md, backgroundColor: COLORS.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, marginBottom: 8 },

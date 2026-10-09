@@ -221,6 +221,21 @@ export default function Appointments() {
         ) : null}
 
         <View style={styles.actionRow}>
+          {status !== "cancelled" ? (
+            <TouchableOpacity
+              style={styles.chatBtn}
+              onPress={() =>
+                router.push({
+                  pathname: "/consultation/chat",
+                  params: { appt_id: a.id, partner_name: a.doctor_name || "VaidyaJi" },
+                })
+              }
+              testID={`appt-chat-${a.id}`}
+            >
+              <Feather name="message-circle" size={14} color={COLORS.surface} />
+              <Text style={styles.joinText}>Chat</Text>
+            </TouchableOpacity>
+          ) : null}
           {canJoin ? (
             <TouchableOpacity
               style={styles.joinBtn}
@@ -505,6 +520,16 @@ const styles = StyleSheet.create({
     fontStyle: "italic",
   },
   actionRow: { flexDirection: "row", gap: 8, marginTop: SPACING.md, flexWrap: "wrap" },
+  chatBtn: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: COLORS.brandDark,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: RADIUS.pill,
+  },
   joinBtn: {
     flexDirection: "row",
     justifyContent: "center",
