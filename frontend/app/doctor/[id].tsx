@@ -308,7 +308,7 @@ export default function DoctorDetail() {
 
           <Text style={styles.sectionTitle}>Consultation</Text>
           <View style={styles.card}>
-            <DetailRow icon="rupee" label="Fee" value={fee ?? "Not specified"} last />
+            <DetailRow symbol="₹" label="Fee" value={fee ?? "Not specified"} last />
           </View>
 
           {modes.length ? (
@@ -523,12 +523,16 @@ export default function DoctorDetail() {
 }
 
 function DetailRow({
-  icon, label, value, last,
-}: { icon: string; label: string; value?: string | null; last?: boolean }) {
+  icon, symbol, label, value, last,
+}: { icon?: string; symbol?: string; label: string; value?: string | null; last?: boolean }) {
   return (
     <View style={[styles.detailRow, last && { borderBottomWidth: 0 }]}>
       <View style={styles.detailLabelWrap}>
-        <Feather name={icon as any} size={15} color={COLORS.brand} />
+        {symbol ? (
+          <Text style={styles.detailSymbol}>{symbol}</Text>
+        ) : (
+          <Feather name={(icon || "info") as any} size={15} color={COLORS.brand} />
+        )}
         <Text style={styles.detailLabel}>{label}</Text>
       </View>
       <Text style={[styles.detailValue, !value && { color: COLORS.textMuted, fontStyle: "italic" }]}>
@@ -565,6 +569,7 @@ const styles = StyleSheet.create({
 
   card: { backgroundColor: COLORS.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, overflow: "hidden" },
   detailRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: SPACING.md, borderBottomWidth: 1, borderBottomColor: COLORS.border, gap: SPACING.md },
+  detailSymbol: { fontSize: 15, fontWeight: "700", color: COLORS.brand, width: 15, textAlign: "center" },
   detailLabelWrap: { flexDirection: "row", alignItems: "center", gap: 8 },
   detailLabel: { color: COLORS.textSecondary, fontSize: 13, fontWeight: "600" },
   detailValue: { color: COLORS.textPrimary, fontSize: 13, fontWeight: "700", flexShrink: 1, textAlign: "right" },
