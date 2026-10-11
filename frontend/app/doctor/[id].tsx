@@ -213,7 +213,11 @@ export default function DoctorDetail() {
           {doc.avatar_url || doc.image ? (
             <Image source={{ uri: doc.avatar_url || doc.image }} style={StyleSheet.absoluteFill} />
           ) : (
-            <View style={[StyleSheet.absoluteFill, styles.heroFallback]} />
+            <View style={[StyleSheet.absoluteFill, styles.heroFallback]}>
+              <Text style={styles.heroInitials}>
+                {(doc.name || "V").split(" ").map((w) => w[0]).filter(Boolean).slice(0, 2).join("").toUpperCase()}
+              </Text>
+            </View>
           )}
           <View style={styles.heroOverlay} />
           <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} testID="doctor-back">
@@ -542,7 +546,8 @@ const styles = StyleSheet.create({
   ghostBtnText: { color: COLORS.textPrimary, fontWeight: "700" },
 
   hero: { height: 320, overflow: "hidden", backgroundColor: COLORS.brandDark },
-  heroFallback: { backgroundColor: COLORS.brandDark },
+  heroFallback: { backgroundColor: COLORS.brandDark, alignItems: "center", justifyContent: "center" },
+  heroInitials: { fontFamily: FONTS.heading, fontSize: 56, color: COLORS.surface, letterSpacing: 2 },
   heroOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(15,76,54,0.58)" },
   backBtn: { position: "absolute", top: SPACING.md, left: SPACING.md, width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(0,0,0,0.35)", alignItems: "center", justifyContent: "center", zIndex: 2 },
   heroContent: { position: "absolute", bottom: SPACING.lg, left: SPACING.lg, right: SPACING.lg },

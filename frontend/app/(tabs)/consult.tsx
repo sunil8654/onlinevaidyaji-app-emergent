@@ -330,7 +330,15 @@ function ConsultDirectory() {
             activeOpacity={0.9}
             testID={`doctor-card-${item.id}`}
           >
-            <Image source={{ uri: item.avatar_url }} style={styles.avatar} />
+            {item.avatar_url ? (
+              <Image source={{ uri: item.avatar_url }} style={styles.avatar} />
+            ) : (
+              <View style={[styles.avatar, styles.avatarFallback]}>
+                <Text style={styles.avatarInitials}>
+                  {(item.name || "V").split(" ").map((w) => w[0]).filter(Boolean).slice(0, 2).join("").toUpperCase()}
+                </Text>
+              </View>
+            )}
             {/* Live-availability green dot in the top-right of the avatar */}
             {item.is_online ? (
               <View style={styles.dotWrap} pointerEvents="none">
@@ -406,6 +414,8 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.lg, padding: SPACING.md,
   },
   avatar: { width: 68, height: 68, borderRadius: 34, backgroundColor: COLORS.surfaceAlt },
+  avatarFallback: { alignItems: "center", justifyContent: "center", backgroundColor: COLORS.brandDark },
+  avatarInitials: { fontFamily: FONTS.heading, fontSize: 24, color: COLORS.surface, letterSpacing: 1 },
   dotWrap: { position: "absolute", left: 62, top: 12 },
   docName: { fontFamily: FONTS.heading, fontSize: 20, color: COLORS.textPrimary, lineHeight: 22 },
   docQual: { color: COLORS.textSecondary, fontSize: 12, marginTop: 2 },
