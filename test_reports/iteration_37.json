@@ -1,0 +1,57 @@
+{
+  "summary": "Tested the DoctorAvatar onError-fallback fix (frontend-only, Expo web preview, mobile 375x667). FOUND & FIXED A BLOCKER INTRODUCED BY THE FIX: doctor/[id].tsx declared `const [heroFailed, setHeroFailed] = useState(false)` AFTER the early returns (loadErr / !doc), so every doctor detail screen crashed with 'Rendered more hooks than during the previous render' and showed the ErrorBoundary ('This screen could not open'). I moved the hook to the top of the component (line 70) — lint clean, all detail screens render again. AFTER THE HOOK FIX, all verifiable criteria PASS: (1) Consult list — doctor-card-11 (Dr AP Singh, Hostinger 403 photo) now shows the MALE placeholder (src=doctor-placeholder-male.png, naturalWidth=512, md5-consistent with bundled asset), zero blank/broken images across all visible cards, no-photo doctors still get gender-correct placeholders. (2) /doctor/11 hero shows the male placeholder medallion over dark green — no blank hero (screenshot 01). (3) /doctor/12 hero still shows the female placeholder medallion (screenshot 02). (4) Zero console errors on every screen tested. CAVEAT on criterion 4 (positive control): /doctor/21 (Dr. Hira Agarwal, lh3.googleusercontent.com photo) shows the male placeholder, NOT the real Google photo — BUT a raw `new Image()` load of that exact URL in the same browser fails 3/3 times (and fetch no-cors returns opaque), while curl from the container gets HTTP 200 image/jpeg. So the Google photo is unreachable at network level in THIS automation browser/environment; the app's onError fallback is engaging correctly, which is the designed behavior. The positive control (real photo renders) could NOT be proven in this environment — in iteration_36 Google avatars loaded fine, so this may be a new/transient preview-environment egress condition.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "doctor/[id].tsx (DoctorDetail)",
+        "issue": "FIXED BY TESTER — Rules-of-Hooks violation: `useState` for heroFailed was placed after the early returns (old line 206), crashing EVERY doctor detail screen with 'Rendered more hooks than during the previous render' → ErrorBoundary screen. Hook moved to top of component (line 70).",
+        "testID": "doctor-name",
+        "priority": "CRITICAL"
+      },
+      {
+        "component": "DoctorAvatar / hero fallback (positive control only)",
+        "issue": "ENVIRONMENT CAVEAT — Google-hosted photos (lh3.googleusercontent.com, e.g. doctor id 21) fail to load at network level in the automation browser (raw Image() onerror 3/3, requestfailed), so the placeholder fallback shows instead of the real photo. curl from container: HTTP 200 image/jpeg. NOT an app-code bug, but means the 'real photo unaffected' criterion is unverifiable here; recommend a quick manual check in a normal browser.",
+        "testID": "doctor-card-21",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration_37.json",
+    "/app/test_reports/screenshots_iter37/01_doctor11_male_fallback.png",
+    "/app/test_reports/screenshots_iter37/02_doctor12_female.png",
+    "/app/test_reports/screenshots_iter37/03_doctor21_google.png",
+    "/app/test_reports/screenshots_iter37/04_consult_list.png",
+    "/app/test_reports/screenshots_iter37/05_doctor21_recheck.png"
+  ],
+  "action_items": [
+    "DONE (by tester): moved heroFailed useState above early returns in doctor/[id].tsx — main agent should just keep this change; consider adding an eslint react-hooks/rules-of-hooks enforcement pass since the crash reached a committed fix.",
+    "Verify in a real desktop/mobile browser that a Google-avatar doctor (id 21, 27, 30, 35) still shows their real photo — impossible to verify from this preview environment (googleusercontent blocked at network level for the browser; curl 200).",
+    "UNCHANGED user action item from iteration_36: exclude /uploads/* from Hostinger hcdn bot-protection so real Hostinger-hosted photos load; the onError placeholder fallback is only a client-side mitigation."
+  ],
+  "critical_code_review_comments": [
+    "doctor/[id].tsx — hooks-after-early-return was the root cause of the total detail-screen crash; any hook added inside the render body of this component MUST stay above the loadErr/!doc returns. File also has mixed CRLF/LF line endings (pre-existing; harmless to Metro).",
+    "DoctorAvatar.tsx — logic is correct: !uri || failed → gender placeholder; useEffect resets `failed` when uri changes (retry on doctor change). Clean, reusable, no issues.",
+    "Detail hero uses its own inline fallback (heroFailed + gender require()) rather than the shared DoctorAvatar — acceptable duplication since hero styling (absoluteFill vs medallion) differs, but a future consolidation could use DoctorAvatar with a variant prop.",
+    "Mixed note: doctor 21's API record says gender 'male' for 'Dr. Hira Agarwal' — seed-data quality issue, not app code."
+  ],
+  "updated_files": [
+    "/app/frontend/app/doctor/[id].tsx (moved heroFailed useState above early returns — rules-of-hooks fix)"
+  ],
+  "success_rate": {
+    "backend": "N/A (frontend-only; /api/doctors/21 spot-checked 200 with correct avatar_url)",
+    "frontend": "100% of verifiable criteria pass after hooks fix (list fallback, detail hero fallback male+female, no blank images, zero console errors). Positive control (Google photo renders) unverifiable in this environment — network-level block, app fallback behaves correctly."
+  },
+  "seed_data_creation": "None — used existing 56 seeded doctors",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "DoctorAvatar fallback fix is VERIFIED WORKING after I fixed a rules-of-hooks crash it shipped with (heroFailed useState was below the early returns in doctor/[id].tsx — now at line 70; do not regress this). If detail screens ever show 'This screen could not open / Rendered more hooks', check hook placement first. Google-avatar doctors (ids 21,27,30,35) currently fall back to placeholders in this preview environment because the browser cannot reach lh3.googleusercontent.com (raw Image() fails 3/3; curl 200) — before reporting that as a bug, run a raw new Image() load test in-page to distinguish environment block from app regression. Hostinger /uploads/* 403 bot-challenge remains a Hostinger-side user action item.",
+  "rca_of_issue": "Crash RCA: the follow-up fix added `const [heroFailed, setHeroFailed] = useState(false)` inside DoctorDetail AFTER the conditional early returns (loadErr → return, !doc → return). First render (doc=null) calls 16 hooks and returns early; once api.getDoctor resolves, the next render reaches line 206 and calls a 17th hook → React 'Rendered more hooks than during the previous render' → ErrorBoundary. Repro: open any /doctor/:id. Fix: hoist the useState to the top of the component (line 70). Verified: all detail screens render, hero fallback works (male for id 11 whose Hostinger photo 403s, female for id 12 without photo), zero console errors."
+}

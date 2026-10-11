@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Image, ScrollView, RefreshControl, ActivityIndicator, TextInput } from "react-native";
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, RefreshControl, ActivityIndicator, TextInput } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { COLORS, FONTS, RADIUS, SPACING, SPECIALTIES } from "@/src/theme";
@@ -8,6 +8,7 @@ import Feather from "@react-native-vector-icons/feather";
 import { useAuth } from "@/src/auth";
 import DoctorPatients from "@/app/doctor/patients-list";
 import { AvailabilityDot } from "@/src/components/AvailabilityDot";
+import { DoctorAvatar } from "@/src/components/DoctorAvatar";
 import DoctorRating, { realRating } from "@/src/components/DoctorRating";
 import { formatINR } from "@/src/utils/currency";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -330,15 +331,7 @@ function ConsultDirectory() {
             activeOpacity={0.9}
             testID={`doctor-card-${item.id}`}
           >
-            {item.avatar_url ? (
-              <Image source={{ uri: item.avatar_url }} style={styles.avatar} />
-            ) : (
-              <View style={[styles.avatar, styles.avatarFallback]}>
-                <Text style={styles.avatarInitials}>
-                  {(item.name || "V").split(" ").map((w) => w[0]).filter(Boolean).slice(0, 2).join("").toUpperCase()}
-                </Text>
-              </View>
-            )}
+            <DoctorAvatar uri={item.avatar_url} gender={item.gender} style={styles.avatar} />
             {/* Live-availability green dot in the top-right of the avatar */}
             {item.is_online ? (
               <View style={styles.dotWrap} pointerEvents="none">
@@ -414,8 +407,6 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.lg, padding: SPACING.md,
   },
   avatar: { width: 68, height: 68, borderRadius: 34, backgroundColor: COLORS.surfaceAlt },
-  avatarFallback: { alignItems: "center", justifyContent: "center", backgroundColor: COLORS.brandDark },
-  avatarInitials: { fontFamily: FONTS.heading, fontSize: 24, color: COLORS.surface, letterSpacing: 1 },
   dotWrap: { position: "absolute", left: 62, top: 12 },
   docName: { fontFamily: FONTS.heading, fontSize: 20, color: COLORS.textPrimary, lineHeight: 22 },
   docQual: { color: COLORS.textSecondary, fontSize: 12, marginTop: 2 },

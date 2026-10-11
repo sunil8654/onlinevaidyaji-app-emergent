@@ -66,6 +66,8 @@ export default function DoctorDetail() {
 
   const [doc, setDoc] = useState<Doctor | null>(null);
   const [loadErr, setLoadErr] = useState("");
+  // Hero photo load failure → fall back to the gender placeholder medallion.
+  const [heroFailed, setHeroFailed] = useState(false);
 
   const [days] = useState<DayOption[]>(() => upcomingDays(DAY_WINDOW));
   const [date, setDate] = useState<string>(days[0]?.key ?? "");
@@ -210,13 +212,22 @@ export default function DoctorDetail() {
       <ScrollView contentContainerStyle={{ paddingBottom: 150 }} keyboardShouldPersistTaps="handled">
         {/* ---------------- hero ---------------- */}
         <View style={styles.hero}>
-          {doc.avatar_url || doc.image ? (
-            <Image source={{ uri: doc.avatar_url || doc.image }} style={StyleSheet.absoluteFill} />
+          {(doc.avatar_url || doc.image) && !heroFailed ? (
+            <Image
+              source={{ uri: doc.avatar_url || doc.image }}
+              style={StyleSheet.absoluteFill}
+              onError={() => setHeroFailed(true)}
+            />
           ) : (
             <View style={[StyleSheet.absoluteFill, styles.heroFallback]}>
-              <Text style={styles.heroInitials}>
-                {(doc.name || "V").split(" ").map((w) => w[0]).filter(Boolean).slice(0, 2).join("").toUpperCase()}
-              </Text>
+              <Image
+                source={
+                  doc.gender === "female"
+                    ? require("@/assets/images/doctor-placeholder-female.png")
+                    : require("@/assets/images/doctor-placeholder-male.png")
+                }
+                style={styles.heroPlaceholder}
+              />
             </View>
           )}
           <View style={styles.heroOverlay} />
@@ -551,7 +562,7 @@ const styles = StyleSheet.create({
 
   hero: { height: 320, overflow: "hidden", backgroundColor: COLORS.brandDark },
   heroFallback: { backgroundColor: COLORS.brandDark, alignItems: "center", justifyContent: "center" },
-  heroInitials: { fontFamily: FONTS.heading, fontSize: 56, color: COLORS.surface, letterSpacing: 2 },
+  heroPlaceholder: { width: 150, height: 150, borderRadius: 75 },
   heroOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(15,76,54,0.58)" },
   backBtn: { position: "absolute", top: SPACING.md, left: SPACING.md, width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(0,0,0,0.35)", alignItems: "center", justifyContent: "center", zIndex: 2 },
   heroContent: { position: "absolute", bottom: SPACING.lg, left: SPACING.lg, right: SPACING.lg },

@@ -1,0 +1,55 @@
+{
+  "summary": "Tested the gender-based doctor placeholder fix (frontend-only, Expo web preview at localhost:3000, mobile viewport 375x667). FIX VERIFIED WORKING: (1) Consult list /consult — all 5 no-photo female doctors on page 1 (Neha Panchal id=12, Dr.Nivedita id=14, Khushi Rathod id=15, Dr. KAJOL GUPTA id=33, Deepika Kumari id=37) render the FEMALE illustrated placeholder; md5 of the served image matches local asset doctor-placeholder-female.png exactly. No-photo male doctors (Mohammad faizan id=24, Dr MOHIT id=32) render the MALE placeholder; md5 matches doctor-placeholder-male.png. (2) /doctor/12 hero shows the female placeholder in circular frame over dark green (md5-verified, screenshot 02); /doctor/32 hero shows the male placeholder (md5-verified, screenshot 04). (3) ZERO console errors, zero red screens. HOWEVER criterion 3 FAILS for a pre-existing reason: /doctor/11 (Dr AP Singh) real photo does NOT display — hero is blank dark green (screenshot 03). Root cause: Hostinger CDN (hcdn) serves a 403 JS bot-challenge page ('Checking your browser before accessing') for every https://api.onlinevaidyaji.com/uploads/profiles/* image; Chrome blocks it as net::ERR_BLOCKED_BY_ORB. Confirmed with curl (plain AND full browser headers both 403). This affects ALL 10 doctors with Hostinger-hosted avatars on the list (blank avatar circle) — NOT caused by the placeholder fix (pre-fix evidence screenshots_iter36/05 shows the same blank hero). Google-hosted avatars (lh3.googleusercontent.com) load fine.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Doctor avatar (consult list card + doctor/[id] hero)",
+        "issue": "Doctors WITH avatar_url hosted on api.onlinevaidyaji.com show a BLANK avatar/hero (no broken-image icon, image element removed on load failure). Hostinger CDN returns 403 + JS bot challenge for all /uploads/profiles/* images (net::ERR_BLOCKED_BY_ORB in browser). Affects 10 of 30 doctors on page 1 (ids 11,13,16,23,25,26,28,34,36 + more). Google-hosted avatars unaffected. Pre-existing infra issue, NOT a regression from the placeholder fix.",
+        "testID": "doctor-card-11",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Doctor profile photo display (list avatar + detail hero)",
+        "issue": "Hostinger hcdn bot protection 403s all cross-origin image loads from api.onlinevaidyaji.com/uploads/profiles/. Reproduced with curl: plain request AND browser-UA+Referer+Origin request both get HTTP 403 text/html challenge page. Cannot be fixed client-side with headers.",
+        "affected_testIDs": ["doctor-card-11", "doctor-card-13", "doctor-card-16", "doctor-card-23", "doctor-card-25", "doctor-card-26", "doctor-card-28", "doctor-card-34", "doctor-card-36", "doctor-name"]
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration_36.json",
+    "/app/test_reports/screenshots_iter36_fix/01_consult_list.jpeg",
+    "/app/test_reports/screenshots_iter36_fix/02_doctor12_female.jpeg",
+    "/app/test_reports/screenshots_iter36_fix/03_doctor11_photo.jpeg",
+    "/app/test_reports/screenshots_iter36_fix/04_doctor32_male.jpeg"
+  ],
+  "action_items": [
+    "Placeholder fix itself: NO action needed — verified correct (gender === 'female' → female illustration, else male; md5-verified against bundled assets on both list and detail screens).",
+    "HIGH: Fix broken Hostinger-hosted avatars. Options: (a) Hostinger control panel — exclude /uploads/* (or static media) from hcdn bot-protection/JS challenge; (b) serve profile media through the FastAPI backend (server.py already mounts /uploads/profiles StaticFiles for app-uploaded photos — consider migrating/proxying website uploads the same way); note a naive server-side proxy to api.onlinevaidyaji.com will ALSO hit the JS challenge (plain curl 403), so Hostinger-side exclusion or relocating the media is required; (c) bundle/copy the real profile photos into the app's own uploads dir at seed time.",
+    "Consider an onError fallback on the list/hero Image so a failed real photo falls back to the gender placeholder instead of a blank circle/hero (currently broken remote images render as empty boxes with no indicator)."
+  ],
+  "critical_code_review_comments": [
+    "consult.tsx:333-344 and doctor/[id].tsx:213-226 — placeholder selection logic is correct: avatar_url (or doc.image on detail) takes precedence; otherwise gender==='female' ? female : male require() asset. require() of bundled PNGs works in Metro web (served at /assets/?unstable_path=... and md5-identical to the source files).",
+    "Neither Image has an onError handler — a failed avatar_url leaves a blank circle (list) or blank brand-dark hero (detail). Adding onError → setState fallback to the gender placeholder would make the UI resilient to the Hostinger 403 issue.",
+    "Detail hero uses `doc.avatar_url || doc.image` (doctor/[id].tsx:213) while the list only uses avatar_url — minor inconsistency, harmless.",
+    "consult.tsx directory cache (AsyncStorage, 5-min TTL) stores gender/avatar_url so placeholder selection works from cache — verified list rendered from network with correct placeholders; no stale-cache risk for this fix.",
+    "expo.err.log contains stale 'Cannot find module @expo/metro/metro/lib/isResolvedDependency.js' entries from an old crashed session; current Metro session bundles cleanly (Web Bundled entries, zero runtime console errors)."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "N/A (frontend-only test; /api/doctors spot-checked and returns 56 doctors with correct gender/avatar_url fields)",
+    "frontend": "75% (3 of 4 review criteria pass: female placeholders list+detail, male placeholders list+detail, no console errors. FAILS: /doctor/11 real photo does not display — Hostinger CDN 403 bot challenge, pre-existing)"
+  },
+  "seed_data_creation": "None — used existing Hostinger MySQL seed doctors (56 total)",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Gender placeholder fix is FULLY VERIFIED (md5 + visual). Outstanding: Hostinger-hosted avatars 403 (hcdn JS challenge) — blank avatars for ~1/3 of doctors including Dr AP Singh (id=11). To retest after E1's fix: /consult list and /doctor/11 hero must show his real photo (naturalWidth > 0). Google-avatar doctors (ids 21,27,30,35) are the control group that already works. Pre-fix evidence screenshots are in /app/test_reports/screenshots_iter36/; post-fix verification in /app/test_reports/screenshots_iter36_fix/.",
+  "rca_of_issue": "Bug under test (female placeholder shown as male/none): FIXED and verified — cause was list/detail only having a male placeholder path; fix bundles both illustrations locally and selects via API gender field. Newly documented issue (real photos blank): Hostinger's hcdn edge serves an interstitial JS browser-check page (HTTP 403, content-type text/html, 'Checking your browser before accessing') for every request to api.onlinevaidyaji.com/uploads/profiles/*. Chrome then blocks the response as net::ERR_BLOCKED_BY_ORB, so RN-web <Image> fires onError and renders nothing. Reproduced via curl with full browser headers — it is CDN/WAF config, not client code. Mitigation: exclude /uploads/* from bot protection in Hostinger panel, or relocate/proxy media through the FastAPI app's own host (server.py already mounts /uploads/profiles locally for app-side uploads)."
+}
