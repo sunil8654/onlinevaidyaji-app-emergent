@@ -4,6 +4,7 @@ import {
   KeyboardAvoidingView, Platform, ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import Markdown from "react-native-markdown-display";
 import { useRouter } from "expo-router";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { api } from "@/src/api";
@@ -92,7 +93,11 @@ export default function Chatbot() {
                 </View>
               )}
               <View style={[styles.bubble, item.role === "user" ? styles.bubbleUser : styles.bubbleAi]}>
-                <Text style={[styles.bubbleText, item.role === "user" && { color: COLORS.textPrimary }]}>{item.text}</Text>
+                {item.role === "assistant" ? (
+                  <Markdown style={mdStyles}>{item.text}</Markdown>
+                ) : (
+                  <Text style={[styles.bubbleText, { color: COLORS.textPrimary }]}>{item.text}</Text>
+                )}
               </View>
             </View>
           )}
@@ -162,3 +167,18 @@ const styles = StyleSheet.create({
   input: { flex: 1, maxHeight: 120, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: RADIUS.lg, paddingHorizontal: 14, paddingVertical: 10, color: COLORS.textPrimary, fontSize: 14 },
   sendBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: COLORS.brand, alignItems: "center", justifyContent: "center" },
 });
+
+// Markdown styles for AI bubbles — mirrors bubbleText so rendered markdown
+// (bold/italic/bullets) visually matches plain user text.
+const mdStyles = {
+  body: { color: COLORS.textPrimary, fontSize: 14, lineHeight: 20 },
+  paragraph: { marginTop: 0, marginBottom: 8 },
+  strong: { fontWeight: "700" as const, color: COLORS.textPrimary },
+  em: { fontStyle: "italic" as const },
+  bullet_list: { marginBottom: 8 },
+  ordered_list: { marginBottom: 8 },
+  list_item: { marginBottom: 4 },
+  hr: { backgroundColor: COLORS.border },
+  link: { color: COLORS.brand },
+};
+
