@@ -4,20 +4,64 @@ import { storage } from "@/src/utils/storage";
 const BASE = process.env.EXPO_PUBLIC_BACKEND_URL;
 
 /**
+ * Host that owns the WEBSITE's uploaded media (`/uploads/profiles/...`).
+ *
+ * The app backend and the website share one database, so `users.image` may hold
+ * a website-written RELATIVE path. Those files live on the website's host, NOT
+ * the app backend, so the relative path must NOT be prefixed with `BASE` (that
+ * is the single bug that broke every website-uploaded photo in the app).
+ */
+const MEDIA_BASE = (
+  process.env.EXPO_PUBLIC_MEDIA_BASE_URL || "https://api.onlinevaidyaji.com"
+).replace(/\/+$/, "");
+
+/**
  * Turns a relative `/uploads/...` path from the API into something loadable.
  *
- * Both backends store the SAME relative path in `doctor_verifications.document_path`
- * and `users.image` (so the two surfaces stay interchangeable), and both mount
- * `/uploads` as static content. Absolute URLs are passed through untouched.
+ * - absolute http(s) URL (Google avatar, app-self upload) -> unchanged
+ * - protocol-relative "//host/path"                        -> https:...
+ * - data: URI                                              -> unchanged
+ * - relative "/uploads/..." / "uploads/..."                -> website media host
  */
 export function absoluteMediaUrl(path?: string | null): string | null {
   if (!path) return null;
   const v = String(path).trim();
   if (!v) return null;
   if (v.startsWith("http://") || v.startsWith("https://")) return v;
+  if (v.startsWith("//")) return `https:${v}`;
   if (v.startsWith("data:")) return v;
-  if (v.startsWith("/")) return `${BASE}${v}`;
-  return `${BASE}/uploads/${v}`;
+  if (v.startsWith("/")) return `${MEDIA_BASE}${v}`;
+  return `${MEDIA_BASE}/uploads/${v}`;
+}
+
+/**
+ * Keys that hold PRIVATE file locations and must never be rewritten into a
+ * public URL. Doctor verification documents are served only through the
+ * authenticated /api/files/verification/{id} endpoint.
+ */
+const MEDIA_PATH_SKIP_KEYS = new Set(["document_path", "storage_path"]);
+
+/**
+ * Recursively absolutises every relative `/uploads/...` value in an API
+ * response. Applied once at the request boundary so EVERY screen (feed,
+ * bookings, admin, community, ...) renders images without each having to call
+ * `absoluteMediaUrl` by hand — and without risking the private document paths.
+ */
+function normalizeMediaDeep(value: any, key?: string): any {
+  if (typeof value === "string") {
+    if (key && MEDIA_PATH_SKIP_KEYS.has(key)) return value;
+    if (value.startsWith("/uploads/")) return `${MEDIA_BASE}${value}`;
+    if (value.startsWith("uploads/")) return `${MEDIA_BASE}/${value}`;
+    return value;
+  }
+  if (Array.isArray(value)) return value.map((v) => normalizeMediaDeep(v));
+  if (value && typeof value === "object") {
+    for (const k of Object.keys(value)) {
+      (value as any)[k] = normalizeMediaDeep((value as any)[k], k);
+    }
+    return value;
+  }
+  return value;
 }
 export const TOKEN_KEY = "vaidyaji.token";
 
@@ -220,6 +264,10 @@ export type DoctorVerificationDoc = {
   notes: string | null;
   verified_at: string | null;
   created_at: string | null;
+  /** Short-lived token for the authenticated document endpoint (admin/owner only). */
+  download_token?: string;
+  /** Authenticated path, e.g. /api/files/verification/12. */
+  download_path?: string;
 };
 
 /**
@@ -488,7 +536,7 @@ async function request<T = any>(
         const msg = data?.detail || data?.message || `HTTP ${res.status}`;
         throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
       }
-      return data as T;
+      return normalizeMediaDeep(data) as T;
     } catch (e: any) {
       if (e?.name === "AbortError") {
         throw new Error("The request timed out. Please check your connection.");
@@ -602,6 +650,10 @@ export const api = {
   deleteDocument: (doc_id: string) => request<{ deleted: boolean }>(`/documents/${doc_id}`, "DELETE"),
   documentDownloadUrl: (doc_id: string, token: string) =>
     `${BASE}/api/files/${doc_id}?token=${encodeURIComponent(token)}`,
+  // Doctor verification documents are private (identity papers), so the admin
+  // screen opens them through this authenticated URL instead of a public path.
+  verificationDocUrl: (doc_id: string, token: string) =>
+    `${BASE}/api/files/verification/${doc_id}?token=${encodeURIComponent(token)}`,
   uploadDocument: async (file: { uri: string; name: string; mimeType: string }, doc_type: string, user_note?: string) => {
     const token = await storage.secureGet<string>(TOKEN_KEY, "");
     const form = new FormData();

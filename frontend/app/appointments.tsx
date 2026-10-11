@@ -176,13 +176,19 @@ export default function Appointments() {
 
   const renderCard = ({ a, d }: { a: Appointment; d: Date }) => {
     const status = (a.status || "pending").toLowerCase();
-    const st = STATUS_STYLE[status] ?? STATUS_STYLE.pending;
     const fee = feeOf(a);
     const paid = !!(a as any).paid;
+    // A consultation that carries a fee is only "confirmed" once it is paid.
+    // Until then never show a green "Confirmed" pill - even for legacy rows
+    // that were created with status="confirmed" but were never paid.
+    const needsPayment = !paid && fee > 0 && status !== "cancelled";
+    const st = needsPayment
+      ? { label: "Payment pending", bg: "#FFF4E5", fg: "#B26A00" }
+      : STATUS_STYLE[status] ?? STATUS_STYLE.pending;
     const rx = rxOf(a);
     const isPast = d.getTime() < now;
-    const canJoin =
-      !isPast && status !== "cancelled" && (a.type || "online") === "online";
+    const canConsult = status !== "cancelled" && !needsPayment;
+    const canJoin = !isPast && canConsult && (a.type || "online") === "online";
 
     return (
       <View style={styles.card} testID={`appt-${a.id}`}>
@@ -221,7 +227,7 @@ export default function Appointments() {
         ) : null}
 
         <View style={styles.actionRow}>
-          {status !== "cancelled" ? (
+          {status !== "cancelled" && !needsPayment ? (
             <TouchableOpacity
               style={styles.chatBtn}
               onPress={() =>

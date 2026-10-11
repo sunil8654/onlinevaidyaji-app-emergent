@@ -93,11 +93,18 @@ export default function AdminDoctors() {
   const remove = async (id: string) => { setBusy(id); await api.adminDeleteDoctor(id).catch(() => {}); setBusy(""); load(); };
 
   const openDoc = async (doc: DoctorVerificationDoc) => {
-    const url = absoluteMediaUrl(doc.document_path);
-    if (!url) return;
+    // Verification documents are private — open via the authenticated endpoint
+    // using the short-lived token the server issued for this admin session.
+    const url = doc.download_token
+      ? api.verificationDocUrl(doc.id, doc.download_token)
+      : null;
+    if (!url) {
+      Alert.alert("Unavailable", "This document could not be opened. Please refresh and try again.");
+      return;
+    }
     const canOpen = await Linking.canOpenURL(url).catch(() => false);
     if (!canOpen) {
-      Alert.alert("Cannot open", `This file could not be opened on your device:\n${url}`);
+      Alert.alert("Cannot open", "This file could not be opened on your device.");
       return;
     }
     await Linking.openURL(url).catch(() => {});

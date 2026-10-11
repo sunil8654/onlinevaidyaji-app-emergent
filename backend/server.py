@@ -8,13 +8,14 @@ from starlette.middleware.cors import CORSMiddleware
 import os
 import re
 import base64
+import mimetypes
 import json
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr, validator
 from typing import List, Optional, Literal, Dict, Any, Tuple
 import uuid
-from datetime import datetime, timedelta, timezone, time as dt_time
+from datetime import datetime, timedelta, timezone, time
 from collections import defaultdict, deque
 import asyncio
 import time
@@ -62,6 +63,7 @@ from msdb import db
 from msdb import _as_date, _as_time
 from msdb import _query as _sql_query
 from msdb import _columns, _table_exists
+from media_urls import absolute_media_url, MEDIA_BASE_URL
 
 # Auth
 JWT_SECRET = os.environ['JWT_SECRET']
@@ -94,9 +96,10 @@ if len(ADMIN_PASSWORD) < 12 or ADMIN_PASSWORD.lower() in _WEAK_ADMIN_PWDS:
 # Those files are served by the website backend, not by this FastAPI app, so we
 # absolutise the path here instead of duplicating the upload. Users that signed
 # up via Google already hold an absolute URL, which is passed through as-is.
-PROFILE_MEDIA_BASE_URL = os.environ.get(
-    "PROFILE_MEDIA_BASE_URL", "https://api.onlinevaidyaji.com"
-).rstrip("/")
+# Never blank: a blank env value now falls back to the website host (see
+# media_urls.py). Previously a blank `PROFILE_MEDIA_BASE_URL=` in .env produced
+# relative URLs, so every website-uploaded photo failed to render in the app.
+PROFILE_MEDIA_BASE_URL = MEDIA_BASE_URL
 # Where the APP itself is reachable. Photos the app uploads are written to the
 # app's own uploads/ dir, so they must be stored as an absolute URL pointing
 # here - the website and the app share the database but NOT the filesystem, so
@@ -113,20 +116,23 @@ PROFILE_UPLOAD_SECRET = os.environ.get("PROFILE_UPLOAD_SECRET", "")
 def _profile_photo_url(raw):
     """Turn a stored `users.image` value into something an <Image> can load.
 
-    - absolute http(s) URL (Google avatar, CDN)  -> returned unchanged
-    - relative "/uploads/..." path               -> prefixed with the web origin
-    - anything else (base64 blob, junk, empty)   -> None so the UI can fall back
+    Delegates to the single shared normalizer so patient photos follow the same
+    rule as doctor avatars (absolute passes through, "/uploads/..." gets the
+    website host, data: URIs are dropped).
     """
-    if not raw or not isinstance(raw, str):
-        return None
-    value = raw.strip()
-    if value.startswith("http://") or value.startswith("https://"):
-        return value
-    if value.startswith("data:"):
-        return None  # legacy inline blob: too large for a list/header render
-    if value.startswith("/"):
-        return f"{PROFILE_MEDIA_BASE_URL}{value}"
-    return None
+    return absolute_media_url(raw)
+
+
+def _media_url(raw):
+    """Absolutise a stored media path but KEEP legacy inline `data:` URIs.
+
+    Doctor avatars uploaded through the app are stored as data: URIs and the
+    feed / public profile must keep rendering them, so they pass through
+    unchanged. Only the patient photo header (`_profile_photo_url`) drops blobs.
+    """
+    if isinstance(raw, str) and raw.strip().startswith("data:"):
+        return raw
+    return absolute_media_url(raw)
 
 
 # Push
@@ -139,13 +145,6 @@ _push_client = httpx.AsyncClient(
 )
 
 app = FastAPI(title="Online VaidyaJi API")
-
-
-@app.get("/health")
-async def health_check():
-    """K8s readiness/liveness probe endpoint — must always return 200."""
-    return {"status": "ok"}
-
 api_router = APIRouter(prefix="/api")
 bearer = HTTPBearer(auto_error=False)
 
@@ -156,10 +155,17 @@ logger = logging.getLogger(__name__)
 # Serve profile photos the app itself writes, using the SAME URL shape as the
 # website (/uploads/profiles/...) so the stored path stays interchangeable
 # between the two backends.
+#
+# SECURITY: only the PUBLIC profiles directory is mounted. Doctor verification
+# documents (uploads/documents/...) contain identity papers and MUST NOT be
+# reachable via guessable public URLs. They are served exclusively by the
+# authenticated GET /api/files/verification/{id} endpoint below.
 _UPLOADS_ROOT = Path(__file__).resolve().parent / "uploads"
 _UPLOADS_ROOT.mkdir(parents=True, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=str(_UPLOADS_ROOT)), name="uploads")
-app.mount("/api/uploads", StaticFiles(directory=str(_UPLOADS_ROOT)), name="api-uploads")
+_UPLOADS_PROFILES = _UPLOADS_ROOT / "profiles"
+_UPLOADS_PROFILES.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads/profiles", StaticFiles(directory=str(_UPLOADS_PROFILES)), name="uploads-profiles")
+app.mount("/api/uploads/profiles", StaticFiles(directory=str(_UPLOADS_PROFILES)), name="api-uploads-profiles")
 
 
 # ----------------- Rate Limiter (in-memory, per-IP) -----------------
@@ -387,7 +393,12 @@ def now_iso() -> str:
 
 
 def _iso(v: Any) -> Optional[str]:
-    """Serialize datetimes/dates to ISO strings; pass through everything else."""
+    """Best-effort ISO-8601 string for datetime/date/DB values.
+
+    Module-level so every serializer (verification rows, appointments, earnings)
+    can reuse it. Previously this only existed as a nested helper inside the
+    doctor-earnings endpoint, so any other caller raised NameError.
+    """
     if v is None:
         return None
     if hasattr(v, "isoformat"):
@@ -1351,8 +1362,8 @@ async def serialize_doctor_public(
         # id is all the app needs to address bookings.
         "slug": d.get("slug"),
         "name": d.get("name"),
-        "avatar_url": d.get("avatar_url") or d.get("image"),
-        "image": d.get("avatar_url") or d.get("image"),
+        "avatar_url": _media_url(d.get("avatar_url") or d.get("image")),
+        "image": _media_url(d.get("avatar_url") or d.get("image")),
         "gender": d.get("gender"),
         "qualification": d.get("qualification"),
         "experience": experience,
@@ -1615,11 +1626,14 @@ async def create_appointment(body: AppointmentInput, user: dict = Depends(curren
         "doctor_specialty": doctor["specialty"],
         "slot": body.slot,
         "appointment_date": slot_date,
-        "appointment_time": slot_time or dt_time(0, 0),
+        "appointment_time": slot_time or time(0, 0),
         "type": appt_type,
         "symptoms": (body.symptoms or "").strip() or None,
         "reason": body.reason,
-        "status": "confirmed",
+        # A consultation that carries a fee is NOT confirmed at booking time -
+        # it stays "pending" until its payment is actually received. Only
+        # free consultations (no fee on file) start out confirmed.
+        "status": "pending" if fee > 0 else "confirmed",
         "paid": False,
         # `amount` has no real column, so it round-trips via the data blob only.
         # Never invent a price: if the doctor has no fee on file it stays null.
@@ -1766,7 +1780,7 @@ async def _enrich_appt_doctors(rows: List[Dict[str, Any]]) -> List[Dict[str, Any
         if specialty:
             r["doctor_specialty"] = specialty
         if d.get("image"):
-            r["doctor_image"] = d["image"]
+            r["doctor_image"] = _media_url(d["image"])
         if d.get("consultation_fee") is not None and not r.get("amount"):
             # Never overwrite a fee that was actually captured at booking time.
             r["doctor_fee"] = d["consultation_fee"]
@@ -2091,6 +2105,18 @@ async def update_appointment_status(
     status = body.status.lower()
     if status not in ("pending", "confirmed", "completed", "cancelled"):
         raise HTTPException(status_code=400, detail="Invalid status")
+
+    # A consultation that carries a fee only becomes "confirmed" once its
+    # payment is received. Patients cannot self-confirm an unpaid booking - a
+    # doctor/admin may (e.g. for pay-at-clinic offline visits), and the
+    # payment-verify handler confirms paid bookings automatically.
+    if status == "confirmed" and not appt.get("paid") and not is_doctor:
+        appt_fee = _to_float(appt.get("amount")) or 0.0
+        if appt_fee > 0 and not user.get("is_admin"):
+            raise HTTPException(
+                status_code=400,
+                detail="Payment is pending. This appointment will be confirmed once payment is received.",
+            )
 
     await db.appointments.update_one({"id": appt_id}, {"$set": {"status": status}})
 
@@ -2833,9 +2859,14 @@ async def verify_payment(body: PaymentVerifyInput, user: dict = Depends(current_
     purpose = payment.get("purpose") or body.purpose
     ref_id = payment.get("reference_id") or body.reference_id
     if purpose == "appointment" and ref_id:
+        # Receiving the payment is what confirms the booking: flip status to
+        # "confirmed" here (never at booking time), so an unpaid appointment
+        # never shows as confirmed.
         await db.appointments.update_one(
             {"id": ref_id, "patient_id": user["id"]},
-            {"$set": {"paid": True, "paid_at": now_iso(), "razorpay_payment_id": body.razorpay_payment_id}},
+            {"$set": {"paid": True, "paid_at": now_iso(),
+                      "razorpay_payment_id": body.razorpay_payment_id,
+                      "status": "confirmed"}},
         )
         # Tell BOTH sides the booking is confirmed. `wa_booking_paid` loops
         # over (patient_phone, doctor_phone) itself, so one call covers both.
@@ -4024,14 +4055,17 @@ async def admin_list_verifications(admin: dict = Depends(require_admin)):
         did = _to_int(r.get("id"))
         docs = []
         try:
-            docs = [
-                _verification_row(v)
-                for v in await _sql_query(
-                    "SELECT id, doctor_id, document_type, document_path, status, notes, verified_at, created_at "
-                    "FROM `doctor_verifications` WHERE doctor_id = %s ORDER BY created_at DESC",
-                    [did],
-                )
-            ]
+            for v in await _sql_query(
+                "SELECT id, doctor_id, document_type, document_path, status, notes, verified_at, created_at "
+                "FROM `doctor_verifications` WHERE doctor_id = %s ORDER BY created_at DESC",
+                [did],
+            ):
+                dv = _verification_row(v)
+                # Documents are private: hand the admin a short-lived token for the
+                # authenticated endpoint instead of a public /uploads path.
+                dv["download_token"] = _make_dl_token(admin["id"], dv["id"])
+                dv["download_path"] = f"/api/files/verification/{dv['id']}"
+                docs.append(dv)
         except Exception as e:
             logger.warning("verification documents fetch failed for doctor %s: %s", did, e)
         verifications.append({
@@ -4041,7 +4075,7 @@ async def admin_list_verifications(admin: dict = Depends(require_admin)):
             "name": r.get("name"),
             "email": r.get("email"),
             "phone": r.get("phone"),
-            "image": r.get("image"),
+            "image": _media_url(r.get("image")),
             "qualification": r.get("qualification"),
             "experience": _to_int(r.get("experience")),
             "consultation_fee": _to_float(r.get("consultation_fee")),
@@ -5227,8 +5261,8 @@ async def _load_own_doctor_profile(user: dict) -> Optional[Dict[str, Any]]:
         "name": doc.get("name") or user.get("name"),
         "email": doc.get("email") or user.get("email"),
         "phone": doc.get("phone") or user.get("phone"),
-        "image": doc.get("image") or doc.get("avatar_url"),
-        "avatar_url": doc.get("avatar_url") or doc.get("image"),
+        "image": _media_url(doc.get("image") or doc.get("avatar_url")),
+        "avatar_url": _media_url(doc.get("avatar_url") or doc.get("image")),
         # professional columns
         "specialization_id": _to_int(doc.get("specialization_id")),
         "specialty": specialty,
@@ -5422,7 +5456,7 @@ async def _seed_default_slots(doctor_id: int) -> None:
             await _sql_query(
                 "INSERT INTO `appointment_slots` (doctor_id, day_of_week, start_time, end_time, is_available) "
                 "VALUES (%s, %s, %s, %s, 1)",
-                [doctor_id, day, dt_time(9, 0), dt_time(17, 0)],
+                [doctor_id, day, time(9, 0), time(17, 0)],
             )
         except Exception as e:
             logger.warning("default slot seed failed for doctor %s: %s", doctor_id, e)
@@ -5989,7 +6023,12 @@ async def doctor_upload_document(
         "FROM `doctor_verifications` WHERE doctor_id = %s ORDER BY created_at DESC",
         [did],
     )
-    return {"document": _verification_row(rows[0]) if rows else None, "documents_uploaded": uploaded}
+    document = None
+    if rows:
+        document = _verification_row(rows[0])
+        document["download_token"] = _make_dl_token(user["id"], document["id"])
+        document["download_path"] = f"/api/files/verification/{document['id']}"
+    return {"document": document, "documents_uploaded": uploaded}
 
 
 @api_router.get("/doctor/documents")
@@ -6010,7 +6049,12 @@ async def doctor_list_documents(user: dict = Depends(current_user)):
         "FROM `doctor_verifications` WHERE doctor_id = %s ORDER BY created_at DESC",
         [did],
     )
-    documents = [_verification_row(r) for r in rows or []]
+    documents = []
+    for r in rows or []:
+        d = _verification_row(r)
+        d["download_token"] = _make_dl_token(user["id"], d["id"])
+        d["download_path"] = f"/api/files/verification/{d['id']}"
+        documents.append(d)
     return {
         "documents": documents,
         "total": len(documents),
@@ -6867,13 +6911,6 @@ async def doctor_earnings(user: dict = Depends(current_user)):
     """
     if user["role"] != "doctor":
         raise HTTPException(status_code=403, detail="Doctors only")
-
-    def _iso(v: Any) -> Optional[str]:
-        if v is None:
-            return None
-        if hasattr(v, "isoformat"):
-            return v.isoformat()
-        return str(v)
 
     # The chart maps over `daily`, so it is always a dense 30-bucket list - even
     # for a brand-new doctor with no payments, otherwise the trend graph silently
@@ -8038,7 +8075,7 @@ async def _author_snapshot(user: dict) -> Dict[str, Any]:
         "name": user.get("name") or "User",
         "role": "admin" if user.get("is_admin") else role,
         "verified": verified,
-        "avatar_url": avatar,
+        "avatar_url": _media_url(avatar),
     }
 
 
@@ -8253,7 +8290,7 @@ async def _doctor_snapshot(doctor_user_id: str) -> Dict[str, Any]:
         "name": d.get("name") or "Doctor",
         "specialty": d.get("specialty") or "",
         "qualification": d.get("qualification") or "",
-        "avatar_url": d.get("avatar_url") or "",
+        "avatar_url": _media_url(d.get("avatar_url")) or "",
         "clinic_name": d.get("clinic_name") or "",
         "clinic_address": d.get("clinic_address") or "",
         "consultation_fee": int(d.get("consultation_fee") or 0),
@@ -8618,7 +8655,7 @@ async def doc_com_search(q: str, user: dict = Depends(require_doctor_community),
     ).limit(limit).to_list(limit)
     doctors = [{
         "id": r["user_id"], "name": r["name"], "specialty": r.get("specialty", ""),
-        "avatar_url": r.get("avatar_url", ""), "verified": True, "clinic_name": r.get("clinic_name", ""),
+        "avatar_url": _media_url(r.get("avatar_url")) or "", "verified": True, "clinic_name": r.get("clinic_name", ""),
     } for r in doc_rows if r.get("user_id")]
     # Hashtag search
     tag = q.lstrip("#").lower()
@@ -8667,7 +8704,7 @@ async def doc_com_suggest(user: dict = Depends(require_doctor_community), limit:
     ).limit(limit).to_list(limit)
     return [{
         "id": d["user_id"], "name": d.get("name", "Doctor"),
-        "specialty": d.get("specialty", ""), "avatar_url": d.get("avatar_url", ""), "verified": True,
+        "specialty": d.get("specialty", ""), "avatar_url": _media_url(d.get("avatar_url")) or "", "verified": True,
     } for d in docs if d.get("user_id")]
 
 
@@ -9622,15 +9659,27 @@ async def phone_verify_otp(body: PhoneOTPVerifyIn, request: Request):
             raise HTTPException(status_code=429, detail=f"Too many wrong attempts. Locked for {OTP_LOCK_MINUTES} min.")
         _OTP_STORE[phone] = row
         raise HTTPException(status_code=400, detail=f"Wrong OTP. {OTP_MAX_ATTEMPTS - row['attempts']} attempts left.")
-    _OTP_STORE.pop(phone, None)  # single-use
+    # Decide login vs signup BEFORE consuming the code so a returning user logs
+    # straight in (never asked for a name) and a genuinely-new number that has
+    # not supplied a name yet does not burn its one-time OTP on a retry.
     existing = await db.users.find_one({"phone": phone})
+    if not existing:
+        # Tolerate a stored number that kept its +91 / 91 prefix.
+        for alt in (f"+91{phone}", f"91{phone}"):
+            existing = await db.users.find_one({"phone": alt})
+            if existing:
+                break
     if existing:
+        _OTP_STORE.pop(phone, None)  # single-use
         existing.pop("_id", None)
         existing.pop("password", None)
         token = make_token(existing["id"], existing.get("role", "patient"))
         return {"token": token, "user": existing, "is_new": False}
     if not body.name or not body.name.strip():
+        # The code was correct - we only need a name to create the account, so
+        # keep the OTP valid for the retry instead of consuming it here.
         raise HTTPException(status_code=400, detail="Name is required for new signup")
+    _OTP_STORE.pop(phone, None)  # single-use; consume only when signup proceeds
     doc: Dict[str, Any] = {
         "id": str(uuid.uuid4()),  # placeholder; real AUTO_INCREMENT id below
         "name": body.name.strip(),
@@ -10494,6 +10543,94 @@ async def download_document(doc_id: str, request: Request, token: Optional[str] 
         "X-Content-Type-Options": "nosniff",
         "Referrer-Policy": "no-referrer",
     })
+
+
+# ── Doctor verification documents (authenticated; never public) ────────
+async def _file_caller_user(request: Request, token: Optional[str], expected_doc_id: str) -> Optional[Dict[str, Any]]:
+    """Caller identity from a Bearer header (native app) or a bound query token (web)."""
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        try:
+            payload = jwt.decode(auth_header.split(" ", 1)[1], JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            return await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password": 0})
+        except Exception:
+            return None
+    if token:
+        entry = _DL_TOKENS.get(token)
+        if entry and entry.get("doc_id") == expected_doc_id:
+            try:
+                exp = datetime.fromisoformat(entry["expires_at"].replace("Z", ""))
+                if exp > datetime.utcnow():
+                    return await db.users.find_one({"id": entry["user_id"]}, {"_id": 0, "password": 0})
+            except Exception:
+                return None
+    return None
+
+
+def _media_file_response(content: bytes, mime: str, filename: str) -> Response:
+    return Response(content=content, media_type=mime or "application/octet-stream", headers={
+        "Content-Disposition": f'inline; filename="{filename}"',
+        "Cache-Control": "private, max-age=300",
+        # Block MIME sniffing that could reinterpret an uploaded file as HTML/JS.
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+    })
+
+
+@api_router.get("/files/verification/{doc_id}")
+async def download_verification_document(doc_id: str, request: Request, token: Optional[str] = Query(None)):
+    """Serve a doctor's verification document to an ADMIN or its OWNING doctor only.
+
+    The file may live on THIS app server (uploaded through the app) or on the
+    website's host (uploaded through the website); the shared DB stores a
+    relative `/uploads/documents/...` path either way. Try the local uploads dir
+    first, then proxy from the website's file host.
+    """
+    caller = await _file_caller_user(request, token, doc_id)
+    if not caller:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    rows = await _sql_query(
+        "SELECT v.id, v.document_type, v.document_path, d.user_id AS doctor_user_id "
+        "FROM `doctor_verifications` v "
+        "LEFT JOIN `doctors` d ON d.id = v.doctor_id "
+        "WHERE v.id = %s",
+        [_to_int(doc_id)],
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Document not found")
+    row = rows[0]
+
+    if not (caller.get("is_admin") or _id_eq(row.get("doctor_user_id"), caller.get("id"))):
+        raise HTTPException(status_code=403, detail="You cannot view this document")
+
+    stored = (row.get("document_path") or "").strip()
+    if stored.startswith("/uploads/"):
+        local = (_UPLOADS_ROOT / stored[len("/uploads/"):]).resolve()
+        try:
+            local.relative_to(_UPLOADS_ROOT.resolve())
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid document path")
+        if local.is_file():
+            data = await run_in_threadpool(local.read_bytes)
+            mime = mimetypes.guess_type(str(local))[0] or "application/octet-stream"
+            return _media_file_response(data, mime, f"document-{doc_id}")
+
+    if stored.startswith("/"):
+        url = f"{PROFILE_MEDIA_BASE_URL}{stored}"
+        try:
+            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+                resp = await client.get(url)
+            if resp.status_code == 200 and resp.content:
+                return _media_file_response(
+                    resp.content,
+                    resp.headers.get("Content-Type", "application/octet-stream"),
+                    f"document-{doc_id}",
+                )
+        except Exception as e:
+            logger.warning("verification doc proxy failed for %s: %s", doc_id, e)
+
+    raise HTTPException(status_code=404, detail="Document file not found")
 
 
 # ══════════════════════════════════════════════════════════════════

@@ -316,12 +316,21 @@ async def _send_otp_via_whatsapp(*, to: str, otp: str, body: str) -> Dict[str, A
                 "type": "template",
                 "template": {
                     "name": META_WHATSAPP_OTP_TEMPLATE,
-                    "language": {"code": META_WHATSAPP_OTP_LANG or "en_US"},
+                    "language": {"code": META_WHATSAPP_OTP_LANG or "en"},
                     "components": [
                         {
                             "type": "body",
                             "parameters": [{"type": "text", "text": otp}],
-                        }
+                        },
+                        {
+                            # Authentication templates carry a copy-code button
+                            # that Meta treats as a URL button; it MUST receive
+                            # the OTP or Meta rejects with 131008.
+                            "type": "button",
+                            "sub_type": "url",
+                            "index": "0",
+                            "parameters": [{"type": "text", "text": otp}],
+                        },
                     ],
                 },
             }

@@ -50,18 +50,25 @@ export default function Otp() {
 
   const [digits, setDigits] = useState<string[]>(Array(CELLS).fill(""));
   const [name, setName] = useState(initialName ?? "");
-  const [needName, setNeedName] = useState(!initialName);
+  // Never pre-emptively ask for a name. The backend returns "Name is required"
+  // only for a genuinely new phone number, and we reveal the field then. That
+  // keeps an existing patient on a straight sign-in and avoids asking signup
+  // users (whose account already has a name) for it again.
+  const [needName, setNeedName] = useState(false);
   const [err, setErr] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [sending, setSending] = useState(false);
   const [seconds, setSeconds] = useState(RESEND_SECONDS);
   const refs = useRef<(TextInput | null)[]>([]);
+  // Guards the one-shot auto-send for the signup flow against double effects.
+  const autoSent = useRef(false);
 
   /**
    * Sign-in arrives here with no `phone` param, so the screen first collects
-   * the number. Signup arrives with one, and there the code has already been
-   * sent - hence `sent` starts true only in that case.
+   * the number. Signup arrives with one; the code has NOT been sent yet, so we
+   * fire it on mount (see the effect below) rather than making the user tap
+   * Resend to receive it.
    */
   const [enteredPhone, setEnteredPhone] = useState(phone ?? "");
   const [sent, setSent] = useState(!!phone);
@@ -112,6 +119,18 @@ export default function Otp() {
     [phone, enteredPhone]
   );
 
+  // Signup navigates here with `phone` but no code has been sent, yet `sent`
+  // starts true. Send one on mount so the field the user is staring at actually
+  // has a matching code behind it. Guarded so it only ever runs once.
+  useEffect(() => {
+    if (autoSent.current) return;
+    if (phone && normalisePhone(phone)) {
+      autoSent.current = true;
+      send(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const onChange = (i: number, v: string) => {
     const clean = v.replace(/\D/g, "");
     // Pasting the whole code into any cell should just fill it in.
@@ -135,7 +154,7 @@ export default function Otp() {
     setNotice("");
     const code = digits.join("");
     if (code.length !== CELLS) {
-      setErr(`Enter the ${CELLS}-digit code from your SMS.`);
+      setErr(`Enter the ${CELLS}-digit code we sent you.`);
       return;
     }
     setBusy(true);
@@ -192,8 +211,8 @@ export default function Otp() {
           <Text style={styles.title}>{heading}</Text>
           <Text style={styles.sub}>
             {sent
-              ? `We sent a ${CELLS}-digit code by SMS to ${masked}.`
-              : "Enter your mobile number and we’ll text you a " +
+              ? `We sent a ${CELLS}-digit code to ${masked} on WhatsApp.`
+              : "Enter your mobile number and we’ll send you a " +
                 CELLS +
                 "-digit code. No password needed."}
           </Text>

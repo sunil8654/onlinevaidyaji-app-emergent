@@ -1197,7 +1197,8 @@ class Collection:
                         d["name"] = u.get("name")
                     d.setdefault("email", u.get("email"))
                     d.setdefault("phone", u.get("phone"))
-                    d.setdefault("avatar_url", u.get("image"))
+                    if not d.get("avatar_url") and u.get("image"):
+                        d["avatar_url"] = u.get("image")
         sids = list({str(d.get("specialization_id")) for d in docs if d.get("specialization_id") is not None})
         if sids and await _table_exists("specializations"):
             qs = ",".join(["%s"] * len(sids))
