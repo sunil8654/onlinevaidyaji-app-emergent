@@ -184,7 +184,13 @@ def _as_time(v: Any) -> Any:
 #   - a list of (column, transform_fn) pairs for values that need reshaping.
 COLUMN_MAPS: Dict[str, Dict[str, Any]] = {
     "activity": {"kind": "action", "actor_id": "user_id", "actor_name": "details"},
-    "support_messages": {"session_id": "subject", "text": "message"},
+     # Unified AI chat store. The app writes `text` but the real column is
+    "ai_chat_messages": {
+        "text": "message",
+        "role": [("role", _enum_val)],
+        "user_id": [("user_id", _int_val)],
+        "created_at": [("created_at", _as_datetime)],
+    },
     "health_documents": {"storage_path": "file_path"},
     "doc_com_dm_messages": {"thread_id": "room_id", "text": "content"},
     "doc_com_notifications": {"doctor_id": "user_id", "snippet": "message", "read": "is_read"},

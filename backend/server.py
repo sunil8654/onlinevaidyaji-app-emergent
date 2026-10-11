@@ -3615,12 +3615,13 @@ async def chat_message(body: ChatMessageInput, request: Request, user: dict = De
     # Rate limit LLM calls: 20 per user per 5 min (prevents cost amplification)
     await rate_limit(request, f"chat:msg:{user['id']}", max_calls=20, window_seconds=300)
     # persist user message
-    await db.chat_messages.insert_one({
+    await db.ai_chat_messages.insert_one({
         "id": str(uuid.uuid4()),
         "session_id": body.session_id,
         "user_id": user["id"],
         "role": "user",
         "text": body.message,
+        "source": "chatbot",
         "created_at": now_iso(),
     })
 
@@ -3638,12 +3639,13 @@ async def chat_message(body: ChatMessageInput, request: Request, user: dict = De
 
     reply_text = reply if isinstance(reply, str) else str(reply)
 
-    await db.chat_messages.insert_one({
+    await db.ai_chat_messages.insert_one({
         "id": str(uuid.uuid4()),
         "session_id": body.session_id,
         "user_id": user["id"],
         "role": "assistant",
         "text": reply_text,
+        "source": "chatbot",
         "created_at": now_iso(),
     })
     return {"reply": reply_text}
@@ -3651,11 +3653,10 @@ async def chat_message(body: ChatMessageInput, request: Request, user: dict = De
 
 @api_router.get("/chat/history/{session_id}")
 async def chat_history(session_id: str, user: dict = Depends(current_user)):
-    msgs = await db.chat_messages.find(
-        {"session_id": session_id, "user_id": user["id"]}, {"_id": 0}
+    msgs = await db.ai_chat_messages.find(
+        {"session_id": session_id, "user_id": user["id"], "source": "chatbot"}, {"_id": 0}
     ).sort("created_at", 1).to_list(500)
     return msgs
-
 
 # ----------------- Analytics -----------------
 class AnalyticsEvent(BaseModel):
@@ -4568,11 +4569,13 @@ async def support_chat(body: SupportChatInput, request: Request):
     # Rate limit: anonymous LLM endpoint — 10 msgs per IP per 5 min
     await rate_limit(request, "support:chat", max_calls=10, window_seconds=300)
     # session-based (anonymous OK). Store both messages.
-    await db.support_messages.insert_one({
+    await db.ai_chat_messages.insert_one({
         "id": str(uuid.uuid4()),
         "session_id": body.session_id,
+        "user_id": None,
         "role": "user",
         "text": body.message,
+        "source": "support",
         "created_at": now_iso(),
     })
     chat = LlmChat(
@@ -4586,11 +4589,13 @@ async def support_chat(body: SupportChatInput, request: Request):
         logger.exception("support LLM error")
         raise HTTPException(status_code=502, detail="Support assistant is temporarily unavailable. Please try again.")
     reply_text = reply if isinstance(reply, str) else str(reply)
-    await db.support_messages.insert_one({
+    await db.ai_chat_messages.insert_one({
         "id": str(uuid.uuid4()),
         "session_id": body.session_id,
+        "user_id": None,
         "role": "assistant",
         "text": reply_text,
+        "source": "support",
         "created_at": now_iso(),
     })
     lead_captured = "LEAD_CAPTURED" in reply_text

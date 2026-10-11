@@ -115,7 +115,8 @@ COLLECTIONS: Dict[str, Dict[str, Any]] = {
     "patient_profiles": {"description": "Editable patient bio (age, gender, address).", "fields": {}},
     "family_members": {"description": "Family accounts under one patient.", "fields": {}},
     "reminders": {"description": "Medication reminders (push).", "fields": {}},
-    "chat_messages": {"description": "AI chatbot (Claude) message history.", "fields": {}},
+     "chat_messages": {"description": "LEGACY AI chatbot history (replaced by ai_chat_messages).", "fields": {}},
+    "ai_chat_messages": {"description": "Unified in-app AI chat store (source: 'chatbot' | 'support').", "fields": {}},
     "wellness_logs": {"description": "Daily wellness diary entries.", "fields": {}},
     "women_cycles": {"description": "Women's health — period tracking.", "fields": {}},
     "women_pregnancy": {"description": "Women's health — pregnancy tracker.", "fields": {}},
@@ -159,7 +160,7 @@ COLLECTIONS: Dict[str, Dict[str, Any]] = {
     # ─── ADMIN / ANALYTICS / INTERNAL ────────────────────────────────────
     "activity":         {"description": "Immutable admin audit log (`log_activity`).", "fields": {}},
     "analytics":        {"description": "Rollup counters + timestamps for the dashboard.", "fields": {}},
-    "support_messages": {"description": "Contact-form submissions.", "fields": {}},
+     "support_messages": {"description": "LEGACY support-chat messages (replaced by ai_chat_messages).", "fields": {}},
     "feed":             {"description": "Legacy home-screen feed items.", "fields": {}},
     "reports":          {"description": "Admin-side incident reports.", "fields": {}},
 }
@@ -242,6 +243,10 @@ INDEX_SPEC: Dict[str, List[Any]] = {
     ],
     "chat_messages": [
         ([("user_id", ASCENDING), ("at", DESCENDING)], {"name": "user_time"}),
+    ],
+ "ai_chat_messages": [
+        ([("session_id", ASCENDING), ("created_at", ASCENDING)], {"name": "ai_chat_session"}),
+        ([("user_id", ASCENDING), ("created_at", DESCENDING)], {"name": "ai_chat_user"}),
     ],
 }
 
