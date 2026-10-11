@@ -875,7 +875,9 @@ export const api = {
 
   // Diet plan
   generateDietPlan: (body: { goal: string; dosha?: string; conditions?: string[]; vegetarian?: boolean; duration_days?: number; structured?: boolean }) =>
-    request("/diet-plan", "POST", body),
+    // Diet plans stream a full multi-day plan from the LLM — far slower than a
+    // normal CRUD call, so this gets an explicit 180s window instead of the 20s default.
+    request("/diet-plan", "POST", body, true, { timeoutMs: 180000 }),
   myDietPlans: () => request("/diet-plans"),
   prakritiAssess: (body: { answers: ("V" | "P" | "K")[]; age?: number; gender?: string }) =>
     request<{

@@ -15,7 +15,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr, validator
 from typing import List, Optional, Literal, Dict, Any, Tuple
 import uuid
-from datetime import datetime, timedelta, timezone, time
+from datetime import datetime, timedelta, timezone, time as dt_time
 from collections import defaultdict, deque
 import asyncio
 import time
@@ -1626,7 +1626,7 @@ async def create_appointment(body: AppointmentInput, user: dict = Depends(curren
         "doctor_specialty": doctor["specialty"],
         "slot": body.slot,
         "appointment_date": slot_date,
-        "appointment_time": slot_time or time(0, 0),
+        "appointment_time": slot_time or dt_time(0, 0),
         "type": appt_type,
         "symptoms": (body.symptoms or "").strip() or None,
         "reason": body.reason,
@@ -4928,7 +4928,11 @@ async def generate_diet_plan(body: DietPlanInput, request: Request, user: dict =
         system_message="You are an AYUSH nutritionist. Give practical, culturally-aware Indian diet plans grounded in Ayurveda.",
     ).with_model("anthropic", "claude-sonnet-4-5-20250929")
     try:
-        reply = await chat.send_message(UserMessage(text=prompt))
+        # Hard 150s ceiling on the LLM call — a hung provider socket must not
+        # pin this request forever (client allows 180s, so 150s leaves margin).
+        reply = await asyncio.wait_for(chat.send_message(UserMessage(text=prompt)), timeout=150)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Diet plan generation timed out — please try again")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"AI error: {e}")
     text = reply if isinstance(reply, str) else str(reply)
@@ -5456,7 +5460,7 @@ async def _seed_default_slots(doctor_id: int) -> None:
             await _sql_query(
                 "INSERT INTO `appointment_slots` (doctor_id, day_of_week, start_time, end_time, is_available) "
                 "VALUES (%s, %s, %s, %s, 1)",
-                [doctor_id, day, time(9, 0), time(17, 0)],
+                [doctor_id, day, dt_time(9, 0), dt_time(17, 0)],
             )
         except Exception as e:
             logger.warning("default slot seed failed for doctor %s: %s", doctor_id, e)
