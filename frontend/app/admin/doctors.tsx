@@ -5,6 +5,7 @@ import { useRouter } from "expo-router";
 import { COLORS, FONTS, RADIUS, SPACING, SPECIALTIES } from "@/src/theme";
 import { api, absoluteMediaUrl, type AdminVerification, type DoctorVerificationDoc } from "@/src/api";
 import { useI18n } from "@/src/i18n";
+import { PLATFORM_FEE } from "@/src/platformFee";
 import Feather from "@react-native-vector-icons/feather";
 
 type Filter = "all" | "pending" | "verified";
@@ -114,7 +115,7 @@ export default function AdminDoctors() {
     const body = {
       ...form,
       experience_years: parseInt(form.experience_years || "0", 10),
-      consultation_fee: parseInt(form.consultation_fee || "499", 10),
+      consultation_fee: parseInt(form.consultation_fee || "499", 10) + PLATFORM_FEE,
       languages: ["Hindi", "English"],
     };
     setBusy("new");

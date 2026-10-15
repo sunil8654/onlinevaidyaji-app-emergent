@@ -8,6 +8,7 @@ import { api, type DoctorDocumentPayload, type WeeklySlotMap } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import Feather from "@react-native-vector-icons/feather";
 import { CREDENTIAL_TYPES, labelForDocType, pickCredentialFiles } from "@/src/utils/pickCredentials";
+import { PLATFORM_FEE, doctorBaseFee } from "@/src/platformFee";
 
 const LANGS = ["Hindi", "English", "Tamil", "Marathi", "Bengali", "Gujarati", "Urdu", "Kannada", "Telugu", "Malayalam"];
 
@@ -101,7 +102,7 @@ export default function DoctorOnboarding() {
           qualification: d.qualification || "",
           registration_number: d.registration_number || "",
           experience_years: d.experience ? String(d.experience) : "",
-          consultation_fee: d.consultation_fee ? String(d.consultation_fee) : "499",
+          consultation_fee: d.consultation_fee ? String(doctorBaseFee(d.consultation_fee)) : "499",
           bio: d.bio || d.about || "",
           clinic_name: d.clinic_name || "",
           clinic_address: d.clinic_address || "",
@@ -226,7 +227,7 @@ export default function DoctorOnboarding() {
         qualification: form.qualification,
         registration_number: form.registration_number,
         experience: parseInt(form.experience_years || "0", 10),
-        consultation_fee: parseInt(form.consultation_fee || "499", 10),
+        consultation_fee: parseInt(form.consultation_fee || "499", 10) + PLATFORM_FEE,
         bio: form.bio,
         about: form.bio,
         clinic_name: form.clinic_name,
@@ -406,6 +407,11 @@ export default function DoctorOnboarding() {
               <TextInput style={styles.input} value={form.experience_years} onChangeText={(v) => setForm({ ...form, experience_years: v })} keyboardType="numeric" placeholder="8" placeholderTextColor={COLORS.textMuted} testID="do-exp" />
               <Text style={styles.label}>Consultation fee (₹)</Text>
               <TextInput style={styles.input} value={form.consultation_fee} onChangeText={(v) => setForm({ ...form, consultation_fee: v })} keyboardType="numeric" placeholderTextColor={COLORS.textMuted} testID="do-fee" />
+              {parseInt(form.consultation_fee || "0", 10) > 0 && (
+                <Text style={{ color: COLORS.textMuted, fontSize: 12, marginTop: 6 }}>
+                  ₹{parseInt(form.consultation_fee || "0", 10)} + ₹{PLATFORM_FEE} platform fee = ₹{parseInt(form.consultation_fee || "0", 10) + PLATFORM_FEE} total (patients pay this)
+                </Text>
+              )}
               <Text style={styles.label}>Languages you consult in</Text>
               <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
                 {LANGS.map((l) => (

@@ -13,6 +13,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
+import { PLATFORM_FEE, doctorBaseFee } from "@/src/platformFee";
 import {
   api, type DoctorProfilePayload,
   type SpecializationOption, type CityOption,
@@ -116,10 +117,11 @@ export default function EditDoctorProfile() {
           qualification: me.qualification ?? "",
           experience: me.experience ? String(me.experience) : "",
           // Never default to a fee the doctor did not set: an invented price
-          // would be charged to patients.
+          // would be charged to patients. The stored value is the patient total
+          // (doctor fee + platform fee), so subtract the platform fee here.
           consultation_fee:
             me.consultation_fee === null || me.consultation_fee === undefined
-              ? "" : String(me.consultation_fee),
+              ? "" : String(doctorBaseFee(me.consultation_fee)),
           gender: me.gender ?? "",
           system: me.system ?? "",
           specialization_id: me.specialization_id ? String(me.specialization_id) : "",
@@ -229,8 +231,9 @@ export default function EditDoctorProfile() {
       clinic_address: form.clinic_address.trim(),
       registration_number: form.registration_number.trim(),
     };
-    // A blank fee clears it rather than storing a made-up amount.
-    if (form.consultation_fee.trim()) payload.consultation_fee = Number(form.consultation_fee);
+    // A blank fee clears it rather than storing a made-up amount. The stored
+    // value is the patient total, so add the platform fee on top of the doctor's fee.
+    if (form.consultation_fee.trim()) payload.consultation_fee = Number(form.consultation_fee) + PLATFORM_FEE;
     if (form.photo_new) payload.image = form.photo_new;
 
     setBusy(true);
@@ -476,6 +479,11 @@ export default function EditDoctorProfile() {
           <Text style={styles.hint}>
             Leave this blank if you have not set a fee. Patients cannot book you until a fee is set.
           </Text>
+          {Number(form.consultation_fee) > 0 && (
+            <Text style={styles.hint}>
+              ₹{Number(form.consultation_fee)} + ₹{PLATFORM_FEE} platform fee = ₹{Number(form.consultation_fee) + PLATFORM_FEE} total (patients pay this)
+            </Text>
+          )}
 
           {/* ---- consultation modes ---- */}
           <Text style={styles.label}>Consultation modes</Text>

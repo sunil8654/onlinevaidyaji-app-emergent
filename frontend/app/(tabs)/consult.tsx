@@ -397,9 +397,9 @@ const styles = StyleSheet.create({
   },
   chipsWrap: { maxHeight: 56, marginTop: SPACING.md },
   chipsRow: { paddingHorizontal: SPACING.lg, gap: 8, alignItems: "center", height: 56 },
-  chip: { flexShrink: 0, flexDirection: "row", alignItems: "center", height: 36, paddingHorizontal: 12, borderRadius: RADIUS.pill, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, justifyContent: "center" },
+  chip: { flexShrink: 0, flexDirection: "row", alignItems: "center", paddingVertical: 9, paddingHorizontal: 12, borderRadius: RADIUS.pill, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, justifyContent: "center" },
   chipActive: { backgroundColor: COLORS.brand, borderColor: COLORS.brand },
-  chipText: { color: COLORS.textPrimary, fontSize: 13, fontWeight: "600" },
+  chipText: { color: COLORS.textPrimary, fontSize: 13, fontWeight: "600", lineHeight: 18 },
   chipTextActive: { color: COLORS.surface },
   card: {
     flexDirection: "row", alignItems: "center", gap: SPACING.md,

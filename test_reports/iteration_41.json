@@ -1,0 +1,24 @@
+{
+  "summary": "Consult filter-chip clipping fix VERIFIED (frontend-only, web preview https://swasth-daily.preview.emergentagent.com/consult). Style contract confirmed via getComputedStyle: chips have no fixed height (computed 38px = paddingTop 9 + lineHeight 18 + paddingBottom 9 + 2px border), chipText lineHeight 18px / fontSize 13px. Descender chips (Ayurveda/Homeopathy/Yoga) text fully inside chip bounds. Single-row horizontal scroll preserved (uniqueTops=1), 20 doctor cards render below. Tapping 'Ayurveda' refiltered list 61 -> 34 Vaidyas; tapping 'All' restored 61. City chip row also padding-driven at 38px. Zero console errors, zero page errors. Android-native clipping cannot be visually reproduced on web, but the root-cause style contract (no fixed height + lineHeight) is correctly in place at /app/frontend/app/(tabs)/consult.tsx:400,402.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/test_reports/iteration_41.json"],
+  "action_items": [
+    "Optional: visually confirm on a physical Android device/emulator build, since descender clipping is an Android font-metric issue that web preview cannot render."
+  ],
+  "critical_code_review_comments": [
+    "chipsWrap maxHeight 56 / chipsRow height 56 still caps the row; chip at 38px + border fits with ~18px headroom, so no clipping risk at current sizes, but a future larger chipText would be clipped by the row wrapper."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request)", "frontend": "100%"},
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Consult chips: computed height 38px (paddingVertical 9 + lineHeight 18 + border 2). Filter behavior: Ayurveda=34 of 61 Vaidyas. Public URL https://swasth-daily.preview.emergentagent.com serves frontend at root, /consult accessible without login on web preview. Chip testIDs: consult-chip-<lowercase-name>, consult-city-<CityName>, consult-count for total pill.",
+  "rca_of_issue": "Original bug: chip style had fixed height:36 with no vertical padding and chipText had no lineHeight, so Android's font metrics clipped descenders (g, y, p). Fix: paddingVertical: 9 replaces fixed height (height now derives from content) and chipText lineHeight: 18 guarantees consistent text box. Verified via computed styles on web: no fixed height present, padding-driven 38px total."
+}
