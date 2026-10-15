@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, Image,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity,
   ActivityIndicator, Modal, TextInput, KeyboardAvoidingView, Platform, Alert,
 } from "react-native";
+import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
@@ -216,6 +217,8 @@ export default function DoctorDetail() {
             <Image
               source={{ uri: doc.avatar_url || doc.image }}
               style={StyleSheet.absoluteFill}
+              cachePolicy="memory-disk"
+              recyclingKey={String(doc.id)}
               onError={() => setHeroFailed(true)}
             />
           ) : (
@@ -227,6 +230,8 @@ export default function DoctorDetail() {
                     : require("@/assets/images/doctor-placeholder-male.png")
                 }
                 style={styles.heroPlaceholder}
+                cachePolicy="memory-disk"
+                recyclingKey={doc.gender === "female" ? "hero-ph-female" : "hero-ph-male"}
               />
             </View>
           )}

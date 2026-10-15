@@ -1,0 +1,40 @@
+{
+  "summary": "EXPO-IMAGE SWAP REGRESSION CHECK PASSED (frontend-only). Consult list /consult: 61 Vaidyas pill, all 20 page-1 cards render with correct avatars (photos or gender placeholders, all naturalWidth>0, no blank images). Fast scroll down full list + back up + mid-list jump: every visible card's avatar matched its own doctor (own photo URL or correct-gender placeholder) at all 3 scroll positions — no wrong-photo recycling states observed; recyclingKey correctly set in code (remote=uri, placeholders=gender keys). /doctor/12 (Neha Panchal, female, no photo): female placeholder medallion renders (512px asset, loaded). /doctor/11 (Dr AP Singh): photo did NOT 403 this run (Hostinger returned 200, hero showed real photo, naturalWidth=140) — so onError path was verified via Playwright route-abort of api.onlinevaidyaji.com instead: hero fell back to male placeholder medallion (loaded, correct), and with uploads blocked the consult list fell back to correct gender placeholders for every affected card. Zero console errors mentioning expo-image on all screens; zero page errors. The 7 'img not loaded' hits in the first mid-list snapshot were transient (checked 2.5s after a 6001px scroll jump); re-check after 8s settle showed ALL tail doctors (64-71) loaded.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/screenshots_iter40/01_consult_top.png",
+    "/app/test_reports/screenshots_iter40/02_consult_after_scroll.png",
+    "/app/test_reports/screenshots_iter40/03_consult_mid.png",
+    "/app/test_reports/screenshots_iter40/04_doctor12.png",
+    "/app/test_reports/screenshots_iter40/05_doctor11.png",
+    "/app/test_reports/screenshots_iter40/06_doctor11_blocked_fallback.png",
+    "/app/test_reports/screenshots_iter40/07_consult_blocked.png",
+    "/app/test_reports/screenshots_iter40/08_consult_tail.png"
+  ],
+  "action_items": [
+    "No fixes needed — expo-image migration verified working on web preview.",
+    "Note: Dr AP Singh's Hostinger photo (profile-17-...png) currently returns HTTP 200 and displays as a real photo; the male-placeholder fallback only triggers when it actually 403s. Fallback path confirmed working via simulated failure."
+  ],
+  "critical_code_review_comments": [
+    "DoctorAvatar.tsx: expo-image used correctly — cachePolicy='memory-disk' on both branches, recyclingKey={uri} for remote and fixed gender keys for placeholders, useEffect resets `failed` on uri change so recycled cells retry the new doctor's photo. Fallback chain intact.",
+    "doctor/[id].tsx: RN Image import fully removed; hero uses expo-image with recyclingKey=String(doc.id); heroFailed onError path preserved; placeholder medallion has its own gender recycling keys.",
+    "consult.tsx untouched by this change; DoctorAvatar usage compatible — no prop changes needed.",
+    "Verified on web: expo-image (SDK 57, ~57.0.4) renders <img> with eager loading; bundled placeholder assets load fine via Metro /assets/ path; no unsupported-prop console warnings for cachePolicy/recyclingKey on web."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (frontend-only test)", "frontend": "100%"},
+  "seed_data_creation": "None — read-only verification plus request interception (route.abort on api.onlinevaidyaji.com) to simulate 403s; no data written.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "expo-image swap verified. Test method notes: (1) hostinger uploads no longer reliably 403 — to exercise onError fallback, use page.route('**/api.onlinevaidyaji.com/**', abort); (2) FlatList on web keeps many items in DOM after a fast scroll — images just entering viewport can show naturalWidth=0 for a few seconds; wait >=6s before flagging blank avatars; (3) public URL https://swasth-daily.preview.emergentagent.com serves frontend at root and API at /api; (4) ERR_FAILED console errors during blocked-mode tests are self-inflicted by route.abort, not app bugs.",
+  "rca_of_issue": "No bugs found. Transient mid-list naturalWidth=0 readings RCA: Playwright jumped a 6001px web FlatList scroller to its midpoint; newly-entering-viewport <img> elements (expo-image) had not finished fetching remote Hostinger/Google photos or decoding the bundled placeholder at the 2.5s check. Confirmed transient: after unblocking + 8s settle, all tail doctors 64-71 showed loaded images (own photos / correct placeholder)."
+}
