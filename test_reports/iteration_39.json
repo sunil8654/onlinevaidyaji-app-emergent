@@ -1,0 +1,40 @@
+{
+  "summary": "PERFORMANCE REGRESSION CHECK PASSED. Backend timing via public URL: /api/doctors cold 1.0s / cached 0.083s; ?system=ayurveda cold 0.99s / cached 0.13s; fresh-uncached query 0.56s; /api/doctors/11 0.95s, /doctors/12 0.97s — all within targets (cold <3s, cache-hit ~instant server-side; the 80-130ms on cache hits is ingress network latency, not server time). Data correctness intact: 20 items/page, total 61, every item has name/specialty/rating/review_count populated and specializations as array. pytest 6/6 passed. Frontend: /(tabs)/consult rendered doctor cards in 1.85s (count pill '61 Vaidyas', fees with ₹, gender placeholder avatars, no hanging skeletons); /doctor/12 Neha Panchal profile in 1.65s with female placeholder hero, fee row ₹800, book button. NOTE: initial pytest run showed a 22.8s 'cold' call — RCA: uvicorn runs with --reload watching /app/backend, and creating my new test file at /app/backend/tests/test_doctor_perf_regression.py triggered a mid-test backend restart (remote-MySQL ensure_indexes at startup). Artifact of the test harness, not a real regression; rerun passed clean.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/doctors", "issue": "uvicorn --reload watches /app/backend including tests/ — any test-file write triggers a full backend restart (~40-60s with remote-MySQL index sync), dropping in-memory caches and stalling in-flight requests. Consider excluding tests/ from watch dirs or disabling reload in this environment."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_doctor_perf_regression.py",
+    "/app/test_reports/pytest/pytest_results_iter39_perf.xml",
+    "/app/test_reports/screenshots_iter39/consult_list.png",
+    "/app/test_reports/screenshots_iter39/doctor_12_profile.png"
+  ],
+  "action_items": [
+    "Optional: add --reload-exclude 'tests/*' (or move tests out of the watched tree) so future test runs don't restart the backend mid-test.",
+    "No functional fixes needed — performance fixes verified working."
+  ],
+  "critical_code_review_comments": [
+    "server.py _doctor_dir_page: COUNT+SELECT parallelized via asyncio.gather, 30s TTL cache keyed by (system,city,q,page,page_size) with 200-entry eviction — correct and matches spec.",
+    "serialize_doctor_public ctx=None path now reuses _prefetch_doctor_context (4 concurrent queries) — verified /api/doctors/11 and /12 respond <1s with correct data.",
+    "msdb.py pool_recycle present (line 515) — no dead-idle-connection stalls observed across the test run.",
+    "Verified serializer data shape survived the refactor: specialty resolved from batched primary_specs map, rating/review_count from batched reviews, status from batched doctor_status."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_doctor_perf_regression.py"
+  ],
+  "success_rate": {"backend": "100% (6/6 pytest)", "frontend": "100%"},
+  "seed_data_creation": "None — read-only verification; cache-busting query q=zzperfA/zzperfB return empty result sets, no data written.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend env key is EXPO_PUBLIC_BACKEND_URL (not EXPO_BACKEND_URL) = https://swasth-daily.preview.emergentagent.com. WARNING: uvicorn --reload watches /app/backend — creating/editing ANY file under /app/backend (including tests/) restarts the backend and invalidates the in-memory 30s directory cache; wait ~60s after writing test files before timing tests. Cache-hit latency via public URL floors at ~80-130ms due to ingress; server-side hit is ~2ms. Doctor 12 = Neha Panchal (female, ₹800, Women's Health).",
+  "rca_of_issue": "Initial 22.8s 'cold' /api/doctors reading was a test-harness artifact: WatchFiles reloader detected the newly created tests/test_doctor_perf_regression.py and restarted uvicorn mid-request (startup pays remote-MySQL ensure_indexes). Confirmed via supervisor logs ('WatchFiles detected changes in tests/test_doctor_perf_regression.py. Reloading...'). Mitigation: wait for restart to settle, re-run — all 6 tests passed with cold ~1.0s / cached ~0.08-0.13s."
+}

@@ -386,6 +386,7 @@ _fill_re = re.compile(r"^([a-z]+)")
 _pool: Optional[asyncmy.Pool] = None
 _pool_loop: Optional[asyncio.AbstractEventLoop] = None
 _pool_lock = asyncio.Lock()
+_keepalive_task: Optional[asyncio.Task] = None
 _table_cache: Dict[str, Optional[Dict[str, Any]]] = {}
 # Pool sizing. The old code funnelled every statement through ONE connection
 # guarded by a global asyncio.Lock, so requests were executed strictly one at a
@@ -431,9 +432,37 @@ async def _open_conn() -> asyncmy.connection.Connection:
     return conn
 
 
+# Hostinger kills idle connections after wait_timeout=20s (verified on
+# srv1273.hstgr.io). Ping every pooled connection well below that so requests
+# arriving after a quiet period still find warm connections. The pool is FIFO
+# (acquire pops left, release appends right), so DB_POOL_MIN successive
+# acquire/release cycles touch every free connection.
+_KEEPALIVE_INTERVAL = 10
+
+
+async def _pool_keepalive() -> None:
+    while True:
+        await asyncio.sleep(_KEEPALIVE_INTERVAL)
+        pool = _pool
+        if pool is None:
+            continue
+        try:
+            for _ in range(DB_POOL_MIN):
+                async with pool.acquire() as conn:
+                    async with conn.cursor() as cur:
+                        await cur.execute("SELECT 1")
+        except Exception:
+            # A dropped connection is not fatal: pool_recycle rebuilds the
+            # pool on the next real request.
+            pass
+
+
 async def _discard_pool() -> None:
     """Drop the cached pool. Safe to call when it is already unusable."""
-    global _pool, _pool_loop
+    global _pool, _pool_loop, _keepalive_task
+    task, _keepalive_task = _keepalive_task, None
+    if task is not None:
+        task.cancel()
     pool, _pool, _pool_loop = _pool, None, None
     if pool is None:
         return
@@ -453,7 +482,7 @@ async def _get_pool() -> asyncmy.Pool:
     discarded and rebuilt instead of handing back connections that can never be
     used again.
     """
-    global _pool, _pool_loop
+    global _pool, _pool_loop, _keepalive_task
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:  # pragma: no cover - only outside async context
@@ -477,8 +506,19 @@ async def _get_pool() -> asyncmy.Pool:
                     maxsize=DB_POOL_MAX,
                     init_command="SET FOREIGN_KEY_CHECKS=0",
                     connect_timeout=DB_CONNECT_TIMEOUT,
+                    # Recycle connections idle >15s: Hostinger's MySQL
+                    # wait_timeout is 20s (verified on srv1273.hstgr.io), so
+                    # any pooled connection idle longer than ~20s is already
+                    # dead. Borrowing it stalls the request ~8s while the dead
+                    # socket fails. Recycling well below wait_timeout keeps the
+                    # pool honest; the old value of 280 never triggered here.
+                    pool_recycle=15,
                 )
                 _pool_loop = loop
+                # Keep the fresh pool above Hostinger's 20s wait_timeout so
+                # later requests never borrow a server-killed connection.
+                if _keepalive_task is None or _keepalive_task.done():
+                    _keepalive_task = asyncio.ensure_future(_pool_keepalive())
     return _pool
 
 

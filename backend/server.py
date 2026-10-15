@@ -1014,6 +1014,13 @@ async def _json_column_usable(table: str) -> bool:
     return "data" in (cols or {})
 
 
+# Short TTL cache for the public doctor directory. The list changes rarely
+# (admin approvals), but it is the app's most-hit endpoint and every query
+# pays ~215ms RTT to the remote MySQL — a 30s cache turns repeat loads ~instant.
+_DIR_CACHE_TTL = 30.0
+_dir_cache: Dict[tuple, Tuple[float, Dict[str, Any]]] = {}
+
+
 async def _doctor_dir_page(
     system: Optional[str],
     city: Optional[str],
@@ -1022,46 +1029,62 @@ async def _doctor_dir_page(
     page_size: int,
 ) -> Dict[str, Any]:
     """One page of the public doctor directory, filtered + enriched in SQL."""
-    where, params = await _doctor_dir_where(system, city, search)
-
-    count_row = await _sql_query(
-        "SELECT COUNT(*) AS n FROM `doctors` d WHERE " + where, params
-    )
-    total = int((count_row[0] or {}).get("n", 0) if count_row else 0)
-
     page = max(1, int(page or 1))
     page_size = max(1, min(int(page_size or 20), 50))
+
+    cache_key = (system, city, search, page, page_size)
+    hit = _dir_cache.get(cache_key)
+    if hit and (time.monotonic() - hit[0]) < _DIR_CACHE_TTL:
+        return hit[1]
+    if len(_dir_cache) > 200:  # free-text `q` keys — evict en masse, they re-cache fast
+        _dir_cache.clear()
+
+    where, params = await _doctor_dir_where(system, city, search)
+
     offset = (page - 1) * page_size
 
-    rows = await _sql_query(
-        "SELECT d.* FROM `doctors` d WHERE "
-        + where
-        # ORDER BY d.id alone is deliberate: idx_doctors_approved is
-        # (is_approved, is_restricted, id), so equality on the first two columns
-        # leaves MySQL already walking ids in order - no filesort. Sorting by
-        # is_available_online here looked smarter but it is a capability flag
-        # (almost always 1) and the real "online now" dot is a heartbeat that
-        # can only be computed after the join, so it never sorted correctly.
-        + " ORDER BY d.id LIMIT %s OFFSET %s",
-        params + [page_size, offset],
+    # COUNT and the page SELECT are independent — run them in parallel so the
+    # remote-MySQL RTT (~215ms each) is paid once, not twice.
+    count_rows, rows = await asyncio.gather(
+        _sql_query(
+            "SELECT COUNT(*) AS n FROM `doctors` d WHERE " + where, params
+        ),
+        _sql_query(
+            "SELECT d.* FROM `doctors` d WHERE "
+            + where
+            # ORDER BY d.id alone is deliberate: idx_doctors_approved is
+            # (is_approved, is_restricted, id), so equality on the first two columns
+            # leaves MySQL already walking ids in order - no filesort. Sorting by
+            # is_available_online here looked smarter but it is a capability flag
+            # (almost always 1) and the real "online now" dot is a heartbeat that
+            # can only be computed after the join, so it never sorted correctly.
+            + " ORDER BY d.id LIMIT %s OFFSET %s",
+            params + [page_size, offset],
+        ),
     )
+    total = int((count_rows[0] or {}).get("n", 0) if count_rows else 0)
 
     # Only this page gets the blob merged + the users/specializations join.
     coll = db.doctors
     docs = [coll._db.row_to_doc(r, "doctors") for r in rows]
     docs = await coll.enrich_docs(docs)
 
-    # One batched prefetch (3 queries for the whole page) instead of 3 per
+    # One batched prefetch (4 queries for the whole page) instead of 3 per
     # doctor, so the directory stays a constant number of round trips.
-    ctx = await _prefetch_doctor_context([d.get("id") for d in docs])
+    ctx = await _prefetch_doctor_context(
+        [d.get("id") for d in docs],
+        [d.get("specialization_id") for d in docs],
+    )
     items = [await serialize_doctor_public(d, ctx) for d in docs]
-    return {
+    result = {
         "items": items,
         "total": total,
         "page": page,
         "page_size": page_size,
         "has_more": offset + len(items) < total,
     }
+    _dir_cache[cache_key] = (time.monotonic(), result)
+    return result
 
 
 def _apply_public_projection(d: Dict[str, Any]) -> Dict[str, Any]:
@@ -1211,54 +1234,80 @@ async def _doctor_ratings(doctor_id: str):
     return None
 
 
-async def _prefetch_doctor_context(doctor_ids: List[Any]) -> Dict[str, Any]:
+async def _prefetch_doctor_context(doctor_ids: List[Any], spec_ids: Optional[List[Any]] = None) -> Dict[str, Any]:
     """Batch the per-doctor lookups for a whole page in 3 queries.
 
     Without this the directory endpoint would issue 3 extra round trips per
     doctor (specializations, reviews, status), which is exactly the N+1 pattern
     that made the list slow to begin with.
+
+    `spec_ids` are the doctors.primary specialization ids for the same page —
+    fetched here in ONE query (ctx["primary_specs"]) so serialize_doctor_public
+    does not pay one remote round trip per doctor to resolve them.
     """
     ids = [str(i) for i in doctor_ids if i is not None]
-    ctx: Dict[str, Any] = {"specs": {}, "reviews": {}, "status": {}}
+    sids = [str(s) for s in (spec_ids or []) if s is not None]
+    ctx: Dict[str, Any] = {"specs": {}, "reviews": {}, "status": {}, "primary_specs": {}}
     if not ids:
         return ctx
     qs = ",".join(["%s"] * len(ids))
 
-    try:
-        rows = await _sql_query(
-            "SELECT ds.doctor_id, s.id, s.name, s.icon "
-            "FROM `doctor_specializations` ds "
-            "JOIN `specializations` s ON s.id = ds.specialization_id "
-            "WHERE ds.doctor_id IN (%s)" % qs, ids,
-        )
-        for r in rows:
-            ctx["specs"].setdefault(str(r.get("doctor_id")), []).append(
-                {"id": r.get("id"), "name": r.get("name"), "icon": r.get("icon")}
+    # These three are independent — run them concurrently so the remote-MySQL
+    # RTT (~215ms each) is paid once instead of three times.
+    async def _load_specs() -> None:
+        try:
+            rows = await _sql_query(
+                "SELECT ds.doctor_id, s.id, s.name, s.icon "
+                "FROM `doctor_specializations` ds "
+                "JOIN `specializations` s ON s.id = ds.specialization_id "
+                "WHERE ds.doctor_id IN (%s)" % qs, ids,
             )
-    except Exception:
-        pass
+            for r in rows:
+                ctx["specs"].setdefault(str(r.get("doctor_id")), []).append(
+                    {"id": r.get("id"), "name": r.get("name"), "icon": r.get("icon")}
+                )
+        except Exception:
+            pass
 
-    try:
-        rows = await _sql_query(
-            "SELECT doctor_id, COUNT(*) AS c, COALESCE(AVG(rating), 0) AS avg_rating "
-            "FROM `reviews` WHERE is_approved = 1 AND doctor_id IN (%s) "
-            "GROUP BY doctor_id" % qs, ids,
-        )
-        for r in rows:
-            ctx["reviews"][str(r.get("doctor_id"))] = (
-                int(r.get("c") or 0), _to_float(r.get("avg_rating"), 0.0) or 0.0
+    async def _load_reviews() -> None:
+        try:
+            rows = await _sql_query(
+                "SELECT doctor_id, COUNT(*) AS c, COALESCE(AVG(rating), 0) AS avg_rating "
+                "FROM `reviews` WHERE is_approved = 1 AND doctor_id IN (%s) "
+                "GROUP BY doctor_id" % qs, ids,
             )
-    except Exception:
-        pass
+            for r in rows:
+                ctx["reviews"][str(r.get("doctor_id"))] = (
+                    int(r.get("c") or 0), _to_float(r.get("avg_rating"), 0.0) or 0.0
+                )
+        except Exception:
+            pass
 
-    try:
-        rows = await _sql_query(
-            "SELECT doctor_id, status FROM `doctor_status` WHERE doctor_id IN (%s)" % qs, ids
-        )
-        for r in rows:
-            ctx["status"].setdefault(str(r.get("doctor_id")), r.get("status") or "offline")
-    except Exception:
-        pass
+    async def _load_status() -> None:
+        try:
+            rows = await _sql_query(
+                "SELECT doctor_id, status FROM `doctor_status` WHERE doctor_id IN (%s)"
+                " ORDER BY updated_at DESC" % qs, ids
+            )
+            for r in rows:
+                ctx["status"].setdefault(str(r.get("doctor_id")), r.get("status") or "offline")
+        except Exception:
+            pass
+
+    async def _load_primary_specs() -> None:
+        if not sids:
+            return
+        try:
+            sq = ",".join(["%s"] * len(sids))
+            rows = await _sql_query(
+                "SELECT id, name FROM `specializations` WHERE id IN (%s)" % sq, sids,
+            )
+            for r in rows:
+                ctx["primary_specs"][str(r.get("id"))] = r.get("name")
+        except Exception:
+            pass
+
+    await asyncio.gather(_load_specs(), _load_reviews(), _load_status(), _load_primary_specs())
 
     return ctx
 
@@ -1304,45 +1353,26 @@ async def serialize_doctor_public(
     """
     doctor_id = str(d.get("id"))
 
-    if ctx is not None:
-        specs = ctx.get("specs", {}).get(doctor_id, [])
-        review_pair = ctx.get("reviews", {}).get(doctor_id)
-        status = ctx.get("status", {}).get(doctor_id) or "offline"
-    else:
-        specs = []
-        try:
-            rows = await _sql_query(
-                "SELECT s.id, s.name, s.icon FROM `doctor_specializations` ds "
-                "JOIN `specializations` s ON s.id = ds.specialization_id "
-                "WHERE ds.doctor_id = %s",
-                [doctor_id],
-            )
-            specs = [{"id": r.get("id"), "name": r.get("name"), "icon": r.get("icon")} for r in rows]
-        except Exception:
-            specs = []
-        review_pair = await _doctor_ratings(doctor_id)
-        status = "offline"
-        try:
-            r = await _sql_query(
-                "SELECT status FROM `doctor_status` WHERE doctor_id = %s ORDER BY updated_at DESC",
-                [doctor_id],
-            )
-            if r:
-                status = r[0].get("status") or "offline"
-        except Exception:
-            pass
+    if ctx is None:
+        # Single-doctor path (profile page): reuse the shared batching helper —
+        # one call, four concurrent queries — instead of up to four serial
+        # remote round trips (~215ms each to the remote MySQL).
+        ctx = await _prefetch_doctor_context(
+            [doctor_id], [d.get("specialization_id")]
+        )
+
+    specs = ctx.get("specs", {}).get(doctor_id, [])
+    review_pair = ctx.get("reviews", {}).get(doctor_id)
+    status = ctx.get("status", {}).get(doctor_id) or "offline"
 
     primary = d.get("specialty")
-    try:
-        if d.get("specialization_id"):
-            r = await _sql_query(
-                "SELECT id, name, icon FROM `specializations` WHERE id = %s",
-                [d.get("specialization_id")],
-            )
-            if r:
-                primary = r[0].get("name")
-    except Exception:
-        pass
+    if d.get("specialization_id"):
+        # Both paths resolve from the prefetched map — a missing key means the
+        # specialization row is gone; fall through to specialty/system and
+        # never query per doctor (that N+1 added ~215ms per row to list loads).
+        batched = ctx.get("primary_specs", {}).get(str(d.get("specialization_id")))
+        if batched:
+            primary = batched
     if not primary and d.get("system"):
         primary = str(d.get("system")).title()
 
