@@ -215,3 +215,7 @@ Every appointment prescription can now be downloaded as a branded, single-page A
 - R8 minify + shrinkResources for release builds via expo-build-properties (app.json)
 - Orientation unlocked ("default"); screens using static Dimensions.get moved to useWindowDimensions
 - Edge-to-edge: SDK 57 enforces it; Material 1.13.0 comes via expo-router; ComingSoon screen uses safe-area insets
+
+## Wellness Feed card detail (June 2026) — DONE
+- Feed tip/remedy/yoga cards now open /feed-item/[id] (full body, hero image, "More like this")
+- New backend GET /api/feed/{item_id} (item + related same-category items, 404 if missing)

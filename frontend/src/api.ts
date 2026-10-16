@@ -796,6 +796,7 @@ export const api = {
   deleteReminder: (id: string) => request(`/reminders/${id}`, "DELETE"),
 
   feed: () => request("/feed", "GET", undefined, false),
+  feedItem: (id: string) => request<any>(`/feed/${encodeURIComponent(id)}`, "GET", undefined, false),
   dailyTip: () => request("/daily-tip", "GET", undefined, false),
 
   listChallenges: () => request("/challenges"),

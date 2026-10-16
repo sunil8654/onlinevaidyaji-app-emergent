@@ -3213,6 +3213,18 @@ async def get_feed():
     return items
 
 
+@api_router.get("/feed/{item_id}")
+async def get_feed_item(item_id: str):
+    item = await db.feed.find_one({"id": item_id}, {"_id": 0})
+    if not item:
+        raise HTTPException(status_code=404, detail="Not found")
+    related = await db.feed.find(
+        {"category": item.get("category")}, {"_id": 0}
+    ).sort("order", 1).to_list(20)
+    item["related"] = [r for r in related if str(r.get("id")) != str(item_id)][:4]
+    return item
+
+
 @api_router.get("/daily-tip")
 async def daily_tip():
     # Deterministic tip-of-day based on day-of-year

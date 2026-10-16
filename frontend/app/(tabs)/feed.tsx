@@ -99,7 +99,12 @@ export default function Feed() {
             </View>
           </TouchableOpacity>
         ) : (
-          <View style={styles.card} testID={`feed-item-${item.id}`}>
+          <TouchableOpacity
+            style={styles.card}
+            activeOpacity={0.9}
+            onPress={() => router.push(`/feed-item/${item.id}`)}
+            testID={`feed-item-${item.id}`}
+          >
             <ImageBackground source={{ uri: item.image_url }} style={styles.img} imageStyle={{ borderRadius: RADIUS.lg }}>
               <View style={styles.badge}>
                 <Feather name={item.category === "yoga" ? "wind" : item.category === "remedy" ? "coffee" : "sun"} size={12} color={COLORS.surface} />
@@ -108,9 +113,10 @@ export default function Feed() {
             </ImageBackground>
             <View style={styles.pad}>
               <Text style={styles.cardTitle}>{item.title}</Text>
-              <Text style={styles.cardBody}>{item.body}</Text>
+              <Text style={styles.cardBody} numberOfLines={3}>{item.body}</Text>
+              <Text style={styles.readMore}>Read more →</Text>
             </View>
-          </View>
+          </TouchableOpacity>
         )}
         ListEmptyComponent={<Text style={styles.empty}>{isBlog ? "No blog posts yet — pull to refresh." : "No items yet — pull to refresh."}</Text>}
       />
@@ -152,5 +158,6 @@ const styles = StyleSheet.create({
   pad: { padding: SPACING.md },
   cardTitle: { fontFamily: FONTS.heading, fontSize: 22, color: COLORS.textPrimary, lineHeight: 26 },
   cardBody: { color: COLORS.textSecondary, marginTop: 6, fontSize: 14, lineHeight: 20 },
+  readMore: { color: COLORS.brand, marginTop: SPACING.sm, fontSize: 13, fontWeight: "700" },
   empty: { color: COLORS.textSecondary, textAlign: "center", marginTop: SPACING.xl },
 });
