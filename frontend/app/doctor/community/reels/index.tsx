@@ -1,7 +1,7 @@
 // Reels — vertical swipe feed of doctor short videos.
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  View, Text, StyleSheet, FlatList, Dimensions, TouchableOpacity, ActivityIndicator,
+  View, Text, StyleSheet, FlatList, useWindowDimensions, TouchableOpacity, ActivityIndicator,
   Image, Alert,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -10,10 +10,10 @@ import { VideoView, useVideoPlayer } from "expo-video";
 import { COLORS, FONTS, SPACING } from "@/src/theme";
 import { api } from "@/src/api";
 
-const { width, height } = Dimensions.get("window");
-const REEL_H = height - 60;  // leave room for top bar
 
 function ReelItem({ item, active, onLikeToggle, onReport }: any) {
+  const { width, height } = useWindowDimensions();
+  const REEL_H = height - 60;  // leave room for top bar
   const player = useVideoPlayer(item.video_url, (p) => {
     p.loop = true;
     p.muted = false;
@@ -47,7 +47,7 @@ function ReelItem({ item, active, onLikeToggle, onReport }: any) {
   }
 
   return (
-    <View style={styles.reel}>
+    <View style={[styles.reel, { width, height: REEL_H }]}>
       <VideoView player={player} style={StyleSheet.absoluteFill} contentFit="cover" nativeControls={false} />
 
       {/* Bottom info */}
@@ -96,6 +96,8 @@ function ReelItem({ item, active, onLikeToggle, onReport }: any) {
 }
 
 export default function ReelsFeed() {
+  const { height } = useWindowDimensions();
+  const REEL_H = height - 60;  // leave room for top bar
   const { start } = useLocalSearchParams<{ start?: string }>();
   const router = useRouter();
   const [items, setItems] = useState<any[]>([]);
@@ -200,7 +202,7 @@ const styles = StyleSheet.create({
     position: "absolute", top: 0, left: 0, right: 0, zIndex: 10,
   },
   topTitle: { color: COLORS.surface, fontFamily: FONTS.heading, fontSize: 20 },
-  reel: { width, height: REEL_H, backgroundColor: "#000" },
+  reel: { backgroundColor: "#000" },
   bottomBar: {
     position: "absolute", left: SPACING.md, right: 72, bottom: 24,
     gap: SPACING.sm,

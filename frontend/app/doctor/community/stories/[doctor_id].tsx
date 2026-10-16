@@ -1,7 +1,7 @@
 // Story viewer — full-screen carousel with progress bars, tap-to-advance, hold-to-pause.
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  View, Text, StyleSheet, TouchableOpacity, Image, Dimensions, ActivityIndicator,
+  View, Text, StyleSheet, TouchableOpacity, Image, useWindowDimensions, ActivityIndicator,
   Alert, Pressable,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -11,7 +11,6 @@ import { COLORS, FONTS, SPACING } from "@/src/theme";
 import { api } from "@/src/api";
 
 const STORY_DURATION_MS = 5000;
-const { width, height } = Dimensions.get("window");
 
 function fmtWhen(iso?: string) {
   if (!iso) return "";
@@ -29,6 +28,7 @@ function fmtWhen(iso?: string) {
 export default function StoryViewer() {
   const { doctor_id } = useLocalSearchParams<{ doctor_id: string }>();
   const router = useRouter();
+  const { width, height } = useWindowDimensions();
   const [author, setAuthor] = useState<any>(null);
   const [stories, setStories] = useState<any[]>([]);
   const [idx, setIdx] = useState(0);
@@ -192,7 +192,7 @@ export default function StoryViewer() {
 
       {/* Story media + tap targets */}
       <View style={{ flex: 1 }}>
-        <Image source={{ uri: currentStory.media_url }} style={styles.media} resizeMode="contain" />
+        <Image source={{ uri: currentStory.media_url }} style={[styles.media, { width, height: height * 0.75 }]} resizeMode="contain" />
 
         {/* Tap left = prev, tap right = next */}
         <Pressable
@@ -252,7 +252,7 @@ const styles = StyleSheet.create({
   headerName: { color: COLORS.surface, fontSize: 14, fontWeight: "700" },
   headerTime: { color: "rgba(255,255,255,0.75)", fontSize: 11, marginTop: 2 },
   iconBtn: { padding: 6 },
-  media: { flex: 1, width, height: height * 0.75 },
+  media: { flex: 1 },
   tapZone: { position: "absolute", top: 0, bottom: 0 },
   captionBar: {
     position: "absolute", left: 0, right: 0, bottom: 40,

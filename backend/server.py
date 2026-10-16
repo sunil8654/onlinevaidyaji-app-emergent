@@ -10,6 +10,7 @@ import re
 import base64
 import mimetypes
 import json
+import html as _html
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr, validator
@@ -3220,6 +3221,99 @@ async def daily_tip():
         return {"title": "Drink warm water with lemon", "body": "Kickstart your digestion the AYUSH way."}
     day = datetime.now(timezone.utc).timetuple().tm_yday
     return tips[day % len(tips)]
+
+
+# ----------------- Blog (WordPress) -----------------
+# The website renders its blog straight from blog.onlinevaidyaji.com's WordPress
+# GraphQL endpoint. The app reuses the same source through this small proxy so
+# the mobile feed shows the exact same posts (single, cacheable origin).
+WP_GRAPHQL_URL = os.environ.get(
+    "WORDPRESS_GRAPHQL_URL", "https://blog.onlinevaidyaji.com/graphql"
+)
+
+
+def _wp_strip_html(value: str) -> str:
+    """WordPress titles/excerpts arrive as HTML — flatten them to plain text."""
+    text = re.sub(r"<[^>]+>", " ", value or "")
+    text = _html.unescape(text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _wp_summary(node: Dict[str, Any]) -> Dict[str, Any]:
+    """Map a WordPress GraphQL post node to the shape the app feed expects."""
+    image = ((node.get("featuredImage") or {}).get("node") or {}).get("sourceUrl")
+    cats = (node.get("categories") or {}).get("nodes") or []
+    author = ((node.get("author") or {}).get("node") or {}).get("name")
+    return {
+        "id": str(node.get("id")),
+        "title": _wp_strip_html(node.get("title") or ""),
+        "slug": node.get("slug"),
+        "date": node.get("date"),
+        "excerpt": _wp_strip_html(node.get("excerpt") or ""),
+        "image_url": image,
+        "category": (cats[0].get("name") if cats else None) or "Blog",
+        "author": author,
+    }
+
+
+async def _wp_graphql(query: str, variables: Optional[Dict[str, Any]] = None):
+    """POST a GraphQL query to the WordPress blog; returns `data` or None."""
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                WP_GRAPHQL_URL, json={"query": query, "variables": variables or {}}
+            )
+        if resp.status_code != 200:
+            return None
+        body = resp.json()
+        if body.get("errors"):
+            return None
+        return body.get("data")
+    except Exception:
+        return None
+
+
+_WP_LIST_QUERY = """
+query GetPosts($first: Int!) {
+  posts(first: $first) {
+    nodes {
+      id title slug date excerpt
+      categories { nodes { name slug } }
+      featuredImage { node { sourceUrl altText } }
+      author { node { name } }
+    }
+  }
+}
+"""
+
+_WP_POST_QUERY = """
+query GetPostBySlug($slug: ID!) {
+  post(id: $slug, idType: SLUG) {
+    id title slug date content excerpt
+    categories { nodes { name slug } }
+    featuredImage { node { sourceUrl altText } }
+    author { node { name } }
+  }
+}
+"""
+
+
+@api_router.get("/wordpress/posts")
+async def wordpress_posts(first: int = 20):
+    data = await _wp_graphql(_WP_LIST_QUERY, {"first": max(1, min(int(first or 20), 50))})
+    nodes = ((data or {}).get("posts") or {}).get("nodes") or []
+    return {"posts": [_wp_summary(n) for n in nodes]}
+
+
+@api_router.get("/wordpress/posts/{slug}")
+async def wordpress_post(slug: str):
+    data = await _wp_graphql(_WP_POST_QUERY, {"slug": slug})
+    node = (data or {}).get("post")
+    if not node:
+        raise HTTPException(status_code=404, detail="Post not found")
+    post = _wp_summary(node)
+    post["content"] = node.get("content") or ""
+    return post
 
 
 # ----------------- Challenges -----------------

@@ -2,19 +2,19 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, RefreshControl,
-  ActivityIndicator, Alert, Dimensions,
+  ActivityIndicator, Alert, useWindowDimensions,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import Feather from "@react-native-vector-icons/feather";
 import { COLORS, FONTS, RADIUS, SPACING } from "@/src/theme";
 import { api } from "@/src/api";
 
-const { width } = Dimensions.get("window");
-const CELL = Math.floor((width - 32 - 4) / 3);
 
 export default function DoctorProfile() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const { width } = useWindowDimensions();
+  const CELL = Math.floor((width - 32 - 4) / 3);
   const [profile, setProfile] = useState<any>(null);
   const [posts, setPosts] = useState<any[]>([]);
   const [reels, setReels] = useState<any[]>([]);
@@ -238,7 +238,7 @@ export default function DoctorProfile() {
             {posts.map((p) => (
               <TouchableOpacity
                 key={p.id}
-                style={styles.cell}
+                style={[styles.cell, { width: CELL, height: CELL }]}
                 onPress={() => router.push({ pathname: "/doctor/community/post/[id]", params: { id: p.id } })}
                 testID={`dp-post-${p.id}`}
               >
@@ -271,7 +271,7 @@ export default function DoctorProfile() {
             {reels.map((r) => (
               <TouchableOpacity
                 key={r.id}
-                style={styles.cell}
+                style={[styles.cell, { width: CELL, height: CELL }]}
                 onPress={() => router.push({ pathname: "/doctor/community/reels", params: { start: r.id } })}
                 testID={`dp-reel-${r.id}`}
               >
@@ -421,7 +421,7 @@ const styles = StyleSheet.create({
   tabPillText: { color: COLORS.textPrimary, fontWeight: "700", fontSize: 12 },
   tabPillTextActive: { color: COLORS.surface },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: 2, paddingHorizontal: SPACING.md },
-  cell: { width: CELL, height: CELL, position: "relative", backgroundColor: COLORS.surfaceAlt },
+  cell: { position: "relative", backgroundColor: COLORS.surfaceAlt },
   cellImg: { width: "100%", height: "100%" },
   cellText: { padding: SPACING.sm, backgroundColor: COLORS.brand, alignItems: "center", justifyContent: "center" },
   cellCaption: { color: COLORS.surface, fontSize: 11, lineHeight: 14, textAlign: "center" },

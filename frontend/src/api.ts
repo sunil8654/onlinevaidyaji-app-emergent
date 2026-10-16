@@ -67,6 +67,19 @@ export const TOKEN_KEY = "vaidyaji.token";
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
+/** A post from the WordPress blog (blog.onlinevaidyaji.com), proxied by the
+ *  backend so the app shows the same posts as the website. */
+export type WordPressPost = {
+  id: string;
+  title: string;
+  slug: string;
+  date?: string;
+  excerpt?: string;
+  image_url?: string | null;
+  category?: string;
+  author?: string | null;
+};
+
 /** Public doctor as rendered by the Book Consultation cards and the
  *  Doctor Full Profile screen. Every field is a real column on `doctors` or a
  *  real join; `null`/absent means "not recorded", never a placeholder. */
@@ -872,6 +885,12 @@ export const api = {
   // Blogs
   listBlogs: () => request("/blogs", "GET", undefined, false),
   getBlog: (id: string) => request(`/blogs/${id}`, "GET", undefined, false),
+
+  // WordPress blog (same source the website renders)
+  wpPosts: (first = 20) =>
+    request<{ posts: WordPressPost[] }>(`/wordpress/posts?first=${first}`, "GET", undefined, false),
+  wpPost: (slug: string) =>
+    request<WordPressPost & { content: string }>(`/wordpress/posts/${encodeURIComponent(slug)}`, "GET", undefined, false),
 
   // Diet plan
   generateDietPlan: (body: { goal: string; dosha?: string; conditions?: string[]; vegetarian?: boolean; duration_days?: number; structured?: boolean }) =>

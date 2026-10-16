@@ -2,7 +2,7 @@
 // Web: iframe embed. Native (Expo Go/dev builds): react-native-webview.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, Dimensions,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, useWindowDimensions,
   ActivityIndicator, Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -12,7 +12,6 @@ import { api } from "@/src/api";
 import Feather from "@react-native-vector-icons/feather";
 import { WebView } from "react-native-webview";
 
-const { width } = Dimensions.get("window");
 
 type PoseT = { name: string; duration_sec: number; cue: string };
 type SessionT = Awaited<ReturnType<typeof api.yogaSession>>;
@@ -25,6 +24,7 @@ function fmt(s: number) {
 
 export default function YogaSessionDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const { width } = useWindowDimensions();
   const router = useRouter();
   const [session, setSession] = useState<SessionT | null>(null);
   const [loading, setLoading] = useState(true);

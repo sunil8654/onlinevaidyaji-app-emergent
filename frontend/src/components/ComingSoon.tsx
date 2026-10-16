@@ -8,6 +8,7 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from "react-native";
 import type { ComponentProps } from "react";
 import Feather from "@react-native-vector-icons/feather";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { COLORS, RADIUS, FONTS, SPACING } from "@/src/theme";
 
@@ -46,10 +47,11 @@ export function ComingSoonScreen({
   backLabel = "Go back",
   testID = "coming-soon",
 }: ScreenProps) {
+  const insets = useSafeAreaInsets();
   return (
     <ScrollView
       style={styles.screen}
-      contentContainerStyle={styles.screenPad}
+      contentContainerStyle={[styles.screenPad, { paddingTop: insets.top + SPACING.xl, paddingBottom: insets.bottom + SPACING.xxl }]}
       testID={testID}
     >
       {onBack ? (

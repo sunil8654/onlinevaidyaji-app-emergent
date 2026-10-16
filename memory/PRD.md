@@ -210,3 +210,8 @@ Every appointment prescription can now be downloaded as a branded, single-page A
   - Central `INDEX_SPEC` declaring **29 indexes** across the hottest collections (users, doctors, appointments, quiz_results, health_documents, presales_leads, payments, reminders, activity, doctor community, chat_messages).
   - `ensure_indexes(db)` wired into the FastAPI startup event — idempotent, safe to re-run, logs the per-collection index count.
 - Startup verified: 29 indexes created cleanly on first run, second boot is a no-op (idempotent).
+
+## Google Play Compliance (June 2026) — DONE
+- R8 minify + shrinkResources for release builds via expo-build-properties (app.json)
+- Orientation unlocked ("default"); screens using static Dimensions.get moved to useWindowDimensions
+- Edge-to-edge: SDK 57 enforces it; Material 1.13.0 comes via expo-router; ComingSoon screen uses safe-area insets

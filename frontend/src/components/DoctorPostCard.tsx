@@ -1,13 +1,11 @@
 // Reusable card for a Doctor Community post (feed + profile + saved).
 import { useState } from "react";
-import { View, Text, StyleSheet, Image, TouchableOpacity, ScrollView, Dimensions, Alert } from "react-native";
+import { View, Text, StyleSheet, Image, TouchableOpacity, ScrollView, useWindowDimensions, Alert } from "react-native";
 import { useRouter } from "expo-router";
 import Feather from "@react-native-vector-icons/feather";
 import { COLORS, RADIUS, SPACING } from "@/src/theme";
 import { api } from "@/src/api";
 
-const { width } = Dimensions.get("window");
-const IMG_H = Math.min(width - 32, 420);
 
 type Props = {
   post: any;
@@ -18,6 +16,8 @@ type Props = {
 
 export function DoctorPostCard({ post: initial, onChange, onDelete, compact }: Props) {
   const router = useRouter();
+  const { width } = useWindowDimensions();
+  const IMG_H = Math.min(width - 32, 420);
   const [post, setPost] = useState(initial);
   const [idx, setIdx] = useState(0);
 

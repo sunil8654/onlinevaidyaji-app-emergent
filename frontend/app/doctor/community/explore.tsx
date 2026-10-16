@@ -1,19 +1,19 @@
 // Explore — search doctors/hashtags + browse by specialty grid.
 import { useCallback, useEffect, useState } from "react";
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Image, ActivityIndicator, Dimensions,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Image, ActivityIndicator, useWindowDimensions,
 } from "react-native";
 import { useRouter } from "expo-router";
 import Feather from "@react-native-vector-icons/feather";
 import { COLORS, RADIUS, SPACING } from "@/src/theme";
 import { api } from "@/src/api";
 
-const { width } = Dimensions.get("window");
-const CELL = Math.floor((width - 32 - 4) / 3);
 const SPECIALTIES = ["All", "Ayurveda", "Homoeopathy", "Yoga", "Naturopathy", "Unani", "Siddha", "General"];
 
 export default function Explore() {
   const router = useRouter();
+  const { width } = useWindowDimensions();
+  const CELL = Math.floor((width - 32 - 4) / 3);
   const [q, setQ] = useState("");
   const [searchResult, setSearchResult] = useState<any | null>(null);
   const [searchBusy, setSearchBusy] = useState(false);
@@ -124,7 +124,7 @@ export default function Explore() {
                 {searchResult.posts.map((p: any) => (
                   <TouchableOpacity
                     key={p.id}
-                    style={styles.cell}
+                    style={[styles.cell, { width: CELL, height: CELL }]}
                     onPress={() => router.push({ pathname: "/doctor/community/post/[id]", params: { id: p.id } })}
                     testID={`dcom-sp-${p.id}`}
                   >
@@ -168,7 +168,7 @@ export default function Explore() {
               {grid.map((p) => (
                 <TouchableOpacity
                   key={p.id}
-                  style={styles.cell}
+                  style={[styles.cell, { width: CELL, height: CELL }]}
                   onPress={() => router.push({ pathname: "/doctor/community/post/[id]", params: { id: p.id } })}
                   testID={`dcom-e-${p.id}`}
                 >
@@ -235,7 +235,7 @@ const styles = StyleSheet.create({
   specChipActive: { backgroundColor: COLORS.brand, borderColor: COLORS.brand },
   specText: { color: COLORS.textPrimary, fontWeight: "700", fontSize: 12 },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: 2, paddingHorizontal: SPACING.md },
-  cell: { width: CELL, height: CELL, position: "relative", backgroundColor: COLORS.surfaceAlt },
+  cell: { position: "relative", backgroundColor: COLORS.surfaceAlt },
   cellImg: { width: "100%", height: "100%" },
   cellText: { padding: SPACING.sm, backgroundColor: COLORS.brand, justifyContent: "center" },
   cellCaption: { color: COLORS.surface, fontSize: 11, lineHeight: 14 },

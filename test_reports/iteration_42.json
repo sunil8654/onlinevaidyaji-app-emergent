@@ -1,0 +1,26 @@
+{
+  "summary": "Frontend-only smoke regression for Google Play compliance changes (Expo SDK 57). (1) app.json verified: orientation='default' (portrait lock removed) and expo-build-properties plugin with android.enableMinifyInReleaseBuilds=true + enableShrinkResourcesInReleaseBuilds=true present. (2) Dimensions.get -> useWindowDimensions refactor VERIFIED via grep on all 6 target files: app/doctor/community/profile/[id].tsx, app/doctor/community/explore.tsx, app/doctor/community/reels/index.tsx, app/doctor/community/stories/[doctor_id].tsx, app/yoga/[id].tsx, src/components/DoctorPostCard.tsx -- zero stale module-level Dimensions.get calls. (3) Shop (/shop) and Labs (/labs) ComingSoon screens: Back button bbox y=40.5px (safe-area inset top + SPACING.xl) in portrait 390x844, landscape 844x390 AND tablet 1024x768 -- NOT clipped. (4) Home '/' loads clean in 390x844 and 844x390 (Welcome VaidyaJi hero + Patient/Doctor split cards; no overflow/crash). After AsyncStorage token injection, authenticated /home (tabs/home) renders complete dashboard in both portrait and landscape (Pharmacy SOON, Lab Tests SOON, Diet Plan, AI Yoga, Wellness, etc.) with 5-tab bottom nav (Home/Feed/Consult/Reminders/Profile). (5) Consult list in landscape 844x390: consult-count pill reads '61 Vaidyas', chips row + grid intact. (6) /community in tablet 1024x768 renders Vaidhya Charcha header + 7-chip filter row + empty state cleanly. (7) Viewport resize 390 -> 844 propagated to window; useWindowDimensions hook will re-render dependent screens on orientation change. No React Native red screen, no page errors, zero fatal console errors across all tested routes.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/test_reports/iteration_42.json"],
+  "action_items": [
+    "No action required for the compliance changes under test; all pass. Optional: physically run the signed R8-minified release build on Android 15 to confirm minify/shrinkResources flags take effect at build time (web preview cannot exercise Gradle)."
+  ],
+  "critical_code_review_comments": [
+    "ComingSoonScreen correctly consumes useSafeAreaInsets for paddingTop/paddingBottom; back button sits consistently at ~40.5px below the viewport top (insets.top + SPACING.xl) across phone portrait, phone landscape and tablet.",
+    "All 6 refactored files use the useWindowDimensions hook inside the component body (verified at import+usage sites); no leftover `const { width } = Dimensions.get(...)` module-level constants remain in the targeted files.",
+    "app.json plugin array places expo-build-properties AFTER expo-router/expo-splash-screen which is the Expo-recommended order; android.googleServicesFile and permissions block remain unchanged (Google compliance scope only touches minify/shrink + orientation)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (frontend-only per request)", "frontend": "100% (all tested routes render + no crash in portrait, landscape, tablet)"},
+  "seed_data_creation": "Registered one disposable patient (email test_iter42_patient@test.com, id=171) to obtain a JWT for token-injection; no fixtures persisted beyond that row.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Public URL: https://swasth-daily.preview.emergentagent.com. AsyncStorage web shim uses localStorage key `@AsyncStorage:vaidyaji.token` with JSON.stringify-wrapped token (double-encoded) -- injecting this key authenticates subsequent navigations on web preview. /shop and /labs are reachable without login on web (route gate not applied); yoga/[id] requires valid session (yoga API returns 'Missing token' on 401). ComingSoonScreen renders ScrollView with testID='coming-soon' and inner TouchableOpacity testID='coming-soon-back' (plus visible 'Back' text). Consult page testIDs: consult-count, consult-chip-<slug>, consult-city-<City>.",
+  "rca_of_issue": "Not a bug-fix iteration -- this was a verification pass for 3 Google Play compliance changes. All checks pass against the web preview. Native-only outcomes (R8 minify/shrinkResources, Android 15 edge-to-edge system-bar inset) cannot be visually asserted on web and are left to the production Android build pipeline."
+}
